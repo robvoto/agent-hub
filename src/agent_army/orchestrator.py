@@ -1,9 +1,13 @@
-"""LangGraph orchestrator — supervisor that routes to enabled agents via tool calls."""
+"""LangGraph orchestrator — routes tasks to specialist agents via subprocess dispatch."""
 
 from __future__ import annotations
 
+import json
 import logging
+import subprocess
+import tempfile
 import uuid
+from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import HumanMessage
@@ -18,50 +22,130 @@ from .registry import AgentSpec, load_registry
 
 logger = logging.getLogger(__name__)
 
-_SYSTEM_PROMPT = """You are the Agent Army orchestrator. You coordinate a fleet of AI agents
-and answer questions about their capabilities and status.
+_SYSTEM_PROMPT = """You are the Agent Army orchestrator. You coordinate specialist AI agents.
 
-When a user's request is best handled by a specific agent, explain which agent would handle it
-and what it would do. You have access to the agent registry and shared knowledge base.
+When a user sends a request:
+1. Select the correct agent from your tool list based on their purpose.
+2. Call that agent's tool with a clear, bounded task description.
+3. Return the agent's result to the user.
 
-Be concise. If the user asks you to run a task, route it clearly. If no agent exists yet for
-the task, say so and suggest how it could be added."""
+Do not explain what you would do — invoke the agent and return the result.
+Do not answer coding, research, or creation tasks yourself — that is the specialist agent's job.
+
+If the agent returns a clarification question, relay it to the user verbatim.
+If the agent requires approval, tell the user exactly what needs approval and wait.
+If no registered agent fits the task, say so clearly — do not invent capabilities."""
+
+
+def _dispatch_subprocess(spec: AgentSpec, task: str) -> str:
+    """Invoke a subprocess agent, return its output as a formatted string.
+
+    Raises RuntimeError on process failure, missing output, or hard error status.
+    """
+    runtime = spec.runtime
+    entrypoint = runtime.get("entrypoint")
+    working_dir = runtime.get("working_directory")
+
+    if not entrypoint:
+        raise RuntimeError(
+            f"Agent '{spec.id}' has no entrypoint in runtime config. "
+            "Set runtime.entrypoint in agent.json."
+        )
+
+    request_id = str(uuid.uuid4())
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_file = Path(tmpdir) / "input.json"
+        output_file = Path(tmpdir) / "output.json"
+
+        input_data = {
+            "request_id": request_id,
+            "task": task,
+            "execution_mode": runtime.get("default_execution_mode", "instruction_only"),
+        }
+        input_file.write_text(json.dumps(input_data, indent=2), encoding="utf-8")
+
+        input_arg = runtime.get("input_arg", "--input-json")
+        output_arg = runtime.get("output_arg", "--output-json")
+        cmd = entrypoint.split() + [input_arg, str(input_file), output_arg, str(output_file)]
+
+        logger.info("Dispatching to %s (request_id=%s): %s", spec.id, request_id, task[:120])
+
+        proc = subprocess.run(
+            cmd,
+            cwd=working_dir,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+
+        if not output_file.exists():
+            raise RuntimeError(
+                f"Agent '{spec.id}' subprocess (exit={proc.returncode}) wrote no output.\n"
+                f"stderr: {proc.stderr.strip()}"
+            )
+
+        output = json.loads(output_file.read_text(encoding="utf-8"))
+        return _format_output(spec, output)
+
+
+def _format_output(spec: AgentSpec, output: dict) -> str:
+    """Convert agent output JSON to a string for the orchestrator LLM."""
+    status = output.get("status", "unknown")
+    summary = output.get("summary", "")
+
+    if status == "success":
+        instruction = output.get("coding_agent_instruction", "")
+        return f"[{spec.name}] {summary}\n\n{instruction}".strip()
+
+    if status == "needs_clarification":
+        return f"[{spec.name}] Clarification needed: {summary}"
+
+    if status == "approval_required":
+        token = output.get("approval_token", "")
+        return (
+            f"[{spec.name}] Approval required: {summary}\n"
+            f"Approval token: {token}\n"
+            "Resubmit with human_approved=true and this token once approved."
+        )
+
+    raise RuntimeError(
+        f"Agent '{spec.id}' returned status '{status}': {summary or output}"
+    )
 
 
 def _make_agent_tool(spec: AgentSpec) -> Any:
-    """Create a LangChain tool for each registered agent."""
+    """Create a LangChain tool that dispatches to the registered agent."""
+    mode = spec.runtime.get("mode", "manual")
 
     @lc_tool(name=spec.id, description=f"{spec.name}: {spec.purpose}")
     def _call_agent(task: str) -> str:
-        """Invoke this agent with a task description."""
-        return (
-            f"[{spec.name} v{spec.version}] Routing task: {task!r}\n"
-            f"Agent '{spec.id}' is registered but not yet wired for live invocation. "
-            f"Capabilities: {', '.join(spec.tools) if spec.tools else 'none listed'}."
+        if mode == "subprocess":
+            return _dispatch_subprocess(spec, task)
+        raise NotImplementedError(
+            f"Agent '{spec.id}' runtime mode is '{mode}'. "
+            "Only 'subprocess' agents can be invoked. "
+            "Update runtime.mode and runtime.entrypoint in agent.json."
         )
 
     return _call_agent
 
 
 def _build_memory_tools(store: Any) -> list[Any]:
-    try:
-        from langmem import create_manage_memory_tool, create_search_memory_tool
+    from langmem import create_manage_memory_tool, create_search_memory_tool
 
-        return [
-            create_manage_memory_tool(
-                ("army", "learnings"),
-                store=store,
-                instructions="Store reusable facts, decisions, and learnings about agents and tasks.",
-            ),
-            create_search_memory_tool(
-                ("shared", "docs"),
-                store=store,
-                instructions="Search shared documentation and architecture notes.",
-            ),
-        ]
-    except Exception as exc:
-        logger.debug("langmem tools not available: %s", exc)
-        return []
+    return [
+        create_manage_memory_tool(
+            ("army", "learnings"),
+            store=store,
+            instructions="Store reusable facts, decisions, and learnings about agents and tasks.",
+        ),
+        create_search_memory_tool(
+            ("shared", "docs"),
+            store=store,
+            instructions="Search shared documentation and architecture notes.",
+        ),
+    ]
 
 
 class ArmyOrchestrator:
@@ -100,18 +184,16 @@ class ArmyOrchestrator:
         return self._registry
 
     def new_session(self) -> None:
-        """Start a fresh conversation while preserving history in SQLite."""
         self._session_id = str(uuid.uuid4())
         logger.info("New army session: %s", self._session_id)
 
     def invoke(self, message: str) -> str:
-        """Send a message and return the assistant's text reply."""
         config = {"configurable": {"thread_id": self._session_id}}
         result = self._graph.invoke(
             {"messages": [HumanMessage(content=message)]},
             config=config,
         )
         messages = result.get("messages", [])
-        if messages:
-            return messages[-1].content
-        return "(no response)"
+        if not messages:
+            raise RuntimeError("Orchestrator returned no messages.")
+        return messages[-1].content
