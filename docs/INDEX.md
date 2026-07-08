@@ -24,7 +24,7 @@ Read only the smallest document needed for the task.
 - `../src/agent_hub/cli.py` - CLI entry point
 - `../src/agent_hub/knowledge_store.py` - runtime knowledge store
 - `../src/agent_hub/checkpointer.py` - runtime checkpoint persistence
-- `../src/agent_hub/log_config.py` - logging configuration, if present
+- `../src/agent_hub/log_config.py` - logging configuration
 
 ## Tests
 

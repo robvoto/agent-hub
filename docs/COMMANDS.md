@@ -14,6 +14,8 @@ cd ~/projects/agent-hub
 uv sync
 ```
 
+Run this again after pulling changes that affect the project name or console scripts so the generated venv entrypoints stay in sync.
+
 ## CLI
 
 ```bash

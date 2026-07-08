@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import logging
 import os
 import sys
 
@@ -91,11 +90,7 @@ def _normalize_args(argv: list[str]) -> list[str]:
     return normalized + non_global
 
 
-def main() -> None:
-    from dotenv import load_dotenv
-
-    load_dotenv()
-
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agent-hub", description="Agent Hub orchestrator")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--verbose", "-v", action="store_true", help="Enable info logging")
@@ -112,8 +107,16 @@ def main() -> None:
     chat_parser.add_argument("--model", default=os.getenv("HUB_MODEL", "gpt-4.1-mini"))
 
     sub.add_parser("telegram", help="Run the Telegram bot gateway")
+    return parser
 
-    args = parser.parse_args(_normalize_args(sys.argv[1:]))
+
+def main(argv: list[str] | None = None) -> None:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+
+    parser = build_parser()
+    args = parser.parse_args(_normalize_args(argv if argv is not None else sys.argv[1:]))
 
     if args.debug:
         log_level = "DEBUG"
