@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from agent_army.registry import AgentSpec, find_agent, load_registry
+from agent_hub.registry import AgentSpec, find_agent, load_registry
 
 
 def test_load_registry_empty_dir(tmp_path):

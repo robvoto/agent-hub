@@ -22,7 +22,7 @@ from .registry import AgentSpec, load_registry
 
 logger = logging.getLogger(__name__)
 
-_SYSTEM_PROMPT = """You are the Agent Army orchestrator. You coordinate specialist AI agents.
+_SYSTEM_PROMPT = """You are the Agent Hub orchestrator. You coordinate specialist AI agents.
 
 When a user sends a request:
 1. Select the correct agent from your tool list based on their purpose.
@@ -118,7 +118,7 @@ def _make_agent_tool(spec: AgentSpec) -> Any:
     """Create a LangChain tool that dispatches to the registered agent."""
     mode = spec.runtime.get("mode", "manual")
 
-    @lc_tool(name=spec.id, description=f"{spec.name}: {spec.purpose}")
+    @lc_tool(spec.id, description=f"{spec.name}: {spec.purpose}")
     def _call_agent(task: str) -> str:
         if mode == "subprocess":
             return _dispatch_subprocess(spec, task)
@@ -136,7 +136,7 @@ def _build_memory_tools(store: Any) -> list[Any]:
 
     return [
         create_manage_memory_tool(
-            ("army", "learnings"),
+            ("hub", "learnings"),
             store=store,
             instructions="Store reusable facts, decisions, and learnings about agents and tasks.",
         ),
@@ -148,13 +148,22 @@ def _build_memory_tools(store: Any) -> list[Any]:
     ]
 
 
-class ArmyOrchestrator:
+class HubOrchestrator:
     """Stateful orchestrator with per-session thread isolation."""
 
     def __init__(self, model: str = DEFAULT_MODEL) -> None:
         self._model = model
         self._registry = load_registry()
         self._session_id = str(uuid.uuid4())
+        logger.info(
+            "HubOrchestrator starting with model=%s, agents=%s",
+            self._model,
+            [spec.id for spec in self._registry],
+        )
+        logger.debug(
+            "Agent specs: %s",
+            [f"{spec.id}:{spec.runtime.get('mode','manual')}" for spec in self._registry],
+        )
         self._graph = self._build_graph()
 
     def _build_graph(self) -> Any:
@@ -166,6 +175,15 @@ class ArmyOrchestrator:
         tools = agent_tools + memory_tools
 
         llm = ChatOpenAI(model=self._model, temperature=0)
+
+        agent_names = [spec.id for spec in self._registry]
+        logger.info(
+            "Building LangGraph react agent with model=%s, tools=%s, memory_tools=%s",
+            self._model,
+            agent_names,
+            ["hub_learnings", "shared_docs"],
+        )
+        logger.debug("System prompt length=%d chars", len(_SYSTEM_PROMPT))
 
         return create_react_agent(
             model=llm,
@@ -185,9 +203,11 @@ class ArmyOrchestrator:
 
     def new_session(self) -> None:
         self._session_id = str(uuid.uuid4())
-        logger.info("New army session: %s", self._session_id)
+        logger.info("New hub session: %s", self._session_id)
 
     def invoke(self, message: str) -> str:
+        logger.info("Received user request: %s", message)
+        logger.debug("Invoking graph with session_id=%s", self._session_id)
         config = {"configurable": {"thread_id": self._session_id}}
         result = self._graph.invoke(
             {"messages": [HumanMessage(content=message)]},

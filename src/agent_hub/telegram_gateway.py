@@ -1,4 +1,4 @@
-"""Telegram polling bot gateway for the Agent Army."""
+"""Telegram polling bot gateway for the Agent Hub."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Any
 
 import httpx
 
-from .orchestrator import ArmyOrchestrator
+from .orchestrator import HubOrchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -43,18 +43,18 @@ def _send_message(token: str, chat_id: int, text: str) -> None:
 
 
 def _allowed_chat_ids() -> set[int]:
-    raw = os.getenv("ARMY_ALLOWED_CHAT_IDS", "")
+    raw = os.getenv("HUB_ALLOWED_CHAT_IDS", "")
     if not raw.strip():
         return set()
     try:
         return {int(x.strip()) for x in raw.split(",") if x.strip()}
     except ValueError:
-        logger.warning("Invalid ARMY_ALLOWED_CHAT_IDS: %r", raw)
+        logger.warning("Invalid HUB_ALLOWED_CHAT_IDS: %r", raw)
         return set()
 
 
 class TelegramGateway:
-    def __init__(self, token: str, orchestrator: ArmyOrchestrator) -> None:
+    def __init__(self, token: str, orchestrator: HubOrchestrator) -> None:
         self._token = token
         self._orch = orchestrator
         self._allowed = _allowed_chat_ids()
@@ -69,6 +69,8 @@ class TelegramGateway:
         if not self._is_allowed(chat_id):
             logger.info("Ignored message from unauthorized chat %d", chat_id)
             return
+
+        logger.info("Telegram message from chat %d: %s", chat_id, text)
 
         if text == "/new":
             self._orch.new_session()
@@ -97,7 +99,7 @@ class TelegramGateway:
         _send_message(self._token, chat_id, reply)
 
     def run(self) -> None:
-        logger.info("Army Telegram gateway starting (session %s).", self._orch.session_id)
+        logger.info("Hub Telegram gateway starting (session %s).", self._orch.session_id)
         offset = 0
         while True:
             updates = _get_updates(self._token, offset)
@@ -114,10 +116,10 @@ def run_telegram(token: str | None = None) -> None:
     from dotenv import load_dotenv
 
     load_dotenv()
-    tok = token or os.getenv("ARMY_BOT_TOKEN")
+    tok = token or os.getenv("HUB_BOT_TOKEN")
     if not tok:
-        raise RuntimeError("ARMY_BOT_TOKEN is not set.")
+        raise RuntimeError("HUB_BOT_TOKEN is not set.")
 
-    orch = ArmyOrchestrator()
+    orch = HubOrchestrator()
     gateway = TelegramGateway(tok, orch)
     gateway.run()

@@ -1,7 +1,7 @@
 [project]
-name = "agent-army"
+name = "agent-hub"
 version = "0.1.0"
-description = "Runtime orchestrator for the Agent Army — routes tasks to specialized agents"
+description = "Runtime orchestrator for the Agent Hub — routes tasks to specialized agents"
 requires-python = ">=3.13,<3.14"
 
 dependencies = [
@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-agent-army = "agent_army.cli:main"
+agent-hub = "agent_hub.cli:main"
 
 [build-system]
 requires = ["setuptools>=68"]

@@ -1,6 +1,6 @@
-"""Army knowledge store — persistent SQLite-backed store for army runtime knowledge.
+"""Hub knowledge store — persistent SQLite-backed store for hub runtime knowledge.
 
-All agents dispatched by the army share this namespace so knowledge compounds
+All agents dispatched by the hub share this namespace so knowledge compounds
 across sessions and tasks.
 """
 
@@ -148,5 +148,5 @@ def get_knowledge_store(db_path: Path | None = None) -> SqliteStore:
     global _store
     if _store is None:
         _store = SqliteStore(db_path)
-        logger.info("Army knowledge store: %s", _store._db_path)
+        logger.info("Hub knowledge store: %s", _store._db_path)
     return _store

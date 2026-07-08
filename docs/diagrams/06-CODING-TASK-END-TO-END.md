@@ -7,12 +7,12 @@ flowchart TD
     You([👤 You])
 
     subgraph Entry["Entry Points — pick one"]
-        ArmyTG["Army Bot\n'fix the login bug'"]
+        HubTG["Hub Bot\n'fix the login bug'"]
         ATLTGDirect["AI Tech Lead Bot\n'/run JH-042'"]
     end
 
-    subgraph ArmyLayer["Army Layer"]
-        ArmyOrch["Orchestrator LLM\ndetects coding intent"]
+    subgraph HubLayer["Hub Layer"]
+        HubOrch["Orchestrator LLM\ndetects coding intent"]
         SubProc["Subprocess call\nrun-agent-task input.json"]
     end
 
@@ -40,11 +40,11 @@ flowchart TD
         ChangedFiles["Changed files\nin target project"]
     end
 
-    You --> ArmyTG
+    You --> HubTG
     You --> ATLTGDirect
 
-    ArmyTG --> ArmyOrch
-    ArmyOrch --> SubProc
+    HubTG --> HubOrch
+    HubOrch --> SubProc
     SubProc --> ReadReq
     ATLTGDirect --> ReadReq
 

@@ -1,74 +1,37 @@
-# Agent Army
+# Agent Hub
 
-Main orchestrator, runtime, and control plane for the agent platform.
+Main orchestrator, runtime, and control plane for the local agent platform.
 
-## Role
+Agent Hub is the entry point for operator interaction. It receives work from CLI or Telegram, manages runtime orchestration, and routes tasks to specialist agents.
 
-Agent Army is the entry point for all user interactions. It:
+## Repo role
 
-- Receives tasks from the user (Telegram or CLI)
-- Maintains the orchestrator graph and session state
-- Routes tasks to specialist agents via the agent registry
-- Owns the runtime knowledge store
-- Enforces the task lifecycle (dispatch → result)
+| Repo | Responsibility |
+|------|----------------|
+| `agent-hub` | Runs and controls agent work |
+| `agent-factory` | Creates, configures, and stages agents |
+| `ai-tech-lead` | Specialist coding/technical-lead agent |
 
-**Agent Army runs and controls. It does not create or configure agents.**
+Agent Hub does not create or stage agents. That belongs to Agent Factory.
 
-## Related repos
+## Canonical runtime path
 
-| Repo | Role |
-|------|------|
-| `agent-army` (this repo) | Orchestrator / runtime / control plane |
-| `agent-factory` | Creates, configures, and stages agents only |
-| `ai-tech-lead` | Specialist coding agent |
+Run this repo from WSL:
 
-## Agent registry
-
-Agents are defined and staged in `agent-factory`. Army reads the registry from:
-
-```
-~/projects/agent-factory/config/agents/
+```text
+~/projects/agent-hub
 ```
 
-Override with the `AGENT_FACTORY_ROOT` environment variable.
+Do not use `E:\Programming` as the canonical runtime path.
 
-## Quick start
+## Documentation
 
-```bash
-cd ~/projects/agent-army
-uv sync
-uv run agent-army --help
-uv run agent-army chat
-uv run agent-army telegram
-```
-
-## Tests
-
-```bash
-cd ~/projects/agent-army
-uv run pytest
-```
-
-## Environment
-
-Copy `.env.example` to `.env` and set:
-
-```
-OPENAI_API_KEY=...
-ARMY_BOT_TOKEN=...          # Telegram bot token
-ARMY_ALLOWED_CHAT_IDS=...   # Comma-separated Telegram chat IDs
-ARMY_MODEL=gpt-4.1-mini     # Optional model override
-```
-
-## Key files
-
-- `src/agent_army/orchestrator.py` — LangGraph orchestrator
-- `src/agent_army/registry.py` — Registry reader (reads from agent-factory)
-- `src/agent_army/telegram_gateway.py` — Telegram polling bot
-- `src/agent_army/cli.py` — CLI entry point
-- `src/agent_army/knowledge_store.py` — Runtime knowledge store
-- `docs/ARCHITECTURE.md` — Architecture overview
+Start with `docs/INDEX.md`. It is the single documentation entry point.
 
 ## Backlog
 
-https://docs.google.com/spreadsheets/d/1v1zJjwGTqhOgb06nYChaGjRNZIVXQht5pNBUbh9r7RA/edit
+The live backlog and single source of truth for Agent Hub is the Google Sheet:
+
+https://docs.google.com/spreadsheets/d/1v1zJjwGTqhOgb06nYChaGjRNZIVXQht5pNBUbh9r7RA/edit?gid=32071178#gid=32071178
+
+Do not create duplicate local backlog files unless explicitly requested.

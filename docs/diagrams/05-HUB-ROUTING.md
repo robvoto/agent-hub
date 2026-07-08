@@ -1,4 +1,4 @@
-# Army Routing — Interaction Diagram
+# Hub Routing — Interaction Diagram
 
 This is the interaction diagram for how a request reaches the right agent.
 The orchestrator receives every request and decides which agent handles it.
@@ -7,7 +7,7 @@ You never route manually unless you want to.
 ```mermaid
 sequenceDiagram
     actor You
-    participant Bot as Army Telegram Bot
+    participant Bot as Hub Telegram Bot
     participant Orch as Orchestrator LLM<br/>(create_react_agent)
     participant Reg as Agent Registry<br/>(config/agents/)
     participant ATL as AI Tech Lead<br/>subprocess

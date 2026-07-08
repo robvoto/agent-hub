@@ -1,11 +1,11 @@
-"""Test isolation fixtures for agent-army."""
+"""Test isolation fixtures for agent-hub."""
 
 import pytest
 
 
 @pytest.fixture(autouse=True)
 def _isolate_checkpointer(tmp_path, monkeypatch):
-    import agent_army.checkpointer as cp_mod
+    import agent_hub.checkpointer as cp_mod
 
     monkeypatch.setattr(cp_mod, "CHECKPOINT_DB", tmp_path / "checkpoints.sqlite3")
     monkeypatch.setattr(cp_mod, "_conn", None)
@@ -14,7 +14,7 @@ def _isolate_checkpointer(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _isolate_knowledge_store(tmp_path, monkeypatch):
-    import agent_army.knowledge_store as ks_mod
+    import agent_hub.knowledge_store as ks_mod
 
     monkeypatch.setattr(ks_mod, "_store", None)
     monkeypatch.setattr(ks_mod, "KNOWLEDGE_DB", tmp_path / "knowledge_store.sqlite3")
