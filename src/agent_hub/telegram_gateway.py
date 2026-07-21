@@ -237,15 +237,18 @@ class TelegramGateway:
     def run(self) -> None:
         logger.info("Hub Telegram gateway starting (session %s).", self._orch.session_id)
         offset = 0
-        while True:
-            updates = _get_updates(self._token, offset)
-            for update in updates:
-                offset = update["update_id"] + 1
-                msg = update.get("message") or update.get("edited_message")
-                if msg:
-                    self._handle_message(msg)
-            if not updates:
-                time.sleep(1)
+        try:
+            while True:
+                updates = _get_updates(self._token, offset)
+                for update in updates:
+                    offset = update["update_id"] + 1
+                    msg = update.get("message") or update.get("edited_message")
+                    if msg:
+                        self._handle_message(msg)
+                if not updates:
+                    time.sleep(1)
+        except KeyboardInterrupt:
+            logger.info("Hub Telegram gateway stopped by user (Ctrl-C).")
 
 
 def run_telegram(token: str | None = None) -> None:
