@@ -4,17 +4,24 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from typing import Any
 
 import httpx
 
 from .orchestrator import HubOrchestrator
+from .task_control import TaskCancelled
 
 logger = logging.getLogger(__name__)
 
 _POLL_TIMEOUT = 30
 _API_BASE = os.getenv("TELEGRAM_API_BASE", "https://api.telegram.org")
+
+
+def _truncate(text: str, limit: int = 200) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else f"{text[:limit]}…"
 
 
 def _api(token: str, method: str, **kwargs: Any) -> dict:
@@ -33,11 +40,21 @@ def _get_updates(token: str, offset: int) -> list[dict]:
         return []
 
 
-def _send_message(token: str, chat_id: int, text: str) -> None:
+def _send_message(
+    token: str,
+    chat_id: int,
+    text: str,
+    *,
+    parse_mode: str | None = "Markdown",
+) -> None:
     try:
         chunks = [text[i : i + 4096] for i in range(0, len(text), 4096)]
         for chunk in chunks:
-            _api(token, "sendMessage", chat_id=chat_id, text=chunk, parse_mode="Markdown")
+            payload: dict[str, Any] = {"chat_id": chat_id, "text": chunk}
+            if parse_mode is not None:
+                payload["parse_mode"] = parse_mode
+            _api(token, "sendMessage", **payload)
+        logger.info("Reply to chat %d: %s", chat_id, _truncate(text))
     except Exception as exc:
         logger.error("sendMessage failed: %s", exc)
 
@@ -58,9 +75,30 @@ class TelegramGateway:
         self._token = token
         self._orch = orchestrator
         self._allowed = _allowed_chat_ids()
+        self._worker_lock = threading.Lock()
+        self._worker: threading.Thread | None = None
 
     def _is_allowed(self, chat_id: int) -> bool:
         return not self._allowed or chat_id in self._allowed
+
+    @staticmethod
+    def _help_text() -> str:
+        return (
+            "Agent Hub\n"
+            "Send a plain message to dispatch it to a specialist agent "
+            "(e.g. AI Tech Lead). Slash commands control the hub itself:\n\n"
+            "/help - show this\n"
+            "/agents - list registered specialist agents\n"
+            "/new - start a fresh conversation\n"
+            "/status - show the active or paused task\n"
+            "/last - show the most recently finished task\n"
+            "/stop - cancel the active task\n"
+            "/approve - approve a task waiting on approval\n"
+            "/reject [reason] - reject a task waiting on approval\n"
+            "/learn <fact> - store an explicit learning\n"
+            "/memory - list stored learnings\n"
+            "/forget <id> - remove a stored learning\n"
+        )
 
     def _handle_message(self, msg: dict) -> None:
         chat_id = msg["chat"]["id"]
@@ -71,6 +109,10 @@ class TelegramGateway:
             return
 
         logger.info("Telegram message from chat %d: %s", chat_id, text)
+
+        if text == "/help":
+            _send_message(self._token, chat_id, self._help_text(), parse_mode=None)
+            return
 
         if text == "/new":
             self._orch.new_session()
@@ -87,11 +129,105 @@ class TelegramGateway:
             _send_message(self._token, chat_id, reply)
             return
 
+        if text == "/status":
+            _send_message(
+                self._token,
+                chat_id,
+                self._orch.current_run_status(),
+                parse_mode=None,
+            )
+            return
+
+        if text == "/last":
+            _send_message(
+                self._token,
+                chat_id,
+                self._orch.last_run_status(),
+                parse_mode=None,
+            )
+            return
+
+        if text.startswith("/learn"):
+            value = text[len("/learn"):].strip()
+            reply = (
+                "Usage: /learn <instruction or fact>"
+                if not value
+                else self._orch.learn(value, source=f"telegram chat {chat_id}")
+            )
+            _send_message(self._token, chat_id, reply, parse_mode=None)
+            return
+
+        if text == "/memory":
+            _send_message(self._token, chat_id, self._orch.memory(), parse_mode=None)
+            return
+
+        if text.startswith("/forget"):
+            identifier = text[len("/forget"):].strip()
+            _send_message(
+                self._token,
+                chat_id,
+                self._orch.forget_learning(identifier),
+                parse_mode=None,
+            )
+            return
+
+        if text == "/stop":
+            reply = self._orch.stop_current_task()
+            _send_message(self._token, chat_id, reply, parse_mode=None)
+            return
+
+        if text == "/approve":
+            try:
+                reply = self._orch.approve_pending()
+            except Exception as exc:
+                logger.exception("Approval resume error")
+                reply = f"Error: {exc}"
+            _send_message(self._token, chat_id, reply)
+            return
+
+        if text.startswith("/reject"):
+            reason = text[len("/reject"):].strip() or "Rejected by user"
+            try:
+                reply = self._orch.reject_pending(reason)
+            except Exception as exc:
+                logger.exception("Approval rejection error")
+                reply = f"Error: {exc}"
+            _send_message(self._token, chat_id, reply)
+            return
+
         if not text or text.startswith("/"):
             return
 
+        with self._worker_lock:
+            if self._worker is not None and self._worker.is_alive():
+                _send_message(
+                    self._token,
+                    chat_id,
+                    (
+                        "A task is already running. "
+                        "Use /status or /stop before sending another request."
+                    ),
+                    parse_mode=None,
+                )
+                return
+            worker = threading.Thread(
+                target=self._process_user_message,
+                args=(chat_id, text),
+                daemon=True,
+            )
+            self._worker = worker
+        worker.start()
+
+    def _process_user_message(self, chat_id: int, text: str) -> None:
         try:
-            reply = self._orch.invoke(text)
+            pending = self._orch.pending_run()
+            if pending is not None and pending.state == "waiting_clarification":
+                reply = self._orch.provide_clarification(text)
+            else:
+                reply = self._orch.invoke(text)
+        except TaskCancelled:
+            logger.info("Task was cancelled before completion message delivery.")
+            return
         except Exception as exc:
             logger.exception("Orchestrator error")
             reply = f"Error: {exc}"
@@ -115,7 +251,10 @@ class TelegramGateway:
 def run_telegram(token: str | None = None) -> None:
     from dotenv import load_dotenv
 
+    from .startup_health import ensure_healthy_startup
+
     load_dotenv()
+    ensure_healthy_startup("telegram", telegram_token=token)
     tok = token or os.getenv("HUB_BOT_TOKEN")
     if not tok:
         raise RuntimeError("HUB_BOT_TOKEN is not set.")

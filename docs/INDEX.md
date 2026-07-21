@@ -9,6 +9,7 @@ Read only the smallest document needed for the task.
 - `../README.md` - short project landing page only
 - `ARCHITECTURE.md` - runtime/control-plane architecture and repo responsibility split
 - `COMMANDS.md` - setup, CLI, Telegram, tests, logs, and environment commands
+- `TELEGRAM_MVP_VALIDATION.md` - real Telegram MVP proof runbook and evidence checklist
 
 ## Diagrams
 

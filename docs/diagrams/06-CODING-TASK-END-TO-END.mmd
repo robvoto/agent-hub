@@ -7,26 +7,32 @@ flowchart TD
     end
 
     subgraph HubLayer["Hub Layer"]
-        HubOrch["Orchestrator LLM<br/>detects coding intent"]
+        HubOrch["Orchestrator LLM<br/>picks a specialist tool"]
         SubProc["Subprocess call<br/>run-agent-task input.json"]
     end
 
-    subgraph ATLWorkflow["AI Tech Lead Workflow (LangGraph)"]
-        ReadReq["1. Read request<br/>validate + normalise"]
-        Research["2. Check research<br/>need local docs?"]
-        Risk["3. Review risk<br/>scope, permissions, danger"]
-        Clarify["4. Check clarification<br/>is task unambiguous?"]
-        Analyse["5. Tech lead analysis<br/>formulate bounded task<br/>build brief"]
-        Approval["6. Approval gate<br/>needs_approval check"]
-        Instruction["7. Build instruction<br/>bounded, safe prompt<br/>for coding backend"]
-        RunAgent["8. Run coding agent<br/>Codex / Claude Code<br/>(if execution approved)"]
-        End["9. Return result<br/>changed files, evidence, logs"]
+    subgraph ATLWorkflow["AI Tech Lead Workflow (LangGraph, 14 nodes)"]
+        ReadReq["1_read_request<br/>validate + normalise"]
+        CheckResearch["1b_check_research<br/>local doc evidence enough?"]
+        ResearchInterrupt["1c_research_interrupt<br/>ask to fetch online docs"]
+        CollectResearch["1d_collect_research_evidence<br/>fetch + cache approved docs"]
+        ReviewRisk["2_review_risk<br/>risk level, needs_approval?"]
+        TechLead["3c_tech_lead_analyse<br/>formulate task + tech direction"]
+        ApprovalInterrupt["4_approval_interrupt<br/>ask human to approve"]
+        RequestPlan["5b_request_plan<br/>ask coding agent for a plan"]
+        ReviewPlan["5c_review_plan<br/>LLM checks plan matches task"]
+        PlanInterrupt["5d_plan_interrupt<br/>ask human after 2 plan rejections"]
+        CreateInstruction["5_create_agent_instruction<br/>build bounded, safe prompt"]
+        RunAgent["6_run_coding_agent<br/>Codex / Claude Code subprocess"]
+        FailureInterrupt["6b_failure_interrupt<br/>ask human after 2 failed retries"]
+        EndNode["7_end_node<br/>log outcome, return result"]
     end
 
-    subgraph HumanGates["Human-in-the-Loop Gates"]
-        ClarifyQ["Ask clarification<br/>via Telegram"]
-        ApproveQ["Request approval<br/>via Telegram"]
-        FailQ["Failure interrupt<br/>too risky to retry"]
+    subgraph HumanGates["Human-in-the-Loop Gates - 4 distinct interrupts"]
+        ResearchQ["Approve online research?"]
+        ApproveQ["Approve this task?"]
+        PlanQ["Guide the rejected plan"]
+        FailQ["Guide after repeated failure"]
     end
 
     subgraph Output["Output"]
@@ -43,34 +49,48 @@ flowchart TD
     SubProc --> ReadReq
     ATLTGDirect --> ReadReq
 
-    ReadReq --> Research
-    Research --> Risk
-    Risk --> Clarify
+    ReadReq --> CheckResearch
+    CheckResearch -->|complex task, local docs insufficient| ResearchInterrupt
+    CheckResearch -->|sufficient or not complex| ReviewRisk
 
-    Clarify -->|ambiguous| ClarifyQ
-    ClarifyQ -->|your answer| Clarify
+    ResearchInterrupt --> ResearchQ
+    ResearchQ -->|your answer| ResearchInterrupt
+    ResearchInterrupt -->|approved| CollectResearch
+    ResearchInterrupt -->|declined| EndNode
+    CollectResearch --> ReviewRisk
 
-    Clarify -->|clear| Analyse
-    Analyse --> Approval
+    ReviewRisk --> TechLead
 
-    Approval -->|risky| ApproveQ
-    ApproveQ -->|/approve| Instruction
-    ApproveQ -->|/reject| End
+    TechLead -->|needs approval| ApprovalInterrupt
+    TechLead -->|no approval needed or already approved| RequestPlan
+    ApprovalInterrupt --> ApproveQ
+    ApproveQ -->|/approve or /reject| ApprovalInterrupt
+    ApprovalInterrupt -->|approved| RequestPlan
+    ApprovalInterrupt -->|rejected| EndNode
 
-    Approval -->|safe| Instruction
-    Instruction --> RunAgent
+    RequestPlan --> ReviewPlan
+    ReviewPlan -->|approved| CreateInstruction
+    ReviewPlan -->|rejected, retries under 2| RequestPlan
+    ReviewPlan -->|rejected twice, or reviewer unavailable| PlanInterrupt
+    PlanInterrupt --> PlanQ
+    PlanQ -->|your guidance| PlanInterrupt
+    PlanInterrupt --> RequestPlan
 
-    RunAgent -->|success| End
-    RunAgent -->|failure| FailQ
-    FailQ -->|retry| RunAgent
-    FailQ -->|too many retries| End
+    CreateInstruction --> RunAgent
+    RunAgent -->|success| EndNode
+    RunAgent -->|failure, retries under 2| CreateInstruction
+    RunAgent -->|failure, retries at 2| FailureInterrupt
+    FailureInterrupt --> FailQ
+    FailQ -->|your guidance| FailureInterrupt
+    FailureInterrupt --> CreateInstruction
 
-    End --> JSONOut
+    EndNode --> JSONOut
     JSONOut --> TGResponse
     JSONOut --> ChangedFiles
     TGResponse --> You
 
-    style ClarifyQ fill:#fff3e0,stroke:#e6a817
+    style ResearchQ fill:#fff3e0,stroke:#e6a817
     style ApproveQ fill:#fce8e8,stroke:#cc4444
+    style PlanQ fill:#fff3e0,stroke:#e6a817
     style FailQ fill:#fce8e8,stroke:#cc4444
     style ChangedFiles fill:#d4edda,stroke:#28a745

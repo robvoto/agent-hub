@@ -7,6 +7,8 @@ Agent Hub is the **main orchestrator, runtime, and control plane** for the agent
 - Receives all user input (Telegram / CLI)
 - Maintains session state and conversation history
 - Routes tasks to the correct specialist agent
+- Tracks each task run through explicit lifecycle states
+- Supports explicit approval resume and clarification resume for paused work
 - Owns the hub knowledge store
 - Reports results back to the user
 
@@ -20,6 +22,9 @@ agent-hub        ← this repo
   registry       — reads agent specs from agent-factory
   telegram       — user-facing Telegram bot
   cli            — chat and telegram commands
+  task_runs      — persisted task lifecycle and run events
+  manifest_cache — cached specialist handshakes by manifest hash
+  cost_log       — hub LLM usage and cost logging
   knowledge_store — hub runtime knowledge (data/)
   checkpointer   — LangGraph SQLite checkpoint store
 
@@ -50,10 +55,19 @@ HubOrchestrator (LangGraph)
   │
   ├── dispatches to specialist agents
   │   ├── ai-tech-lead  (coding tasks)
-  │   ├── agent-factory (create/configure agents)
+  │   ├── agent-factory (create/configure agents via factory bridge)
   │   └── future specialists
   │
-  └── stores learnings in data/knowledge_store.sqlite3
+  ├── caches specialist manifests in data/agent_manifest_cache.json
+  │   └── refreshes by manifest hash / TTL instead of rereading docs every turn
+  │
+  ├── records task lifecycle in data/task_runs.sqlite3
+  │   └── states: received → routed → dispatched → in_progress → waiting_* / succeeded / failed
+  │
+  ├── records hub LLM usage in data/llm_usage.json
+  │   └── token counts are always logged; cost stays unknown unless the catalog has a verified rate
+  │
+  └── searches shared docs across hub and factory knowledge stores
 ```
 
 ## Agent registry contract
@@ -86,6 +100,9 @@ This means hub can manage any agent's backlog without hardcoding sheet locations
 
 | Store | Path | Owner |
 |-------|------|-------|
+| Task runs | `data/task_runs.sqlite3` | Hub |
+| Manifest cache | `data/agent_manifest_cache.json` | Hub |
+| LLM usage log | `data/llm_usage.json` | Hub |
 | Knowledge store | `data/knowledge_store.sqlite3` | Hub |
 | Checkpoints | `data/checkpoints.sqlite3` | Hub |
 | Staged agents | `factory/data/agent_factory.sqlite3` | Factory |

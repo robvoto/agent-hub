@@ -6,8 +6,14 @@ import argparse
 import os
 import sys
 
-
 from .log_config import configure_logging
+
+_HELP_TEXT = (
+    "Send a plain message to dispatch it to a specialist agent.\n"
+    "Commands: /help, /new (reset session), /agents (list agents), "
+    "/status, /last, /learn, /memory, /forget, /stop, /approve, /reject, "
+    "/quit or Ctrl-C to exit.\n"
+)
 
 
 def _setup_logging(verbose: bool, level: str | None = None) -> None:
@@ -16,7 +22,9 @@ def _setup_logging(verbose: bool, level: str | None = None) -> None:
 
 def _run_chat(model: str) -> None:
     from .orchestrator import HubOrchestrator
+    from .startup_health import ensure_healthy_startup
 
+    ensure_healthy_startup("chat")
     orch = HubOrchestrator(model=model)
     registry = orch.registry
 
@@ -27,7 +35,7 @@ def _run_chat(model: str) -> None:
     else:
         print("Agent Hub ready — no agents registered yet.")
 
-    print("Commands: /new (reset session), /agents (list agents), /quit or Ctrl-C to exit.\n")
+    print(_HELP_TEXT)
 
     while True:
         try:
@@ -43,6 +51,10 @@ def _run_chat(model: str) -> None:
             print("Bye.")
             break
 
+        if text == "/help":
+            print(_HELP_TEXT)
+            continue
+
         if text == "/new":
             orch.new_session()
             print("New session started.")
@@ -54,6 +66,61 @@ def _run_chat(model: str) -> None:
             else:
                 for spec in orch.registry:
                     print(f"  {spec.name} ({spec.id}): {spec.purpose}")
+            continue
+
+        if text == "/status":
+            print(f"\nHub: {orch.current_run_status()}\n")
+            continue
+
+        if text == "/last":
+            print(f"\nHub: {orch.last_run_status()}\n")
+            continue
+
+        if text.startswith("/learn"):
+            value = text[len("/learn"):].strip()
+            if not value:
+                print("\nHub: Usage: /learn <instruction or fact>\n")
+            else:
+                print(f"\nHub: {orch.learn(value, source='cli')}\n")
+            continue
+
+        if text == "/memory":
+            print(f"\nHub: {orch.memory()}\n")
+            continue
+
+        if text.startswith("/forget"):
+            identifier = text[len("/forget"):].strip()
+            print(f"\nHub: {orch.forget_learning(identifier)}\n")
+            continue
+
+        if text == "/stop":
+            print(f"\nHub: {orch.stop_current_task()}\n")
+            continue
+
+        if text == "/approve":
+            try:
+                reply = orch.approve_pending()
+                print(f"\nHub: {reply}\n")
+            except Exception as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+            continue
+
+        if text.startswith("/reject"):
+            reason = text[len("/reject"):].strip() or "Rejected by user"
+            try:
+                reply = orch.reject_pending(reason)
+                print(f"\nHub: {reply}\n")
+            except Exception as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+            continue
+
+        pending = orch.pending_run()
+        if pending is not None and pending.state == "waiting_clarification":
+            try:
+                reply = orch.provide_clarification(text)
+                print(f"\nHub: {reply}\n")
+            except Exception as exc:
+                print(f"Error: {exc}", file=sys.stderr)
             continue
 
         try:

@@ -29,6 +29,26 @@ Equivalent wrapper:
 ./run.sh chat
 ```
 
+Interactive chat supports:
+
+- `/help` to show the command list
+- `/new` to start a fresh session
+- `/agents` to list callable specialists
+- `/status` to show the current active or paused task
+- `/last` to show the most recently completed or failed task
+- `/learn <instruction or fact>` to store an explicit hub learning. Stored learnings
+  are folded into the orchestrator's system prompt on every turn (most recent
+  first, bounded to keep prompts from growing unbounded). Once the raw learning
+  count passes 25, the oldest overflow beyond the 15 most recent is automatically
+  compacted into one summary learning (source `hub-compaction`) via an LLM call —
+  nothing is silently dropped from view, it's merged instead.
+- `/memory` to list stored hub learnings
+- `/forget <memory id>` to delete a stored hub learning
+- `/stop` to cancel the current active or paused task
+- `/approve` to resume a paused approval
+- `/reject optional reason` to reject a paused approval
+- if a task is waiting for clarification, the next normal message is treated as the clarification reply
+
 ## Telegram gateway
 
 ```bash
@@ -67,6 +87,7 @@ Logs are written to:
 
 ```text
 logs/agent-hub.log
+data/llm_usage.json
 ```
 
 Override the log directory with:
@@ -87,3 +108,11 @@ HUB_MODEL=gpt-4.1-mini
 ```
 
 `HUB_ALLOWED_CHAT_IDS` is a comma-separated list of Telegram chat IDs.
+
+Optional integration variables:
+
+```text
+AGENT_FACTORY_ROOT=...
+AGENT_FACTORY_KNOWLEDGE_DB=...
+HUB_LLM_COST_CATALOG=...
+```

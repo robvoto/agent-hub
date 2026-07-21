@@ -11,7 +11,8 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .config import AGENT_FACTORY_ROOT, AGENT_REGISTRY_DIR
+from .config import AGENT_REGISTRY_DIR
+from .runtime_policy import validate_runtime_config
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,7 @@ def load_registry(registry_dir: Path | None = None) -> list[AgentSpec]:
                 backlog_sheet_id=data.get("backlog_sheet_id"),
                 runtime=data.get("runtime", {}),
             )
+            validate_runtime_config(spec.id, spec.runtime)
             specs.append(spec)
             logger.debug("Loaded agent: %s (%s)", spec.id, spec.version)
         except Exception as exc:

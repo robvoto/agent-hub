@@ -1,10 +1,6 @@
 """Tests for the agent registry loader."""
 
-import json
-
-import pytest
-
-from agent_hub.registry import AgentSpec, find_agent, load_registry
+from agent_hub.registry import find_agent, load_registry
 
 
 def test_load_registry_empty_dir(tmp_path):
@@ -35,6 +31,7 @@ def test_load_registry_parses_fields(sample_registry_dir):
     assert reviewer.aliases == ["reviewer"]
     assert reviewer.tools == ["read_file"]
     assert reviewer.version == "1.0.0"
+    assert reviewer.runtime["mode"] == "subprocess"
 
 
 def test_load_registry_skips_missing_json(tmp_path):
