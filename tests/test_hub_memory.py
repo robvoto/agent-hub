@@ -1,9 +1,12 @@
-"""Tests for explicit Hub memory commands."""
+"""Tests for explicit Hub memory commands and the typed memory foundation."""
 
 from __future__ import annotations
 
+from langgraph.store.base import PutOp
+
 from agent_hub.hub_memory import (
     HubMemoryManager,
+    _LEGACY_LEARNINGS_NS,
     format_learning_list,
     format_learnings_for_prompt,
 )
@@ -18,6 +21,9 @@ def test_learn_creates_explicit_learning_record(tmp_path):
     assert record.identifier.startswith("mem-")
     assert record.value == "Remember to prefer Telegram for operator control."
     assert record.source == "cli"
+    assert record.type == "semantic"
+    assert record.scope == "operator"
+    assert record.status == "active"
 
 
 def test_memory_lists_stored_learnings(tmp_path):
@@ -82,7 +88,24 @@ def test_format_learnings_for_prompt_caps_item_count(tmp_path):
     assert "3 older learning(s) omitted" in text
 
 
-def test_learn_compacts_overflow_learnings_via_summarizer(tmp_path):
+def test_learn_never_compacts_operator_records(tmp_path):
+    """Operator-authored /learn records are never deleted by compaction."""
+    calls = []
+    manager = HubMemoryManager(
+        SqliteStore(tmp_path / "knowledge.sqlite3"),
+        summarizer=lambda records: calls.append(records) or "unused",
+    )
+    for i in range(30):
+        manager.learn(f"Fact number {i}", source="cli")
+
+    records = manager.list_learnings()
+    assert len(records) == 30
+    assert calls == []
+    assert all(r.scope == "operator" for r in records)
+
+
+def test_compacts_overflow_auto_scope_semantic_records(tmp_path):
+    """Auto-scope semantic records (future auto-extraction) do compact once over threshold."""
     summarized_batches: list[list] = []
 
     def fake_summarizer(records):
@@ -93,7 +116,10 @@ def test_learn_compacts_overflow_learnings_via_summarizer(tmp_path):
         SqliteStore(tmp_path / "knowledge.sqlite3"), summarizer=fake_summarizer
     )
     for i in range(26):
-        manager.learn(f"Fact number {i}", source="cli")
+        manager._store_record(
+            f"Fact number {i}", source="auto-extraction", type="semantic", scope="auto"
+        )
+        manager._compact_if_needed()
 
     records = manager.list_learnings()
 
@@ -106,6 +132,8 @@ def test_learn_compacts_overflow_learnings_via_summarizer(tmp_path):
     assert len(summary_records) == 1
     assert summary_records[0].value == "Compacted summary of old notes."
     assert summary_records[0].source == "hub-compaction"
+    assert summary_records[0].scope == "auto"
+    assert len(summary_records[0].evidence) == 11
 
     # The most recent facts must survive untouched.
     assert any(r.value == "Fact number 25" for r in records)
@@ -135,3 +163,73 @@ def test_format_learnings_for_prompt_caps_char_budget(tmp_path):
     included = [line for line in text.splitlines() if line.startswith("- ")]
     assert len(included) == 1
     assert "1 older learning(s) omitted" in text
+
+
+def test_migrates_legacy_flat_namespace_into_typed_semantic_namespace(tmp_path):
+    store = SqliteStore(tmp_path / "knowledge.sqlite3")
+    store.batch(
+        [
+            PutOp(
+                namespace=_LEGACY_LEARNINGS_NS,
+                key="mem-legacy01",
+                value={
+                    "value": "Old-format learning from before typed memory.",
+                    "source": "cli",
+                    "category": None,
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                },
+            ),
+            PutOp(
+                namespace=_LEGACY_LEARNINGS_NS,
+                key="mem-legacy02",
+                value={
+                    "value": "Old compacted summary.",
+                    "source": "hub-compaction",
+                    "category": "compacted-summary",
+                    "created_at": "2026-01-02T00:00:00+00:00",
+                },
+            ),
+        ]
+    )
+
+    manager = HubMemoryManager(store)
+    records = {r.identifier: r for r in manager.list_learnings()}
+
+    assert set(records) == {"mem-legacy01", "mem-legacy02"}
+    assert records["mem-legacy01"].value == "Old-format learning from before typed memory."
+    assert records["mem-legacy01"].type == "semantic"
+    assert records["mem-legacy01"].scope == "operator"
+    assert records["mem-legacy01"].status == "active"
+    assert records["mem-legacy02"].scope == "auto"
+    assert records["mem-legacy02"].category == "compacted-summary"
+
+    # Migration is idempotent: constructing again does not duplicate or error.
+    manager2 = HubMemoryManager(store)
+    assert len(manager2.list_learnings()) == 2
+
+
+def test_format_learnings_for_prompt_excludes_non_active_status(tmp_path):
+    manager = HubMemoryManager(SqliteStore(tmp_path / "knowledge.sqlite3"))
+    manager.learn("Active fact.", source="cli")
+    manager._store_record(
+        "Pending candidate fact.", source="auto-extraction", type="semantic", status="pending"
+    )
+    manager._store_record(
+        "Disabled fact.", source="auto-extraction", type="semantic", status="disabled"
+    )
+
+    text = format_learnings_for_prompt(manager.list_learnings())
+
+    assert "Active fact." in text
+    assert "Pending candidate fact." not in text
+    assert "Disabled fact." not in text
+
+
+def test_format_learning_list_shows_type_and_status(tmp_path):
+    manager = HubMemoryManager(SqliteStore(tmp_path / "knowledge.sqlite3"))
+    manager.learn("Active fact.", source="cli")
+
+    text = format_learning_list(manager.list_learnings())
+
+    assert "type=semantic" in text
+    assert "status=active" in text
