@@ -28,13 +28,16 @@ from .factory_bridge import (
     resume_factory_request,
 )
 from .hub_memory import (
+    ExtractionCandidate,
     HubMemoryManager,
+    extract_semantic_candidates,
     format_forget_confirmation,
     format_learning_confirmation,
     format_learning_list,
     format_learnings_for_prompt,
 )
 from .knowledge_store import get_knowledge_store
+from .learning_mode import get_learning_mode_registry
 from .log_config import get_human_logger
 from .manifest_cache import get_manifest_cache
 from .registry import AgentSpec, load_registry
@@ -362,10 +365,18 @@ def _build_memory_tools(store: Any) -> list[Any]:
 class HubOrchestrator:
     """Stateful orchestrator with per-session thread isolation."""
 
-    def __init__(self, model: str = DEFAULT_MODEL) -> None:
+    def __init__(
+        self,
+        model: str = DEFAULT_MODEL,
+        *,
+        semantic_extractor: Any = None,
+    ) -> None:
         self._model = model
         self._registry = _load_specialists()
         self._session_id = str(uuid.uuid4())
+        self._semantic_extractor = semantic_extractor or extract_semantic_candidates
+        self._learning_notify: Any = None
+        self._learning_watermark: dict[str, Any] = {}
         logger.info(
             "HubOrchestrator starting with model=%s, agents=%s",
             self._model,
@@ -433,6 +444,88 @@ class HubOrchestrator:
 
     def memory(self) -> str:
         return format_learning_list(HubMemoryManager().list_learnings())
+
+    def set_learning_notifier(self, callback: Any) -> None:
+        """Register how to surface a passive 'learned: X' FYI (e.g. Telegram send, print)."""
+        self._learning_notify = callback
+
+    def set_learning_mode(self, enabled: bool) -> str:
+        get_learning_mode_registry().set_enabled(self._session_id, enabled)
+        return f"Learning mode is now {'ON' if enabled else 'OFF'}."
+
+    def learning_mode_status(self) -> str:
+        enabled = get_learning_mode_registry().is_enabled(self._session_id)
+        return f"Learning mode is {'ON' if enabled else 'OFF'}."
+
+    def run_learning_pass(self, session_id: str) -> list[str]:
+        """Deferred ('dreaming') pass: decide what from a now-quiet session is
+        worth remembering automatically. See learning_mode.py for the debounced
+        trigger; this method does the actual extraction + storage.
+        """
+        store = get_task_run_store()
+        watermark = self._learning_watermark.get(session_id)
+        runs = [
+            r
+            for r in store.list_runs(session_id=session_id)
+            if r.state == TASK_STATE_SUCCEEDED and (watermark is None or r.created_at > watermark)
+        ]
+        if not runs:
+            return []
+
+        conversation_text = "\n\n".join(
+            f"Human: {r.user_message}\nHub: {r.final_response or ''}" for r in runs
+        )
+        manager = HubMemoryManager()
+        existing_active_auto = [
+            r
+            for r in manager.list_learnings(types=["semantic"])
+            if r.scope == "auto" and r.status == "active"
+        ]
+
+        try:
+            candidates: list[ExtractionCandidate] = self._semantic_extractor(
+                conversation_text, existing_active_auto
+            )
+        except Exception:
+            logger.exception("Learning pass extraction failed for session %s", session_id)
+            self._learning_watermark[session_id] = runs[-1].created_at
+            return []
+
+        messages: list[str] = []
+        for candidate in candidates:
+            if candidate.confidence != "high":
+                logger.debug(
+                    "Learning pass: skipping %s-confidence candidate: %s",
+                    candidate.confidence,
+                    _truncate(candidate.value),
+                )
+                continue
+            if candidate.action == "update" and candidate.supersedes_id:
+                manager.set_status(candidate.supersedes_id, "disabled")
+            record = manager.record_auto_semantic(
+                candidate.value,
+                source=f"auto-extraction (session {session_id[:8]})",
+                evidence=[r.id for r in runs],
+            )
+            human_logger.info("Learning pass: stored %s: %s", record.identifier, record.value)
+            messages.append(f"\U0001f9e0 Learned: {record.value}")
+
+        self._learning_watermark[session_id] = runs[-1].created_at
+        return messages
+
+    def _on_dream_fire(self, session_id: str) -> None:
+        try:
+            messages = self.run_learning_pass(session_id)
+        except Exception:
+            logger.exception("Dream pass failed for session %s", session_id)
+            return
+        if self._learning_notify is None:
+            return
+        for message in messages:
+            try:
+                self._learning_notify(message)
+            except Exception:
+                logger.exception("Learning notifier failed for session %s", session_id)
 
     def forget_learning(self, identifier: str) -> str:
         key = identifier.strip()
@@ -617,6 +710,9 @@ class HubOrchestrator:
                     usage={"totals": run_record["totals"], "models": run_record["usage"]},
                     cost=run_record["cost"],
                 )
+                get_learning_mode_registry().notify_task_completed(
+                    self._session_id, self._on_dream_fire
+                )
 
             return reply
         except TaskCancelled:
@@ -670,6 +766,9 @@ class HubOrchestrator:
                 TASK_STATE_SUCCEEDED,
                 detail="Hub returned the specialist follow-up reply to the user.",
                 final_response=reply,
+            )
+            get_learning_mode_registry().notify_task_completed(
+                self._session_id, self._on_dream_fire
             )
         elif is_paused_state(current.state):
             store.update_run(run_id, final_response=reply)

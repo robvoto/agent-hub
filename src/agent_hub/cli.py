@@ -11,8 +11,8 @@ from .log_config import configure_logging
 _HELP_TEXT = (
     "Send a plain message to dispatch it to a specialist agent.\n"
     "Commands: /help, /new (reset session), /agents (list agents), "
-    "/status, /last, /learn, /memory, /forget, /stop, /approve, /reject, "
-    "/quit or Ctrl-C to exit.\n"
+    "/status, /last, /learn, /memory, /forget, /learn-mode [on|off], "
+    "/stop, /approve, /reject, /quit or Ctrl-C to exit.\n"
 )
 
 
@@ -26,6 +26,7 @@ def _run_chat(model: str) -> None:
 
     ensure_healthy_startup("chat")
     orch = HubOrchestrator(model=model)
+    orch.set_learning_notifier(lambda message: print(f"\n{message}\n"))
     registry = orch.registry
 
     if registry:
@@ -76,7 +77,7 @@ def _run_chat(model: str) -> None:
             print(f"\nHub: {orch.last_run_status()}\n")
             continue
 
-        if text.startswith("/learn"):
+        if text == "/learn" or text.startswith("/learn "):
             value = text[len("/learn"):].strip()
             if not value:
                 print("\nHub: Usage: /learn <instruction or fact>\n")
@@ -86,6 +87,18 @@ def _run_chat(model: str) -> None:
 
         if text == "/memory":
             print(f"\nHub: {orch.memory()}\n")
+            continue
+
+        if text.startswith("/learn-mode"):
+            arg = text[len("/learn-mode"):].strip().lower()
+            if arg == "on":
+                print(f"\nHub: {orch.set_learning_mode(True)}\n")
+            elif arg == "off":
+                print(f"\nHub: {orch.set_learning_mode(False)}\n")
+            elif not arg:
+                print(f"\nHub: {orch.learning_mode_status()}\n")
+            else:
+                print("\nHub: Usage: /learn-mode [on|off]\n")
             continue
 
         if text.startswith("/forget"):

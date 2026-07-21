@@ -77,6 +77,13 @@ class TelegramGateway:
         self._allowed = _allowed_chat_ids()
         self._worker_lock = threading.Lock()
         self._worker: threading.Thread | None = None
+        self._last_chat_id: int | None = None
+        self._orch.set_learning_notifier(self._notify_learning)
+
+    def _notify_learning(self, message: str) -> None:
+        if self._last_chat_id is None:
+            return
+        _send_message(self._token, self._last_chat_id, message, parse_mode=None)
 
     def _is_allowed(self, chat_id: int) -> bool:
         return not self._allowed or chat_id in self._allowed
@@ -98,6 +105,8 @@ class TelegramGateway:
             "/learn <fact> - store an explicit learning\n"
             "/memory - list stored learnings\n"
             "/forget <id> - remove a stored learning\n"
+            "/learn-mode [on|off] - toggle automatic background learning "
+            "(off by default; shows status with no argument)\n"
         )
 
     def _handle_message(self, msg: dict) -> None:
@@ -108,6 +117,7 @@ class TelegramGateway:
             logger.info("Ignored message from unauthorized chat %d", chat_id)
             return
 
+        self._last_chat_id = chat_id
         logger.info("Telegram message from chat %d: %s", chat_id, text)
 
         if text == "/help":
@@ -147,7 +157,7 @@ class TelegramGateway:
             )
             return
 
-        if text.startswith("/learn"):
+        if text == "/learn" or text.startswith("/learn "):
             value = text[len("/learn"):].strip()
             reply = (
                 "Usage: /learn <instruction or fact>"
@@ -159,6 +169,19 @@ class TelegramGateway:
 
         if text == "/memory":
             _send_message(self._token, chat_id, self._orch.memory(), parse_mode=None)
+            return
+
+        if text.startswith("/learn-mode"):
+            arg = text[len("/learn-mode"):].strip().lower()
+            if arg == "on":
+                reply = self._orch.set_learning_mode(True)
+            elif arg == "off":
+                reply = self._orch.set_learning_mode(False)
+            elif not arg:
+                reply = self._orch.learning_mode_status()
+            else:
+                reply = "Usage: /learn-mode [on|off]"
+            _send_message(self._token, chat_id, reply, parse_mode=None)
             return
 
         if text.startswith("/forget"):

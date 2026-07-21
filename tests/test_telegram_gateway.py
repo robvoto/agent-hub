@@ -30,6 +30,7 @@ def test_status_command_sends_plain_text_status(monkeypatch):
         forget_learning=lambda identifier: f"Forgot learning {identifier}.",
         stop_current_task=lambda: "unused",
         registry=[],
+        set_learning_notifier=lambda callback: None,
     )
     gateway = TelegramGateway("token-123", orch)
 
@@ -68,6 +69,7 @@ def test_last_command_sends_plain_text_summary(monkeypatch):
         forget_learning=lambda identifier: f"Forgot learning {identifier}.",
         stop_current_task=lambda: "unused",
         registry=[],
+        set_learning_notifier=lambda callback: None,
     )
     gateway = TelegramGateway("token-123", orch)
 
@@ -108,6 +110,7 @@ def test_stop_command_sends_plain_text_confirmation(monkeypatch):
             lambda: "Stopped run run-123 for agent 'ai-tech-lead'. State is now cancelled."
         ),
         registry=[],
+        set_learning_notifier=lambda callback: None,
     )
     gateway = TelegramGateway("token-123", orch)
 
@@ -146,6 +149,7 @@ def test_learn_command_sends_plain_text_confirmation(monkeypatch):
         forget_learning=lambda identifier: f"unused {identifier}",
         stop_current_task=lambda: "unused",
         registry=[],
+        set_learning_notifier=lambda callback: None,
     )
     gateway = TelegramGateway("token-123", orch)
 
@@ -184,6 +188,7 @@ def test_memory_command_sends_plain_text_listing(monkeypatch):
         forget_learning=lambda identifier: f"unused {identifier}",
         stop_current_task=lambda: "unused",
         registry=[],
+        set_learning_notifier=lambda callback: None,
     )
     gateway = TelegramGateway("token-123", orch)
 
@@ -222,6 +227,7 @@ def test_forget_command_sends_plain_text_confirmation(monkeypatch):
         forget_learning=lambda identifier: f"Forgot learning {identifier}.",
         stop_current_task=lambda: "unused",
         registry=[],
+        set_learning_notifier=lambda callback: None,
     )
     gateway = TelegramGateway("token-123", orch)
 
@@ -235,3 +241,62 @@ def test_forget_command_sends_plain_text_confirmation(monkeypatch):
             "parse_mode": None,
         }
     ]
+
+
+def test_learn_mode_command_toggles_and_reports_status(monkeypatch):
+    sent: list[dict] = []
+
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway._send_message",
+        lambda token, chat_id, text, *, parse_mode="Markdown": sent.append(
+            {"text": text, "parse_mode": parse_mode}
+        ),
+    )
+
+    calls: list[bool] = []
+    orch = SimpleNamespace(
+        registry=[],
+        set_learning_notifier=lambda callback: None,
+        set_learning_mode=lambda enabled: calls.append(enabled)
+        or f"Learning mode is now {'ON' if enabled else 'OFF'}.",
+        learning_mode_status=lambda: "Learning mode is OFF.",
+    )
+    gateway = TelegramGateway("token-123", orch)
+
+    gateway._handle_message({"chat": {"id": 42}, "text": "/learn-mode"})
+    gateway._handle_message({"chat": {"id": 42}, "text": "/learn-mode on"})
+    gateway._handle_message({"chat": {"id": 42}, "text": "/learn-mode off"})
+    gateway._handle_message({"chat": {"id": 42}, "text": "/learn-mode bogus"})
+
+    assert calls == [True, False]
+    assert [s["text"] for s in sent] == [
+        "Learning mode is OFF.",
+        "Learning mode is now ON.",
+        "Learning mode is now OFF.",
+        "Usage: /learn-mode [on|off]",
+    ]
+
+
+def test_learning_notifier_sends_to_last_seen_chat(monkeypatch):
+    sent: list[dict] = []
+
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway._send_message",
+        lambda token, chat_id, text, *, parse_mode="Markdown": sent.append(
+            {"chat_id": chat_id, "text": text}
+        ),
+    )
+
+    captured_notifier: list = []
+    orch = SimpleNamespace(
+        registry=[],
+        set_learning_notifier=lambda callback: captured_notifier.append(callback),
+        current_run_status=lambda: "unused",
+    )
+    gateway = TelegramGateway("token-123", orch)
+    gateway._handle_message({"chat": {"id": 42}, "text": "/status"})
+
+    assert captured_notifier
+    captured_notifier[0]("\U0001f9e0 Learned: prefers tabs")
+
+    assert sent[-1] == {"chat_id": 42, "text": "\U0001f9e0 Learned: prefers tabs"}

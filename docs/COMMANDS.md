@@ -45,6 +45,13 @@ Interactive chat supports:
   beyond the 15 most recent merged into one `hub-compaction` summary via an LLM call).
 - `/memory` to list stored hub learnings, showing each record's `type` and `status`
 - `/forget <memory id>` to delete a stored hub learning
+- `/learn-mode [on|off]` to toggle automatic background learning (**off by default**).
+  When on, after a session goes quiet (5 minutes since the last completed task) Hub
+  reviews that session once and may store a high-confidence fact/preference/correction
+  as a `scope=auto` semantic memory — never routing, permissions, budgets, or prompts.
+  You get a passive one-line Telegram FYI (`\U0001f9e0 Learned: ...`) when it stores
+  something; nothing is ever silently applied without that notice. A hub restart loses
+  the on/off flag and any pending timer — by design, not a bug.
 - `/stop` to cancel the current active or paused task
 - `/approve` to resume a paused approval
 

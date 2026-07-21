@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import HumanMessage
 
-from agent_hub.hub_memory import HubMemoryManager
+from agent_hub.hub_memory import ExtractionCandidate, HubMemoryManager
 from agent_hub.knowledge_store import SqliteStore
 from agent_hub.orchestrator import (
     _SYSTEM_PROMPT,
@@ -358,3 +358,85 @@ def test_build_system_prompt_without_learnings_uses_base_prompt(monkeypatch, tmp
     messages = _build_system_prompt({"messages": []})
 
     assert messages[0].content == _SYSTEM_PROMPT
+
+
+def test_run_learning_pass_stores_high_confidence_candidate(monkeypatch):
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _FakeGraph("unused"))
+
+    calls: list[tuple] = []
+
+    def fake_extractor(conversation_text, existing_active_auto):
+        calls.append((conversation_text, existing_active_auto))
+        return [
+            ExtractionCandidate(
+                action="add", value="Prefers tabs over spaces.", supersedes_id=None, confidence="high"
+            ),
+            ExtractionCandidate(
+                action="add", value="Maybe likes dark mode?", supersedes_id=None, confidence="low"
+            ),
+        ]
+
+    orchestrator = HubOrchestrator(semantic_extractor=fake_extractor)
+    store = get_task_run_store()
+    run = store.create_run(session_id=orchestrator.session_id, user_message="Use tabs please")
+    store.transition(
+        run.id,
+        TASK_STATE_SUCCEEDED,
+        detail="done",
+        final_response="Sure, using tabs from now on.",
+    )
+
+    messages = orchestrator.run_learning_pass(orchestrator.session_id)
+
+    assert len(calls) == 1
+    assert "Use tabs please" in calls[0][0]
+    assert messages == ["\U0001f9e0 Learned: Prefers tabs over spaces."]
+
+    records = HubMemoryManager().list_learnings(types=["semantic"])
+    stored = [r for r in records if r.scope == "auto"]
+    assert len(stored) == 1
+    assert stored[0].value == "Prefers tabs over spaces."
+    assert stored[0].status == "active"
+    assert run.id in stored[0].evidence
+
+
+def test_run_learning_pass_is_noop_with_no_new_completed_runs(monkeypatch):
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _FakeGraph("unused"))
+
+    calls: list = []
+    orchestrator = HubOrchestrator(
+        semantic_extractor=lambda text, existing: calls.append(1) or []
+    )
+
+    messages = orchestrator.run_learning_pass(orchestrator.session_id)
+
+    assert messages == []
+    assert calls == []
+
+
+def test_run_learning_pass_only_processes_runs_after_watermark(monkeypatch):
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _FakeGraph("unused"))
+
+    call_texts: list[str] = []
+
+    def fake_extractor(conversation_text, existing_active_auto):
+        call_texts.append(conversation_text)
+        return []
+
+    orchestrator = HubOrchestrator(semantic_extractor=fake_extractor)
+    store = get_task_run_store()
+
+    run1 = store.create_run(session_id=orchestrator.session_id, user_message="First message")
+    store.transition(run1.id, TASK_STATE_SUCCEEDED, final_response="ok1")
+    orchestrator.run_learning_pass(orchestrator.session_id)
+
+    run2 = store.create_run(session_id=orchestrator.session_id, user_message="Second message")
+    store.transition(run2.id, TASK_STATE_SUCCEEDED, final_response="ok2")
+    orchestrator.run_learning_pass(orchestrator.session_id)
+
+    assert len(call_texts) == 2
+    assert "First message" not in call_texts[1]
+    assert "Second message" in call_texts[1]

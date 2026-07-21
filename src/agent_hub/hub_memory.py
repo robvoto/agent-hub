@@ -1,10 +1,12 @@
 """Typed Hub memory: semantic, episodic, and procedural namespaces.
 
 /learn remains Rob's immediate, authoritative command — it always writes an
-active, operator-scoped semantic record with no approval gate. Everything
-else in this module (automatic extraction, episodic curation, procedural
-proposals) is future work (HUB-LEARN-002+); this module only lays the typed
-foundation and preserves /learn's exact current behavior on top of it.
+active, operator-scoped semantic record with no approval gate.
+
+Automatic semantic extraction (HUB-LEARN-002, see learning_mode.py and
+HubOrchestrator.run_learning_pass) writes scope="auto" semantic records
+through the same typed storage. Episodic curation and procedural proposals
+(HUB-LEARN-003/005) are still future work.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from typing import Literal
 from uuid import uuid4
 
 from langgraph.store.base import GetOp, PutOp, SearchOp
+from pydantic import BaseModel
 
 from .knowledge_store import SqliteStore, get_knowledge_store
 
@@ -79,6 +82,19 @@ class HubMemoryManager:
         """Rob's explicit, immediately-authoritative instruction. Never gated."""
         record = self._store_record(
             value, source=source, category=category, type="semantic", scope="operator"
+        )
+        self._compact_if_needed()
+        return record
+
+    def record_auto_semantic(
+        self, value: str, *, source: str, evidence: Iterable[str] = ()
+    ) -> LearningRecord:
+        """Store a system-derived (scope=auto) semantic memory, e.g. from
+        automatic extraction (HUB-LEARN-002). Subject to compaction, unlike
+        operator-authored /learn records.
+        """
+        record = self._store_record(
+            value, source=source, type="semantic", scope="auto", status="active", evidence=evidence
         )
         self._compact_if_needed()
         return record
@@ -161,12 +177,39 @@ class HubMemoryManager:
         key = identifier.strip()
         if not key:
             return False
+        located = self._locate(key)
+        if located is None:
+            return False
+        memory_type, _ = located
+        self._store.batch([PutOp(namespace=_namespace_for(memory_type), key=key, value=None)])
+        return True
+
+    def set_status(self, identifier: str, status: MemoryStatus) -> bool:
+        """Change a record's status in place (e.g. disable a superseded auto fact).
+
+        Never deletes — use forget() for that. Used by supersession (an auto
+        semantic record superseding an older one) and, later, procedural
+        approve/reject (HUB-LEARN-005).
+        """
+        key = identifier.strip()
+        if not key:
+            return False
+        located = self._locate(key)
+        if located is None:
+            return False
+        memory_type, item = located
+        value = dict(item.value or {})
+        value["status"] = status
+        value["updated_at"] = datetime.now(timezone.utc).isoformat()
+        self._store.batch([PutOp(namespace=_namespace_for(memory_type), key=key, value=value)])
+        return True
+
+    def _locate(self, key: str) -> tuple[MemoryType, object] | None:
         for memory_type in MEMORY_TYPES:
             existing = self._store.batch([GetOp(namespace=_namespace_for(memory_type), key=key)])[0]
             if existing is not None:
-                self._store.batch([PutOp(namespace=_namespace_for(memory_type), key=key, value=None)])
-                return True
-        return False
+                return memory_type, existing
+        return None
 
     def _migrate_legacy_namespace(self) -> None:
         """One-time move of pre-typed learnings into the semantic namespace.
@@ -281,6 +324,121 @@ def _summarize_learnings(records: list[LearningRecord]) -> str:
             error=str(exc),
         )
         raise
+
+
+ExtractionAction = Literal["add", "update", "skip"]
+ExtractionConfidence = Literal["high", "medium", "low"]
+
+_EXTRACTION_SYSTEM_PROMPT = (
+    "You review a stretch of conversation between an operator (Rob) and Agent "
+    "Hub. Decide whether it contains a clear, stable fact, preference, or "
+    "correction about Rob or how Hub should behave that is worth remembering "
+    "long-term. Do not invent anything not actually said. Do not propose "
+    "changes to routing, permissions, budgets, safety rules, prompts, or "
+    "code — only personal facts and preferences belong here.\n\n"
+    "You are given the existing remembered facts (each with an id). For each "
+    "candidate fact you find, decide one of:\n"
+    "- add: a new fact with no existing match\n"
+    "- update: a specific existing fact (give its id) should be superseded by "
+    "this newer/corrected one\n"
+    "- skip: not clear, not stable, ambiguous, contradictory, or already "
+    "covered by an existing fact\n\n"
+    "Rate your confidence in each non-skip candidate as high, medium, or low. "
+    "Only clearly-stated, unambiguous facts should be high confidence. "
+    "Return an empty candidate list if there is nothing worth remembering."
+)
+
+
+class _ExtractionCandidateModel(BaseModel):
+    action: ExtractionAction
+    value: str
+    supersedes_id: str | None = None
+    confidence: ExtractionConfidence
+
+
+class _ExtractionResponse(BaseModel):
+    candidates: list[_ExtractionCandidateModel] = []
+
+
+@dataclass(frozen=True)
+class ExtractionCandidate:
+    action: ExtractionAction
+    value: str
+    supersedes_id: str | None
+    confidence: ExtractionConfidence
+
+
+def extract_semantic_candidates(
+    conversation_text: str,
+    existing_active_auto: list[LearningRecord],
+) -> list[ExtractionCandidate]:
+    """One bounded LLM call: decide what (if anything) from a quiet session is
+    worth remembering automatically.
+
+    Only runs when Learning Mode is on and a session has gone quiet (see
+    learning_mode.py) — never per-message, never silently on by default.
+    Skip candidates are dropped here; callers should further filter by
+    confidence (HUB-LEARN-002: only "high" is auto-stored).
+    """
+    from langchain_core.callbacks import UsageMetadataCallbackHandler
+    from langchain_core.messages import HumanMessage, SystemMessage
+    from langchain_openai import ChatOpenAI
+
+    from .config import DEFAULT_MODEL
+    from .cost_log import extract_usage_metadata, record_llm_run
+
+    existing_block = (
+        "\n".join(f"- {r.identifier}: {r.value}" for r in existing_active_auto) or "(none yet)"
+    )
+    human_content = (
+        f"Existing remembered facts:\n{existing_block}\n\nRecent conversation:\n{conversation_text}"
+    )
+
+    llm = ChatOpenAI(model=DEFAULT_MODEL, temperature=0)
+    structured_llm = llm.with_structured_output(_ExtractionResponse)
+    usage_cb = UsageMetadataCallbackHandler()
+    started = time.perf_counter()
+    try:
+        response = structured_llm.invoke(
+            [
+                SystemMessage(content=_EXTRACTION_SYSTEM_PROMPT),
+                HumanMessage(content=human_content),
+            ],
+            config={"callbacks": [usage_cb]},
+        )
+        record_llm_run(
+            operation="hub_memory_extraction",
+            request_kind="semantic_extraction",
+            requested_model=DEFAULT_MODEL,
+            effective_model=DEFAULT_MODEL,
+            status="ok",
+            duration_seconds=time.perf_counter() - started,
+            usage_by_model=extract_usage_metadata(usage_cb),
+            result_preview=str(response)[:200],
+        )
+    except Exception as exc:
+        record_llm_run(
+            operation="hub_memory_extraction",
+            request_kind="semantic_extraction",
+            requested_model=DEFAULT_MODEL,
+            effective_model=DEFAULT_MODEL,
+            status="error",
+            duration_seconds=time.perf_counter() - started,
+            usage_by_model=extract_usage_metadata(usage_cb),
+            error=str(exc),
+        )
+        raise
+
+    return [
+        ExtractionCandidate(
+            action=c.action,
+            value=c.value.strip(),
+            supersedes_id=c.supersedes_id,
+            confidence=c.confidence,
+        )
+        for c in response.candidates
+        if c.action != "skip" and c.value.strip()
+    ]
 
 
 def format_learning_list(records: list[LearningRecord]) -> str:
