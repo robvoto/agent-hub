@@ -15,7 +15,6 @@ Read only the smallest document needed for the task.
 
 - `diagrams/INDEX.md` - diagram index
 - `diagrams/05-HUB-ROUTING.md` - hub routing flow
-- `diagrams/06-CODING-TASK-END-TO-END.md` - coding task end-to-end flow
 - `diagrams/07-HUB-LANGGRAPH-TOOLS.mmd` / `.svg` - generated LangGraph/tool wiring, if present
 ## Runtime code map
 

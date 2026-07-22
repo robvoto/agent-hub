@@ -28,13 +28,12 @@ def test_cli_parser_uses_agent_hub_prog_name() -> None:
 
 
 def test_tracked_docs_and_cli_do_not_reference_agent_army() -> None:
-    tracked_files = [
-        ROOT / "README.md",
-        ROOT / "docs" / "INDEX.md",
-        ROOT / "docs" / "COMMANDS.md",
-        ROOT / "src" / "agent_hub" / "cli.py",
-    ]
+    tracked_files = [ROOT / "README.md", ROOT / "src" / "agent_hub" / "cli.py"]
+    tracked_files.extend(sorted((ROOT / "docs").rglob("*")))
+    tracked_files.extend(sorted((ROOT / ".skills").rglob("SKILL.md")))
 
     for path in tracked_files:
+        if path.is_dir():
+            continue
         text = path.read_text(encoding="utf-8")
         assert "agent-army" not in text, path

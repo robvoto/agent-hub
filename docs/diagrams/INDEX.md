@@ -5,7 +5,6 @@ Orchestration workflow diagrams. All diagrams describe hub-level flows.
 | File | What it shows |
 |------|---------------|
 | [05-HUB-ROUTING.md](05-HUB-ROUTING.md) | How hub receives a message, selects an agent, dispatches, and returns the result |
-| [06-CODING-TASK-END-TO-END.md](06-CODING-TASK-END-TO-END.md) | Full flow from Telegram message through hub → ai-tech-lead → coding agent → result |
 
 ## How to read these
 

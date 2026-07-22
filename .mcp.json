@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "human-mcp": {
+      "type": "url",
+      "url": "https://qualify-provided-providing.ngrok-free.dev/mcp"
+    }
+  }
+}

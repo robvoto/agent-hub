@@ -35,7 +35,7 @@ ID, Creator, Title, Epic, Type, Priority, Size, Problem, Outcome, Acceptance Cri
 ## ID prefixes in use
 
 Multiple prefixes coexist by era/theme — don't force one global counter:
-- `ARMY-###`: earliest infra items (pre-rename; "army" was the old project name, git remote is still `agent-army`)
+- `ARMY-###`: earliest infra items kept for historical continuity after the project rename
 - `HUB-MVP-###`: MVP feature work
 - `HUB-LEARN-###`: typed-memory/learning system work
 - New theme: pick a short, descriptive prefix (e.g. `HUB-DISPATCH-###`) and continue it for related items rather than inventing a new prefix per row.
