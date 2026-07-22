@@ -16,6 +16,7 @@ from .runtime_policy import derive_manifest_command
 
 logger = logging.getLogger(__name__)
 DEFAULT_MANIFEST_TTL_SECONDS = 3600
+MANIFEST_CACHE_TTL_FIELD = "manifest_cache_ttl_seconds"
 
 
 @dataclass(frozen=True)
@@ -65,19 +66,27 @@ class ManifestCache:
         return record
 
     def update_reference(self, agent_id: str, reference: dict[str, Any]) -> ManifestRecord:
+        existing = self.get(agent_id)
         manifest_hash = _string_or_none(reference.get("manifest_hash"))
-        manifest_command = _string_or_none(reference.get("manifest_command"))
-        manifest = {
-            "agent_id": agent_id,
-            "package_version": _string_or_none(reference.get("package_version")),
-            "manifest_hash": manifest_hash,
-        }
+        manifest_command = _string_or_none(reference.get("manifest_command")) or (
+            existing.manifest_command if existing is not None else None
+        )
+        manifest = dict(existing.manifest) if existing is not None else {"agent_id": agent_id}
+        package_version = _string_or_none(reference.get("package_version"))
+        if package_version:
+            manifest["package_version"] = package_version
+        if manifest_hash:
+            manifest["manifest_hash"] = manifest_hash
         record = ManifestRecord(
             agent_id=agent_id,
             manifest_hash=manifest_hash,
             manifest_command=manifest_command,
             fetched_at=_utcnow(),
-            ttl_seconds=DEFAULT_MANIFEST_TTL_SECONDS,
+            ttl_seconds=(
+                existing.ttl_seconds
+                if existing is not None
+                else DEFAULT_MANIFEST_TTL_SECONDS
+            ),
             manifest=manifest,
         )
         self._write_record(record)
@@ -120,7 +129,7 @@ class ManifestCache:
             manifest_hash=_string_or_none(manifest.get("manifest_hash")),
             manifest_command=manifest_command,
             fetched_at=_utcnow(),
-            ttl_seconds=DEFAULT_MANIFEST_TTL_SECONDS,
+            ttl_seconds=_manifest_cache_ttl_seconds(manifest),
             manifest=manifest,
         )
 
@@ -155,6 +164,13 @@ def get_manifest_cache(cache_file: Path | None = None) -> ManifestCache:
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _manifest_cache_ttl_seconds(manifest: dict[str, Any]) -> int:
+    ttl = manifest.get(MANIFEST_CACHE_TTL_FIELD)
+    if isinstance(ttl, int) and ttl > 0:
+        return ttl
+    return DEFAULT_MANIFEST_TTL_SECONDS
 
 
 def _string_or_none(value: Any) -> str | None:

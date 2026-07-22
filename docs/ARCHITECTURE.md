@@ -114,3 +114,6 @@ This means hub can manage any agent's backlog without hardcoding sheet locations
 Live backlog: https://docs.google.com/spreadsheets/d/1v1zJjwGTqhOgb06nYChaGjRNZIVXQht5pNBUbh9r7RA/edit?gid=32071178#gid=32071178
 
 This is the one true backlog sheet for this project. Hub agents may write to and use it as needed; no other backlog sheet is used.
+Hub caches specialist manifests by agent id and manifest hash. If a specialist
+manifest declares `manifest_cache_ttl_seconds`, Hub should use that as the
+refresh TTL for the full manifest fetch; otherwise it falls back to Hub's default.
