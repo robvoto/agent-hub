@@ -23,8 +23,20 @@ Agent Hub is the runtime orchestrator and control plane.
 ## Navigation
 
 - Documentation entry point: `docs/INDEX.md`
+- Project skills: `.skills/`
 - Runtime code: `src/agent_hub/`
 - Tests: `tests/`
+
+## Skill selection
+
+Use the most relevant project skill from `.skills/` for bounded work in this repo.
+
+Reusable defaults:
+
+- `agent-hub-work`: repo boundary, orchestration ownership, hub-vs-specialist scope
+- `hub-runtime-change`: orchestrator, Telegram, CLI, task lifecycle, dispatch, approvals
+- `instruction-maintenance`: AGENTS, skills, docs, diagrams, and stale instruction cleanup
+- `backlog-management`: creating/updating/grooming rows in the live backlog Google Sheet
 
 ## Runtime boundaries
 
