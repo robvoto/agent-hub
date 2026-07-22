@@ -336,7 +336,6 @@ def _record_agent_status(spec: AgentSpec, output: dict, task_run_id: str | None)
             detail=summary or f"Agent '{spec.id}' returned a terminal failure.",
             selected_agent_id=spec.id,
             error_message=summary,
-            raw_result=output,
         )
 
 
