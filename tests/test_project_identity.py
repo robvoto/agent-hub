@@ -27,13 +27,15 @@ def test_cli_parser_uses_agent_hub_prog_name() -> None:
     assert parser.parse_args(["telegram"]).command == "telegram"
 
 
-def test_tracked_docs_and_cli_do_not_reference_agent_army() -> None:
+def test_tracked_project_files_do_not_reference_retired_identity() -> None:
     tracked_files = [ROOT / "README.md", ROOT / "src" / "agent_hub" / "cli.py"]
     tracked_files.extend(sorted((ROOT / "docs").rglob("*")))
     tracked_files.extend(sorted((ROOT / ".skills").rglob("SKILL.md")))
+
+    retired_identity = "ar" + "my"
 
     for path in tracked_files:
         if path.is_dir():
             continue
         text = path.read_text(encoding="utf-8")
-        assert "agent-army" not in text, path
+        assert retired_identity not in text.lower(), path

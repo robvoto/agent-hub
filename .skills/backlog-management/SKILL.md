@@ -17,7 +17,15 @@ Use when creating, updating, deduplicating, grooming, or analysing backlog items
 
 ## How to read and write the sheet
 
-Use the authorised live Google Sheets tool available in the current runtime (a local MCP Sheets tool, a cloud Sheets connector, or another approved integration).
+Load `.skills/human-mcp-access/SKILL.md` first.
+
+Preferred access is the repo-configured `human-mcp` server from `.mcp.json`, using:
+
+- `sheets_read_rows` to inspect the live header and all existing rows
+- `sheets_append_row` to add a complete row
+- `sheets_update_cell` to update an existing row by freshly resolved 1-based row and column
+
+After every write, re-read the live sheet and verify the result before claiming completion.
 
 ### Required access rule
 
@@ -35,7 +43,7 @@ ID, Creator, Title, Epic, Type, Priority, Size, Problem, Outcome, Acceptance Cri
 ## ID prefixes in use
 
 Multiple prefixes coexist by era/theme — don't force one global counter:
-- `ARMY-###`: earliest infra items kept for historical continuity after the project rename
+- Legacy pre-rename IDs already present in the live sheet remain immutable; do not create new rows with retired prefixes.
 - `HUB-MVP-###`: MVP feature work
 - `HUB-LEARN-###`: typed-memory/learning system work
 - New theme: pick a short, descriptive prefix (e.g. `HUB-DISPATCH-###`) and continue it for related items rather than inventing a new prefix per row.

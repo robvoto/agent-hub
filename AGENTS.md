@@ -36,7 +36,8 @@ Reusable defaults:
 - `agent-hub-work`: repo boundary, orchestration ownership, hub-vs-specialist scope
 - `hub-runtime-change`: orchestrator, Telegram, CLI, task lifecycle, dispatch, approvals
 - `instruction-maintenance`: AGENTS, skills, docs, diagrams, and stale instruction cleanup
-- `backlog-management`: creating/updating/grooming rows in the live backlog Google Sheet
+- `human-mcp-access`: discover and use the repo-configured Human MCP server for Google Sheets/Docs
+- `backlog-management`: creating/updating/grooming rows in the live backlog Google Sheet; load `human-mcp-access` first
 
 ## Runtime boundaries
 

@@ -3,18 +3,16 @@ flowchart TD
     Hub["Hub Orchestrator<br/>(LangGraph react agent)"]
 
     subgraph Tools["Hub tools"]
-    memory_hub_learnings["Manage memory
-(hub learnings)"]
-    memory_shared_docs["Search memory
-(shared docs)"]
+    tool_search_shared_docs["Search shared docs<br/>(hub + factory)"]
     agent_ai_tech_lead["AI Tech Lead<br/>(ai-tech-lead)"]
     end
 
     You --> Hub
-    Hub --> memory_hub_learnings
-    Hub --> memory_shared_docs
+    Hub --> tool_search_shared_docs
     Hub --> agent_ai_tech_lead
 
     classDef note fill:#fff8dc,stroke:#e6a817;
-    note["Generated from current registry and HubOrchestrator implementation"]:::note
+    note["Generated from current registry and HubOrchestrator LangGraph tool wiring"]:::note
+    commands_note["/learn, /memory, and /forget are operator commands<br/>outside the LangGraph tool list"]:::note
     Hub --> note
+    Hub -.-> commands_note

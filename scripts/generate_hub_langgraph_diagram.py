@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import sys
@@ -26,56 +25,64 @@ DIAGRAM_BASE = DIAGRAM_DIR / "07-HUB-LANGGRAPH-TOOLS"
 MMD_PATH = DIAGRAM_BASE.with_suffix(".mmd")
 SVG_PATH = DIAGRAM_BASE.with_suffix(".svg")
 
-MEMORY_TOOL_NODES = [
-    ("memory_hub_learnings", "Manage memory\n(hub learnings)"),
-    ("memory_shared_docs", "Search memory\n(shared docs)"),
+LANGGRAPH_TOOL_NODES = [
+    ("search_shared_docs", "Search shared docs<br/>(hub + factory)"),
 ]
 
 
-def sanitize_id(agent_id: str) -> str:
-    return "agent_" + "_".join(agent_id.replace("-", "_").split())
+def sanitize_id(prefix: str, value: str) -> str:
+    return prefix + "_" + "_".join(value.replace("-", "_").split())
 
 
 def render_agent_nodes(registry: Iterable[object]) -> str:
     lines = []
     for spec in registry:
-        node_id = sanitize_id(spec.id)
+        node_id = sanitize_id("agent", spec.id)
         label = f"{spec.name}<br/>({spec.id})"
         lines.append(f"    {node_id}[\"{label}\"]")
     return "\n".join(lines)
 
 
+def get_langgraph_tool_nodes() -> list[tuple[str, str]]:
+    return LANGGRAPH_TOOL_NODES
+
+
 def build_mermaid(registry: Iterable[object]) -> str:
     agent_nodes = render_agent_nodes(registry)
-    agent_ids = [sanitize_id(spec.id) for spec in registry]
-
-    tool_links = "\n".join(f"    Hub --> {node_id}" for node_id in agent_ids)
-
-    memory_nodes = "\n".join(
-        f"    {node_id}[\"{label}\"]" for node_id, label in MEMORY_TOOL_NODES
+    agent_ids = [sanitize_id("agent", spec.id) for spec in registry]
+    tool_nodes = get_langgraph_tool_nodes()
+    tool_node_ids = [sanitize_id("tool", tool_name) for tool_name, _ in tool_nodes]
+    tool_links = "\n".join(
+        f"    Hub --> {node_id}" for node_id in [*tool_node_ids, *agent_ids]
+    )
+    rendered_tool_nodes = "\n".join(
+        f"    {sanitize_id('tool', tool_name)}[\"{label}\"]"
+        for tool_name, label in tool_nodes
     )
 
     if not agent_ids:
         agent_nodes = "    no_agents[\"No registered agents\"]"
-        tool_links = "    Hub --> no_agents"
+        tool_links = "\n".join(
+            [f"    Hub --> {node_id}" for node_id in tool_node_ids] + ["    Hub --> no_agents"]
+        )
 
     return f"""flowchart TD
     You([You])
     Hub[\"Hub Orchestrator<br/>(LangGraph react agent)\"]
 
     subgraph Tools[\"Hub tools\"]
-{memory_nodes}
+{rendered_tool_nodes}
 {agent_nodes}
     end
 
     You --> Hub
-    Hub --> memory_hub_learnings
-    Hub --> memory_shared_docs
 {tool_links}
 
     classDef note fill:#fff8dc,stroke:#e6a817;
-    note[\"Generated from current registry and HubOrchestrator implementation\"]:::note
+    note[\"Generated from current registry and HubOrchestrator LangGraph tool wiring\"]:::note
+    commands_note[\"/learn, /memory, and /forget are operator commands<br/>outside the LangGraph tool list\"]:::note
     Hub --> note
+    Hub -.-> commands_note
 """
 
 
