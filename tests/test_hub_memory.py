@@ -208,6 +208,38 @@ def test_migrates_legacy_flat_namespace_into_typed_semantic_namespace(tmp_path):
     assert len(manager2.list_learnings()) == 2
 
 
+def test_format_learnings_for_prompt_ranks_operator_ahead_of_newer_auto(tmp_path):
+    """An older explicit /learn instruction must never be crowded out by a
+    newer auto-inferred fact, and both scopes are labeled distinctly."""
+    manager = HubMemoryManager(SqliteStore(tmp_path / "knowledge.sqlite3"))
+    manager.learn("Operator fact (older).", source="cli")
+    manager._store_record(
+        "Auto fact (newer).", source="auto-extraction", type="semantic", scope="auto"
+    )
+
+    text = format_learnings_for_prompt(manager.list_learnings())
+    operator_idx = text.index("Operator fact (older).")
+    auto_idx = text.index("Auto fact (newer).")
+
+    assert operator_idx < auto_idx
+    assert "Operator-established hub learnings" in text
+    assert "Auto-inferred hub learnings" in text
+
+
+def test_format_learnings_for_prompt_keeps_operator_when_budget_favors_recency(tmp_path):
+    """Item budget must not let a newer auto fact push out an older operator one."""
+    manager = HubMemoryManager(SqliteStore(tmp_path / "knowledge.sqlite3"))
+    manager.learn("Operator fact.", source="cli")
+    manager._store_record(
+        "Auto fact.", source="auto-extraction", type="semantic", scope="auto"
+    )
+
+    text = format_learnings_for_prompt(manager.list_learnings(), max_items=1)
+
+    assert "Operator fact." in text
+    assert "Auto fact." not in text
+
+
 def test_format_learnings_for_prompt_excludes_non_active_status(tmp_path):
     manager = HubMemoryManager(SqliteStore(tmp_path / "knowledge.sqlite3"))
     manager.learn("Active fact.", source="cli")

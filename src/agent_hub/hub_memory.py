@@ -336,13 +336,19 @@ _EXTRACTION_SYSTEM_PROMPT = (
     "long-term. Do not invent anything not actually said. Do not propose "
     "changes to routing, permissions, budgets, safety rules, prompts, or "
     "code — only personal facts and preferences belong here.\n\n"
-    "You are given the existing remembered facts (each with an id). For each "
-    "candidate fact you find, decide one of:\n"
+    "You are given two kinds of existing remembered facts, each with an id:\n"
+    "- Operator-established facts: Rob stated these explicitly via /learn. "
+    "They are authoritative and can only be changed by Rob doing that again. "
+    "Never propose 'update' against one of these ids. If the conversation "
+    "seems to add, duplicate, or conflict with one of these, skip it instead.\n"
+    "- Auto-inferred facts: extracted automatically on a previous pass. These "
+    "may be superseded by a clearer or corrected version.\n\n"
+    "For each candidate fact you find, decide one of:\n"
     "- add: a new fact with no existing match\n"
-    "- update: a specific existing fact (give its id) should be superseded by "
-    "this newer/corrected one\n"
-    "- skip: not clear, not stable, ambiguous, contradictory, or already "
-    "covered by an existing fact\n\n"
+    "- update: a specific existing AUTO-INFERRED fact (give its id) should be "
+    "superseded by this newer/corrected one\n"
+    "- skip: not clear, not stable, ambiguous, already covered, or would "
+    "duplicate/conflict with an operator-established fact\n\n"
     "Rate your confidence in each non-skip candidate as high, medium, or low. "
     "Only clearly-stated, unambiguous facts should be high confidence. "
     "Return an empty candidate list if there is nothing worth remembering."
@@ -371,6 +377,7 @@ class ExtractionCandidate:
 def extract_semantic_candidates(
     conversation_text: str,
     existing_active_auto: list[LearningRecord],
+    existing_active_operator: list[LearningRecord] = (),
 ) -> list[ExtractionCandidate]:
     """One bounded LLM call: decide what (if anything) from a quiet session is
     worth remembering automatically.
@@ -379,6 +386,11 @@ def extract_semantic_candidates(
     learning_mode.py) — never per-message, never silently on by default.
     Skip candidates are dropped here; callers should further filter by
     confidence (HUB-LEARN-002: only "high" is auto-stored).
+
+    existing_active_operator (Rob's explicit /learn records) is shown so the
+    model can avoid duplicating or contradicting them, but is never a valid
+    'update' target — run_learning_pass enforces that regardless of what the
+    model proposes.
     """
     from langchain_core.callbacks import UsageMetadataCallbackHandler
     from langchain_core.messages import HumanMessage, SystemMessage
@@ -387,11 +399,16 @@ def extract_semantic_candidates(
     from .config import DEFAULT_MODEL
     from .cost_log import extract_usage_metadata, record_llm_run
 
-    existing_block = (
+    operator_block = (
+        "\n".join(f"- {r.identifier}: {r.value}" for r in existing_active_operator) or "(none)"
+    )
+    auto_block = (
         "\n".join(f"- {r.identifier}: {r.value}" for r in existing_active_auto) or "(none yet)"
     )
     human_content = (
-        f"Existing remembered facts:\n{existing_block}\n\nRecent conversation:\n{conversation_text}"
+        f"Operator-established facts (authoritative; do not update/supersede):\n{operator_block}\n\n"
+        f"Auto-inferred facts (may be superseded):\n{auto_block}\n\n"
+        f"Recent conversation:\n{conversation_text}"
     )
 
     llm = ChatOpenAI(model=DEFAULT_MODEL, temperature=0)
@@ -467,35 +484,59 @@ def format_learnings_for_prompt(
 ) -> str:
     """Render active learnings for injection into the orchestrator system prompt.
 
-    Pending, rejected, and disabled records are never injected. Most-recent
-    active learnings are prioritized and the output is capped so a growing
-    learning store cannot unboundedly inflate every LLM call.
+    Pending, rejected, and disabled records are never injected. Operator
+    records (Rob's explicit /learn) always rank ahead of auto-inferred ones
+    regardless of recency, so a newer automatic guess can never crowd out an
+    older explicit instruction — within each scope, most-recent is prioritized.
+    The output is capped so a growing learning store cannot unboundedly
+    inflate every LLM call.
     """
     active = [r for r in records if r.status == "active"]
     if not active:
         return ""
 
-    ordered = sorted(active, key=lambda r: r.created_at, reverse=True)
+    operator = sorted(
+        (r for r in active if r.scope == "operator"), key=lambda r: r.created_at, reverse=True
+    )
+    auto = sorted(
+        (r for r in active if r.scope == "auto"), key=lambda r: r.created_at, reverse=True
+    )
+    ordered = operator + auto
     candidates = ordered[:max_items]
 
-    included: list[str] = []
+    included_operator: list[str] = []
+    included_auto: list[str] = []
     total_chars = 0
     for record in candidates:
         line = f"- {record.value} (source: {record.source})"
         if total_chars + len(line) + 1 > max_chars:
             break
-        included.append(line)
+        if record.scope == "operator":
+            included_operator.append(line)
+        else:
+            included_auto.append(line)
         total_chars += len(line) + 1
 
-    if not included:
+    if not included_operator and not included_auto:
         return ""
 
-    omitted = len(ordered) - len(included)
-    text = "Operator-established hub learnings (apply these when relevant):\n" + "\n".join(
-        included
-    )
+    omitted = len(ordered) - len(included_operator) - len(included_auto)
+
+    sections: list[str] = []
+    if included_operator:
+        sections.append(
+            "Operator-established hub learnings (Rob's explicit instructions — "
+            "authoritative; apply these when relevant):\n" + "\n".join(included_operator)
+        )
+    if included_auto:
+        sections.append(
+            "Auto-inferred hub learnings (lower confidence; where these conflict "
+            "with the operator-established learnings above, the operator ones "
+            "win):\n" + "\n".join(included_auto)
+        )
+    text = "\n\n".join(sections)
     if omitted:
-        text += f"\n(...{omitted} older learning(s) omitted; use /memory to view all.)"
+        text += f"\n\n(...{omitted} older learning(s) omitted; use /memory to view all.)"
     return text
 
 

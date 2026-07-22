@@ -543,15 +543,18 @@ class HubOrchestrator:
             f"Human: {r.user_message}\nHub: {r.final_response or ''}" for r in runs
         )
         manager = HubMemoryManager()
+        existing_semantic = manager.list_learnings(types=["semantic"])
         existing_active_auto = [
-            r
-            for r in manager.list_learnings(types=["semantic"])
-            if r.scope == "auto" and r.status == "active"
+            r for r in existing_semantic if r.scope == "auto" and r.status == "active"
         ]
+        existing_active_operator = [
+            r for r in existing_semantic if r.scope == "operator" and r.status == "active"
+        ]
+        operator_ids = {r.identifier for r in existing_active_operator}
 
         try:
             candidates: list[ExtractionCandidate] = self._semantic_extractor(
-                conversation_text, existing_active_auto
+                conversation_text, existing_active_auto, existing_active_operator
             )
         except Exception:
             logger.exception("Learning pass extraction failed for session %s", session_id)
@@ -564,6 +567,17 @@ class HubOrchestrator:
                 logger.debug(
                     "Learning pass: skipping %s-confidence candidate: %s",
                     candidate.confidence,
+                    _truncate(candidate.value),
+                )
+                continue
+            # Rob's explicit /learn records are authoritative and can only be
+            # changed by Rob doing that again — never let automatic extraction
+            # disable one, even if the model proposed it.
+            if candidate.supersedes_id and candidate.supersedes_id in operator_ids:
+                logger.warning(
+                    "Learning pass: refusing to auto-supersede operator record %s; "
+                    "skipping candidate: %s",
+                    candidate.supersedes_id,
                     _truncate(candidate.value),
                 )
                 continue

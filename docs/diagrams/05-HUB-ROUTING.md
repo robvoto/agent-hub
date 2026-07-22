@@ -9,64 +9,88 @@ sequenceDiagram
     actor You
     participant Bot as Hub Telegram Bot
     participant Orch as Orchestrator LLM<br/>(create_react_agent)
+    participant Mem as Hub Memory<br/>(hub_memory.py)
     participant Reg as Agent Registry<br/>(config/agents/)
     participant ATL as AI Tech Lead<br/>subprocess
-    participant Job as Job Hunter<br/>subprocess
-    participant FB as Factory Brain<br/>subprocess
-    participant KB as Knowledge Store
+    participant FB as Factory Brain<br/>(factory_bridge, resumable thread)
 
-    You->>Bot: "Find me senior Python roles in Melbourne"
+    You->>Bot: "Fix the null pointer bug"
     Bot->>Orch: forward message
 
-    Orch->>KB: search_memory("job search Python Melbourne")
-    KB-->>Orch: relevant past searches + patterns
+    Note over Orch,Mem: System prompt is rebuilt every turn,<br/>folding in active stored learnings<br/>(operator /learn facts ranked ahead<br/>of auto-inferred ones)
+    Orch->>Mem: format_learnings_for_prompt()
+    Mem-->>Orch: learnings block
 
     Orch->>Reg: list available agents
-    Reg-->>Orch: [ai-tech-lead, job-hunter, ...]
+    Reg-->>Orch: [ai-tech-lead, ...]
 
-    Orch->>Orch: LLM decides: this is a job task → job-hunter
+    Orch->>Orch: LLM decides: coding task -> ai-tech-lead
 
-    Orch->>Job: run-agent-task input.json
-    Note over Job: runs job search workflow
-    Job-->>Orch: output.json {status: success, results: [...]}
-
-    Orch->>KB: manage_memory("routing: job search → job-hunter, success")
-    Orch-->>Bot: formatted response
-    Bot-->>You: "Found 12 roles. Top match: ..."
-
-    Note over You, KB: --- Different request ---
-
-    You->>Bot: "Fix the null pointer bug in job-hunter"
-    Bot->>Orch: forward message
-
-    Orch->>Orch: LLM decides: this is a coding task → ai-tech-lead
-
-    Orch->>ATL: run-agent-task input.json\n{project_root: job-hunter-agent,\ntask: "fix null pointer bug"}
+    Orch->>ATL: run-agent-task input.json
 
     alt Needs clarification
-        ATL-->>Orch: {status: needs_clarification,\nnext_action: "Which null pointer?"}
+        ATL-->>Orch: status: needs_clarification
         Orch-->>Bot: relay question
-        Bot-->>You: "Which null pointer bug? In the search loop or the result parser?"
+        Bot-->>You: "Which null pointer bug?"
         You->>Bot: "The result parser"
-        Orch->>ATL: run-agent-task (updated input with clarification)
+        Orch->>ATL: run-agent-task (updated input)
     end
 
-    ATL-->>Orch: {status: success,\ncoding_agent_instruction: "...",\nformulated_task: "..."}
-    Orch-->>Bot: "AI Tech Lead has analysed the bug and prepared instructions."
+    ATL-->>Orch: status: success, instruction ready
+    Orch-->>Bot: formatted response
     Bot-->>You: summary + instruction
+
+    Note over You, FB: Design request
+
+    You->>Bot: "Design me an agent for X"
+    Bot->>Orch: forward message
+    Orch->>Orch: LLM decides: factory/design -> factory brain
+    Orch->>FB: invoke_factory_request(thread_id)
+
+    alt Approval required
+        FB-->>Orch: interrupted, approval_token
+        Orch-->>Bot: "Factory Brain drafted a spec. /approve to stage it."
+        Bot-->>You: spec summary
+        You->>Bot: /approve
+        Bot->>Orch: approval
+        Orch->>FB: resume_factory_request(thread_id)
+        FB-->>Orch: status: success
+    end
+
+    Orch-->>Bot: formatted response
+    Bot-->>You: result
+
+    Note over You, Mem: Explicit learning (bypasses the orchestrator LLM entirely)
+
+    You->>Bot: "/learn Prefer Telegram for operator control"
+    Bot->>Mem: orchestrator.learn(value, source)
+    Note over Mem: Stored immediately as an active,<br/>operator-scoped record — no approval<br/>gate, never auto-superseded
+    Mem-->>Bot: confirmation
+    Bot-->>You: "Stored learning mem-xxxxxxxx"
 ```
 
 ## How the LLM decides which agent to call
 
-Each enabled agent in `config/agents/` becomes a tool in the orchestrator's tool list:
+Each enabled agent in `config/agents/` (plus Factory Brain, wired in directly) becomes a tool in the orchestrator's tool list:
 
 ```
 Tool: ai-tech-lead
 Description: "AI Tech Lead: Handles coding task clarification, risk review,
               planning, and instruction generation for coding backends."
 
-Tool: job-hunter  
-Description: "Job Hunter: Finds job listings matching skills and location."
+Tool: factory-brain
+Description: "Specialist agent for creating, configuring, validating,
+              and staging agents."
 ```
 
 The orchestrator LLM reads your message and picks the right tool. If no agent fits, it answers directly or says what's missing.
+
+## Memory: automatic vs. explicit
+
+`/learn`, `/memory`, `/forget`, and `/learn-mode` are intercepted as commands before the
+message ever reaches the orchestrator LLM — `HubOrchestrator.learn()` writes directly
+to storage with no approval gate. Separately, on every LLM turn `_build_system_prompt`
+re-reads the store and folds active learnings into the system prompt, with
+operator-established (`/learn`) records always ranked ahead of auto-inferred ones so a
+newer background guess can never crowd out an older explicit instruction. See
+`src/agent_hub/hub_memory.py` for the full operator/auto scope model.

@@ -2,16 +2,17 @@ sequenceDiagram
     actor You
     participant Bot as Hub Telegram Bot
     participant Orch as Orchestrator LLM<br/>(create_react_agent)
+    participant Mem as Hub Memory<br/>(hub_memory.py)
     participant Reg as Agent Registry<br/>(config/agents/)
     participant ATL as AI Tech Lead<br/>subprocess
-    participant FB as Factory Brain<br/>subprocess
-    participant KB as Knowledge Store
+    participant FB as Factory Brain<br/>(factory_bridge, resumable thread)
 
     You->>Bot: "Fix the null pointer bug"
     Bot->>Orch: forward message
 
-    Orch->>KB: search_memory("coding bug fix patterns")
-    KB-->>Orch: relevant past patterns
+    Note over Orch,Mem: System prompt is rebuilt every turn,<br/>folding in active stored learnings<br/>(operator /learn facts ranked ahead<br/>of auto-inferred ones)
+    Orch->>Mem: format_learnings_for_prompt()
+    Mem-->>Orch: learnings block
 
     Orch->>Reg: list available agents
     Reg-->>Orch: [ai-tech-lead, ...]
@@ -29,16 +30,33 @@ sequenceDiagram
     end
 
     ATL-->>Orch: status: success, instruction ready
-    Orch->>KB: manage_memory("coding task routed successfully")
     Orch-->>Bot: formatted response
     Bot-->>You: summary + instruction
 
-    Note over You, KB: Design request
+    Note over You, FB: Design request
 
     You->>Bot: "Design me an agent for X"
     Bot->>Orch: forward message
     Orch->>Orch: LLM decides: factory/design -> factory brain
-    Orch->>FB: run-agent-task input.json
-    FB-->>Orch: draft agent spec
-    Orch-->>Bot: "Factory Brain has drafted a spec. /approve to stage it."
-    Bot-->>You: spec summary
+    Orch->>FB: invoke_factory_request(thread_id)
+
+    alt Approval required
+        FB-->>Orch: interrupted, approval_token
+        Orch-->>Bot: "Factory Brain drafted a spec. /approve to stage it."
+        Bot-->>You: spec summary
+        You->>Bot: /approve
+        Bot->>Orch: approval
+        Orch->>FB: resume_factory_request(thread_id)
+        FB-->>Orch: status: success
+    end
+
+    Orch-->>Bot: formatted response
+    Bot-->>You: result
+
+    Note over You, Mem: Explicit learning (bypasses the orchestrator LLM entirely)
+
+    You->>Bot: "/learn Prefer Telegram for operator control"
+    Bot->>Mem: orchestrator.learn(value, source)
+    Note over Mem: Stored immediately as an active,<br/>operator-scoped record — no approval<br/>gate, never auto-superseded
+    Mem-->>Bot: confirmation
+    Bot-->>You: "Stored learning mem-xxxxxxxx"

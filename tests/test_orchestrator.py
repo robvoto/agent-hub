@@ -367,8 +367,8 @@ def test_run_learning_pass_stores_high_confidence_candidate(monkeypatch):
 
     calls: list[tuple] = []
 
-    def fake_extractor(conversation_text, existing_active_auto):
-        calls.append((conversation_text, existing_active_auto))
+    def fake_extractor(conversation_text, existing_active_auto, existing_active_operator=()):
+        calls.append((conversation_text, existing_active_auto, existing_active_operator))
         return [
             ExtractionCandidate(
                 action="add", value="Prefers tabs over spaces.", supersedes_id=None, confidence="high"
@@ -402,13 +402,72 @@ def test_run_learning_pass_stores_high_confidence_candidate(monkeypatch):
     assert run.id in stored[0].evidence
 
 
+def test_run_learning_pass_shows_extractor_existing_operator_records(monkeypatch):
+    """The extractor must see Rob's explicit /learn facts, not just auto ones,
+    so it can avoid duplicating or conflicting with them."""
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _FakeGraph("unused"))
+
+    calls: list[tuple] = []
+
+    def fake_extractor(conversation_text, existing_active_auto, existing_active_operator=()):
+        calls.append((existing_active_auto, existing_active_operator))
+        return []
+
+    orchestrator = HubOrchestrator(semantic_extractor=fake_extractor)
+    HubMemoryManager().learn("Prefers Telegram for operator control.", source="cli")
+
+    store = get_task_run_store()
+    run = store.create_run(session_id=orchestrator.session_id, user_message="hello")
+    store.transition(run.id, TASK_STATE_SUCCEEDED, final_response="hi")
+
+    orchestrator.run_learning_pass(orchestrator.session_id)
+
+    assert len(calls) == 1
+    existing_auto, existing_operator = calls[0]
+    assert existing_auto == []
+    assert len(existing_operator) == 1
+    assert existing_operator[0].value == "Prefers Telegram for operator control."
+
+
+def test_run_learning_pass_never_disables_operator_record(monkeypatch):
+    """Even if the model proposes superseding an explicit /learn record, Hub
+    must refuse — only Rob can change an operator-established fact."""
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _FakeGraph("unused"))
+
+    operator_record = HubMemoryManager().learn("Prefers tabs over spaces.", source="cli")
+
+    def rogue_extractor(conversation_text, existing_active_auto, existing_active_operator=()):
+        return [
+            ExtractionCandidate(
+                action="update",
+                value="Actually prefers spaces now.",
+                supersedes_id=operator_record.identifier,
+                confidence="high",
+            )
+        ]
+
+    orchestrator = HubOrchestrator(semantic_extractor=rogue_extractor)
+    store = get_task_run_store()
+    run = store.create_run(session_id=orchestrator.session_id, user_message="Use spaces please")
+    store.transition(run.id, TASK_STATE_SUCCEEDED, final_response="ok")
+
+    messages = orchestrator.run_learning_pass(orchestrator.session_id)
+
+    assert messages == []
+    records = {r.identifier: r for r in HubMemoryManager().list_learnings(types=["semantic"])}
+    assert records[operator_record.identifier].status == "active"
+    assert not any(r.value == "Actually prefers spaces now." for r in records.values())
+
+
 def test_run_learning_pass_is_noop_with_no_new_completed_runs(monkeypatch):
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
     monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _FakeGraph("unused"))
 
     calls: list = []
     orchestrator = HubOrchestrator(
-        semantic_extractor=lambda text, existing: calls.append(1) or []
+        semantic_extractor=lambda text, existing_auto, existing_operator=(): calls.append(1) or []
     )
 
     messages = orchestrator.run_learning_pass(orchestrator.session_id)
@@ -423,7 +482,7 @@ def test_run_learning_pass_only_processes_runs_after_watermark(monkeypatch):
 
     call_texts: list[str] = []
 
-    def fake_extractor(conversation_text, existing_active_auto):
+    def fake_extractor(conversation_text, existing_active_auto, existing_active_operator=()):
         call_texts.append(conversation_text)
         return []
 
