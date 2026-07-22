@@ -107,6 +107,8 @@ class TelegramGateway:
             "/forget <id> - remove a stored learning\n"
             "/learn-mode [on|off] - toggle automatic background learning "
             "(off by default; shows status with no argument)\n"
+            "/project [<path>|clear] - set/show/clear the target project "
+            "passed to specialists (shows current with no argument)\n"
         )
 
     def _handle_message(self, msg: dict) -> None:
@@ -192,6 +194,17 @@ class TelegramGateway:
                 self._orch.forget_learning(identifier),
                 parse_mode=None,
             )
+            return
+
+        if text.startswith("/project"):
+            arg = text[len("/project"):].strip()
+            if not arg:
+                reply = self._orch.current_project_status()
+            elif arg.lower() == "clear":
+                reply = self._orch.clear_current_project()
+            else:
+                reply = self._orch.set_current_project(arg)
+            _send_message(self._token, chat_id, reply, parse_mode=None)
             return
 
         if text == "/stop":

@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from agent_hub.orchestrator import _dispatch_subprocess
+from agent_hub.project_context import get_project_context_registry
 from agent_hub.registry import AgentSpec
 from agent_hub.task_control import get_task_control_registry
 from agent_hub.task_runs import (
@@ -93,6 +94,24 @@ def test_dispatch_subprocess_approval_then_resume(tmp_path):
         )
 
     assert second["status"] == "success"
+
+
+def test_dispatch_subprocess_omits_project_root_when_unset(tmp_path):
+    spec = _make_spec(tmp_path)
+    _, output = _run(spec, "Do the thing")
+
+    assert output["received_project_root"] is None
+
+
+def test_dispatch_subprocess_passes_selected_project_root(tmp_path):
+    spec = _make_spec(tmp_path)
+    target_project = tmp_path / "some-other-repo"
+    target_project.mkdir()
+    get_project_context_registry().set("session-1", str(target_project))
+
+    _, output = _run(spec, "Do the thing")
+
+    assert output["received_project_root"] == str(target_project.resolve())
 
 
 def test_dispatch_subprocess_failed(tmp_path):

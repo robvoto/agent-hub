@@ -106,7 +106,10 @@ def main() -> None:
     if task.startswith("SCENARIO:"):
         scenario = task.split(":", 1)[1].split(None, 1)[0]
 
-    response = {"request_id": input_data.get("request_id", "")}
+    response = {
+        "request_id": input_data.get("request_id", ""),
+        "received_project_root": input_data.get("project_root"),
+    }
     response.update(_scenario_response(scenario, input_data))
 
     with open(args.output_json, "w", encoding="utf-8") as fh:

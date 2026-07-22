@@ -40,6 +40,7 @@ from .knowledge_store import get_knowledge_store
 from .learning_mode import get_learning_mode_registry
 from .log_config import get_human_logger
 from .manifest_cache import get_manifest_cache
+from .project_context import get_project_context_registry
 from .registry import AgentSpec, load_registry
 from .run_status import format_current_run_status, format_last_run_status
 from .shared_docs import make_shared_docs_tool
@@ -69,6 +70,21 @@ human_logger = get_human_logger()
 def _truncate(text: str, limit: int = 200) -> str:
     text = " ".join(text.split())
     return text if len(text) <= limit else f"{text[:limit]}…"
+
+
+def _current_project_for_task_run(task_run_id: str | None) -> str | None:
+    """Look up the operator's /project selection for this task run's session.
+
+    project_root is passed through as a request, not a grant — the
+    specialist enforces its own allowlist server-side and rejects it
+    with a clear failed status if the path isn't permitted.
+    """
+    if not task_run_id:
+        return None
+    run = get_task_run_store().get_run(task_run_id)
+    if run is None:
+        return None
+    return get_project_context_registry().get(run.session_id)
 
 _SYSTEM_PROMPT = """You are the Agent Hub orchestrator. You coordinate specialist AI agents.
 
@@ -142,6 +158,9 @@ def _dispatch_subprocess(
             "source": "agent-hub",
             "execution_mode": runtime["default_execution_mode"],
         }
+        project_root = _current_project_for_task_run(task_run_id)
+        if project_root:
+            input_data["project_root"] = project_root
         if human_approved:
             input_data["human_approved"] = True
             if approval_token:
@@ -467,6 +486,29 @@ class HubOrchestrator:
     def learning_mode_status(self) -> str:
         enabled = get_learning_mode_registry().is_enabled(self._session_id)
         return f"Learning mode is {'ON' if enabled else 'OFF'}."
+
+    def set_current_project(self, path: str) -> str:
+        """Set the sticky project_root passed to subprocess specialists.
+
+        Hub does not validate this against any specialist's allowlist —
+        that check happens server-side in the specialist. Hub only checks
+        the path itself exists, to fail fast on a typo.
+        """
+        try:
+            resolved = get_project_context_registry().set(self._session_id, path)
+        except ValueError as exc:
+            return f"Error: {exc}"
+        return f"Current project set to {resolved}."
+
+    def clear_current_project(self) -> str:
+        get_project_context_registry().clear(self._session_id)
+        return "Current project cleared — specialists will use their own default project."
+
+    def current_project_status(self) -> str:
+        current = get_project_context_registry().get(self._session_id)
+        if current is None:
+            return "No project selected — specialists use their own default project."
+        return f"Current project: {current}"
 
     def run_learning_pass(self, session_id: str) -> list[str]:
         """Deferred ('dreaming') pass: decide what from a now-quiet session is

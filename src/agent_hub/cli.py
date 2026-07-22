@@ -12,6 +12,7 @@ _HELP_TEXT = (
     "Send a plain message to dispatch it to a specialist agent.\n"
     "Commands: /help, /new (reset session), /agents (list agents), "
     "/status, /last, /learn, /memory, /forget, /learn-mode [on|off], "
+    "/project [<path>|clear] (set/show/clear the target project for specialists), "
     "/stop, /approve, /reject, /quit or Ctrl-C to exit.\n"
 )
 
@@ -104,6 +105,16 @@ def _run_chat(model: str) -> None:
         if text.startswith("/forget"):
             identifier = text[len("/forget"):].strip()
             print(f"\nHub: {orch.forget_learning(identifier)}\n")
+            continue
+
+        if text.startswith("/project"):
+            arg = text[len("/project"):].strip()
+            if not arg:
+                print(f"\nHub: {orch.current_project_status()}\n")
+            elif arg.lower() == "clear":
+                print(f"\nHub: {orch.clear_current_project()}\n")
+            else:
+                print(f"\nHub: {orch.set_current_project(arg)}\n")
             continue
 
         if text == "/stop":

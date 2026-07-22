@@ -52,6 +52,13 @@ def _isolate_task_control_registry(monkeypatch):
     monkeypatch.setattr(tc_mod, "_registry", None)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_project_context_registry(monkeypatch):
+    import agent_hub.project_context as pc_mod
+
+    monkeypatch.setattr(pc_mod, "_registry", None)
+
+
 @pytest.fixture()
 def sample_registry_dir(tmp_path):
     """Create a minimal agent registry directory for testing."""
