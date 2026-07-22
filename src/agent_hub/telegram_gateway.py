@@ -246,6 +246,10 @@ class TelegramGateway:
         with self._workers_lock:
             self._workers = [w for w in self._workers if w.is_alive()]
             self._workers.append(worker)
+            active_count = len(self._workers)
+        logger.info(
+            "Starting worker for chat %d (%d worker(s) now active)", chat_id, active_count
+        )
         worker.start()
 
     def _process_user_message(self, chat_id: int, text: str) -> None:

@@ -166,6 +166,9 @@ def _dispatch_subprocess(
         project_root = _current_project_for_task_run(task_run_id)
         if project_root:
             input_data["project_root"] = project_root
+            human_logger.info("Dispatching %s with project_root=%s", spec.id, project_root)
+        else:
+            logger.debug("Dispatching %s with no project_root (specialist default)", spec.id)
         if human_approved:
             input_data["human_approved"] = True
             if approval_token:
@@ -505,11 +508,14 @@ class HubOrchestrator:
         try:
             resolved = get_project_context_registry().set(self._session_id, path)
         except ValueError as exc:
+            human_logger.info("Project selection rejected for %r: %s", path, exc)
             return f"Error: {exc}"
+        human_logger.info("Session %s: current project set to %s", self._session_id[:8], resolved)
         return f"Current project set to {resolved}."
 
     def clear_current_project(self) -> str:
         get_project_context_registry().clear(self._session_id)
+        human_logger.info("Session %s: current project cleared", self._session_id[:8])
         return "Current project cleared — specialists will use their own default project."
 
     def current_project_status(self) -> str:
@@ -725,6 +731,12 @@ class HubOrchestrator:
         project_key = _project_key_for_session(self._session_id)
         busy_run = task_store.get_active_or_paused_run_for_project(project_key)
         if busy_run is not None:
+            human_logger.info(
+                "Rejected new task for project '%s' — run %s is still %s",
+                project_key,
+                busy_run.id[:8],
+                busy_run.state,
+            )
             return (
                 f"A task is already running for project '{project_key}'. "
                 "Use /status or /stop before sending another request for that project."
@@ -733,6 +745,7 @@ class HubOrchestrator:
         task_run = task_store.create_run(session_id=self._session_id, user_message=message)
         task_store.update_run(task_run.id, context_updates={"target_project": project_key})
         thread_id = f"{self._session_id}:{project_key}"
+        logger.debug("Task %s: project=%s thread_id=%s", task_run.id[:8], project_key, thread_id)
         config = {"configurable": {"thread_id": thread_id}}
         usage_cb = UsageMetadataCallbackHandler()
         run_config = {**config, "callbacks": [usage_cb]}
