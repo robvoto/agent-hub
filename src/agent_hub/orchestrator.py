@@ -298,6 +298,9 @@ def _format_output(spec: AgentSpec, output: dict) -> str:
             "Use /approve to continue or /reject <reason> to stop."
         )
 
+    if status == "failed":
+        return f"[{spec.name}] Failed: {summary or 'no summary provided.'}"
+
     raise RuntimeError(
         f"Agent '{spec.id}' returned status '{status}': {summary or output}"
     )
@@ -325,6 +328,15 @@ def _record_agent_status(spec: AgentSpec, output: dict, task_run_id: str | None)
             detail=summary or f"Agent '{spec.id}' requested approval.",
             selected_agent_id=spec.id,
             approval_token=output.get("approval_token"),
+        )
+    elif status == "failed":
+        store.transition(
+            task_run_id,
+            TASK_STATE_FAILED,
+            detail=summary or f"Agent '{spec.id}' returned a terminal failure.",
+            selected_agent_id=spec.id,
+            error_message=summary,
+            raw_result=output,
         )
 
 
