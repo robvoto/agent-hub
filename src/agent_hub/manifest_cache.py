@@ -115,13 +115,12 @@ class ManifestCache:
                 f"{proc.stderr.strip()}"
             )
         manifest = json.loads(proc.stdout)
-        ttl_seconds = _ttl_seconds_from_manifest(manifest)
         return ManifestRecord(
             agent_id=agent_id,
             manifest_hash=_string_or_none(manifest.get("manifest_hash")),
             manifest_command=manifest_command,
             fetched_at=_utcnow(),
-            ttl_seconds=ttl_seconds,
+            ttl_seconds=DEFAULT_MANIFEST_TTL_SECONDS,
             manifest=manifest,
         )
 
@@ -156,15 +155,6 @@ def get_manifest_cache(cache_file: Path | None = None) -> ManifestCache:
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-def _ttl_seconds_from_manifest(manifest: dict[str, Any]) -> int:
-    army_integration = manifest.get("army_integration")
-    if isinstance(army_integration, dict):
-        ttl = army_integration.get("handshake_ttl_seconds")
-        if isinstance(ttl, int) and ttl > 0:
-            return ttl
-    return DEFAULT_MANIFEST_TTL_SECONDS
 
 
 def _string_or_none(value: Any) -> str | None:
