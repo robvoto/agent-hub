@@ -75,8 +75,8 @@ class TelegramGateway:
         self._token = token
         self._orch = orchestrator
         self._allowed = _allowed_chat_ids()
-        self._worker_lock = threading.Lock()
-        self._worker: threading.Thread | None = None
+        self._workers_lock = threading.Lock()
+        self._workers: list[threading.Thread] = []
         self._last_chat_id: int | None = None
         self._orch.set_learning_notifier(self._notify_learning)
 
@@ -234,24 +234,18 @@ class TelegramGateway:
         if not text or text.startswith("/"):
             return
 
-        with self._worker_lock:
-            if self._worker is not None and self._worker.is_alive():
-                _send_message(
-                    self._token,
-                    chat_id,
-                    (
-                        "A task is already running. "
-                        "Use /status or /stop before sending another request."
-                    ),
-                    parse_mode=None,
-                )
-                return
-            worker = threading.Thread(
-                target=self._process_user_message,
-                args=(chat_id, text),
-                daemon=True,
-            )
-            self._worker = worker
+        # Multiple projects can run concurrently — HubOrchestrator.invoke()
+        # itself rejects a new task for a project that already has one
+        # in flight, so the gateway just dispatches every message and lets
+        # that per-project check produce the "already running" reply.
+        worker = threading.Thread(
+            target=self._process_user_message,
+            args=(chat_id, text),
+            daemon=True,
+        )
+        with self._workers_lock:
+            self._workers = [w for w in self._workers if w.is_alive()]
+            self._workers.append(worker)
         worker.start()
 
     def _process_user_message(self, chat_id: int, text: str) -> None:

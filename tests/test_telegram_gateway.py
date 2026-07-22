@@ -277,6 +277,40 @@ def test_learn_mode_command_toggles_and_reports_status(monkeypatch):
     ]
 
 
+def test_project_command_sets_shows_and_clears(monkeypatch):
+    sent: list[dict] = []
+
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway._send_message",
+        lambda token, chat_id, text, *, parse_mode="Markdown": sent.append(
+            {"text": text, "parse_mode": parse_mode}
+        ),
+    )
+
+    calls: list[str] = []
+    orch = SimpleNamespace(
+        registry=[],
+        set_learning_notifier=lambda callback: None,
+        current_project_status=lambda: "No project selected.",
+        set_current_project=lambda path: calls.append(("set", path))
+        or f"Current project set to {path}.",
+        clear_current_project=lambda: calls.append(("clear",))
+        or "Current project cleared.",
+    )
+    gateway = TelegramGateway("token-123", orch)
+
+    gateway._handle_message({"chat": {"id": 42}, "text": "/project"})
+    gateway._handle_message({"chat": {"id": 42}, "text": "/project /some/repo"})
+    gateway._handle_message({"chat": {"id": 42}, "text": "/project clear"})
+
+    assert calls == [("set", "/some/repo"), ("clear",)]
+    assert [s["text"] for s in sent] == [
+        "No project selected.",
+        "Current project set to /some/repo.",
+        "Current project cleared.",
+    ]
+
+
 def test_learning_notifier_sends_to_last_seen_chat(monkeypatch):
     sent: list[dict] = []
 

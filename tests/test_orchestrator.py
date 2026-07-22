@@ -22,6 +22,7 @@ from agent_hub.orchestrator import (
 from agent_hub.registry import AgentSpec
 from agent_hub.task_control import TaskCancelled, get_task_control_registry
 from agent_hub.task_runs import (
+    DEFAULT_PROJECT_KEY,
     TASK_STATE_CANCELLED,
     TASK_STATE_DISPATCHED,
     TASK_STATE_FAILED,
@@ -440,3 +441,66 @@ def test_run_learning_pass_only_processes_runs_after_watermark(monkeypatch):
     assert len(call_texts) == 2
     assert "First message" not in call_texts[1]
     assert "Second message" in call_texts[1]
+
+
+def test_invoke_rejects_new_task_when_same_project_already_busy(monkeypatch):
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _FakeGraph("Should not run"))
+
+    orchestrator = HubOrchestrator()
+    store = get_task_run_store()
+    busy_run = store.create_run(session_id="some-other-session", user_message="first task")
+    store.update_run(busy_run.id, context_updates={"target_project": DEFAULT_PROJECT_KEY})
+    store.transition(busy_run.id, TASK_STATE_IN_PROGRESS, detail="running")
+
+    reply = orchestrator.invoke("second task, same default project")
+
+    assert "already running" in reply
+    runs = get_task_run_store().list_runs(session_id=orchestrator.session_id)
+    assert runs == []
+
+
+def test_invoke_allows_task_for_a_different_project(monkeypatch, tmp_path):
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _FakeGraph("Done for B"))
+
+    orchestrator = HubOrchestrator()
+    store = get_task_run_store()
+    busy_run = store.create_run(session_id="some-other-session", user_message="first task")
+    store.update_run(busy_run.id, context_updates={"target_project": "/repo/a"})
+    store.transition(busy_run.id, TASK_STATE_IN_PROGRESS, detail="running")
+
+    project_b = tmp_path / "repo-b"
+    project_b.mkdir()
+    orchestrator.set_current_project(str(project_b))
+
+    reply = orchestrator.invoke("second task, different project")
+
+    assert reply == "Done for B"
+
+
+def test_pending_run_disambiguates_by_currently_selected_project(monkeypatch, tmp_path):
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _FakeGraph("unused"))
+
+    orchestrator = HubOrchestrator()
+    store = get_task_run_store()
+
+    run_a = store.create_run(session_id=orchestrator.session_id, user_message="task for A")
+    store.update_run(run_a.id, context_updates={"target_project": "/repo/a"})
+    store.transition(run_a.id, TASK_STATE_WAITING_APPROVAL, approval_token="token-a")
+
+    project_b = tmp_path / "repo-b"
+    project_b.mkdir()
+    run_b = store.create_run(session_id=orchestrator.session_id, user_message="task for B")
+    store.update_run(run_b.id, context_updates={"target_project": str(project_b.resolve())})
+    store.transition(run_b.id, TASK_STATE_WAITING_APPROVAL, approval_token="token-b")
+
+    # No /project selected yet — default project has no pending run of its own.
+    assert orchestrator.pending_run() is None
+
+    orchestrator.set_current_project(str(project_b))
+    pending = orchestrator.pending_run()
+    assert pending is not None
+    assert pending.id == run_b.id
+    assert pending.approval_token == "token-b"

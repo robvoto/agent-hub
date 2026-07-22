@@ -19,6 +19,17 @@ from .log_config import get_human_logger
 logger = logging.getLogger(__name__)
 human_logger = get_human_logger()
 
+DEFAULT_PROJECT_KEY = "__default__"
+"""Stable key for a run with no recorded target_project — either created
+before per-project tracking existed, or dispatched with no /project
+selected. Both cases mean the same thing: 'whatever the specialist
+defaults to on its own', so they must serialize/match against each other."""
+
+
+def _project_key_of(run: "TaskRun") -> str:
+    return run.context.get("target_project") or DEFAULT_PROJECT_KEY
+
+
 TASK_STATE_RECEIVED = "received"
 TASK_STATE_ROUTED = "routed"
 TASK_STATE_DISPATCHED = "dispatched"
@@ -312,22 +323,56 @@ class TaskRunStore:
             rows = conn.execute(query, params).fetchall()
         return [_row_to_task_run(row) for row in rows]
 
-    def get_latest_paused_run(self, session_id: str) -> TaskRun | None:
+    def get_latest_paused_run(
+        self, session_id: str, *, project_key: str | None = None
+    ) -> TaskRun | None:
         with _connect(self._db_path) as conn:
-            row = conn.execute(
+            rows = conn.execute(
                 """SELECT * FROM task_runs
                    WHERE session_id=? AND state IN (?, ?)
-                   ORDER BY updated_at DESC LIMIT 1""",
+                   ORDER BY updated_at DESC""",
                 (session_id, TASK_STATE_WAITING_CLARIFICATION, TASK_STATE_WAITING_APPROVAL),
-            ).fetchone()
-        return _row_to_task_run(row) if row else None
+            ).fetchall()
+        for row in rows:
+            run = _row_to_task_run(row)
+            if project_key is None or _project_key_of(run) == project_key:
+                return run
+        return None
 
-    def get_latest_active_or_paused_run(self, session_id: str) -> TaskRun | None:
+    def get_active_or_paused_run_for_project(
+        self, project_key: str, *, exclude_run_id: str | None = None
+    ) -> TaskRun | None:
+        """Any non-terminal run (any session) already targeting this project.
+
+        Used to enforce one in-flight specialist task per project — two
+        subprocess dispatches racing on the same repo is a real hazard,
+        not just a UX nuisance.
+        """
+        states = tuple(_ACTIVE_STATES | _PAUSED_STATES)
+        placeholders = ",".join("?" for _ in states)
         with _connect(self._db_path) as conn:
-            row = conn.execute(
+            rows = conn.execute(
+                f"""SELECT * FROM task_runs
+                    WHERE state IN ({placeholders})
+                    ORDER BY updated_at DESC""",
+                states,
+            ).fetchall()
+        for row in rows:
+            run = _row_to_task_run(row)
+            if run.id == exclude_run_id:
+                continue
+            if _project_key_of(run) == project_key:
+                return run
+        return None
+
+    def get_latest_active_or_paused_run(
+        self, session_id: str, *, project_key: str | None = None
+    ) -> TaskRun | None:
+        with _connect(self._db_path) as conn:
+            rows = conn.execute(
                 """SELECT * FROM task_runs
                    WHERE session_id=? AND state IN (?, ?, ?, ?, ?, ?)
-                   ORDER BY updated_at DESC LIMIT 1""",
+                   ORDER BY updated_at DESC""",
                 (
                     session_id,
                     TASK_STATE_RECEIVED,
@@ -337,8 +382,14 @@ class TaskRunStore:
                     TASK_STATE_WAITING_CLARIFICATION,
                     TASK_STATE_WAITING_APPROVAL,
                 ),
-            ).fetchone()
-        return _row_to_task_run(row) if row else None
+            ).fetchall()
+        if project_key is None:
+            return _row_to_task_run(rows[0]) if rows else None
+        for row in rows:
+            run = _row_to_task_run(row)
+            if _project_key_of(run) == project_key:
+                return run
+        return None
 
     def get_latest_completed_or_failed_run(self, session_id: str) -> TaskRun | None:
         with _connect(self._db_path) as conn:

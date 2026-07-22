@@ -46,6 +46,7 @@ from .run_status import format_current_run_status, format_last_run_status
 from .shared_docs import make_shared_docs_tool
 from .task_control import TaskCancelled, get_task_control_registry
 from .task_runs import (
+    DEFAULT_PROJECT_KEY,
     TASK_STATE_CANCELLED,
     TASK_STATE_DISPATCHED,
     TASK_STATE_FAILED,
@@ -70,6 +71,10 @@ human_logger = get_human_logger()
 def _truncate(text: str, limit: int = 200) -> str:
     text = " ".join(text.split())
     return text if len(text) <= limit else f"{text[:limit]}…"
+
+
+def _project_key_for_session(session_id: str) -> str:
+    return get_project_context_registry().get(session_id) or DEFAULT_PROJECT_KEY
 
 
 def _current_project_for_task_run(task_run_id: str | None) -> str | None:
@@ -458,7 +463,10 @@ class HubOrchestrator:
         logger.info("New hub session: %s", self._session_id)
 
     def pending_run(self) -> TaskRun | None:
-        return get_task_run_store().get_latest_paused_run(self._session_id)
+        project_key = _project_key_for_session(self._session_id)
+        return get_task_run_store().get_latest_paused_run(
+            self._session_id, project_key=project_key
+        )
 
     def current_run_status(self) -> str:
         run = get_task_run_store().get_latest_active_or_paused_run(self._session_id)
@@ -590,7 +598,8 @@ class HubOrchestrator:
 
     def stop_current_task(self, reason: str = "Stopped by user") -> str:
         store = get_task_run_store()
-        run = store.get_latest_active_or_paused_run(self._session_id)
+        project_key = _project_key_for_session(self._session_id)
+        run = store.get_latest_active_or_paused_run(self._session_id, project_key=project_key)
         if run is None:
             return "No task is currently active."
 
@@ -712,8 +721,19 @@ class HubOrchestrator:
         logger.info("Received user request: %s", message)
         logger.debug("Invoking graph with session_id=%s", self._session_id)
         task_store = get_task_run_store()
+
+        project_key = _project_key_for_session(self._session_id)
+        busy_run = task_store.get_active_or_paused_run_for_project(project_key)
+        if busy_run is not None:
+            return (
+                f"A task is already running for project '{project_key}'. "
+                "Use /status or /stop before sending another request for that project."
+            )
+
         task_run = task_store.create_run(session_id=self._session_id, user_message=message)
-        config = {"configurable": {"thread_id": self._session_id}}
+        task_store.update_run(task_run.id, context_updates={"target_project": project_key})
+        thread_id = f"{self._session_id}:{project_key}"
+        config = {"configurable": {"thread_id": thread_id}}
         usage_cb = UsageMetadataCallbackHandler()
         run_config = {**config, "callbacks": [usage_cb]}
         started_at = time.perf_counter()
