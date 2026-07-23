@@ -9,7 +9,11 @@ the actual seam between Hub and any specialist repo.
 
 from __future__ import annotations
 
+import os
+import signal
 import sys
+import threading
+import time
 from pathlib import Path
 
 import agent_hub.progress_events as progress_events
@@ -17,7 +21,7 @@ import pytest
 from agent_hub.orchestrator import _dispatch_subprocess
 from agent_hub.project_context import get_project_context_registry
 from agent_hub.registry import AgentSpec
-from agent_hub.task_control import get_task_control_registry
+from agent_hub.task_control import TaskCancelled, get_task_control_registry
 from agent_hub.task_runs import (
     PROGRESS_MODE_STREAMING,
     TASK_STATE_FAILED,
@@ -181,3 +185,58 @@ def test_dispatch_subprocess_emits_quiet_heartbeat(tmp_path, monkeypatch):
     events = get_task_run_store().list_progress_events(run.id)
     heartbeat_events = [event for event in events if event.event_type == "heartbeat"]
     assert heartbeat_events
+
+
+def test_dispatch_subprocess_cancel_stops_child_process_tree(tmp_path):
+    spec = _make_spec(tmp_path)
+    run = get_task_run_store().create_run(
+        session_id="session-1",
+        user_message="SCENARIO:spawn_child do the thing",
+    )
+    get_task_control_registry().register_run(run.id)
+    child_pid_file = tmp_path / "stub-child.pid"
+    child_heartbeat_file = tmp_path / "stub-child-heartbeat.txt"
+    result: dict[str, str] = {}
+
+    def _invoke() -> None:
+        try:
+            with active_task_run(run.id):
+                _dispatch_subprocess(spec, "SCENARIO:spawn_child do the thing")
+        except TaskCancelled as exc:
+            result["cancelled"] = exc.reason
+        finally:
+            get_task_control_registry().unregister_run(run.id)
+
+    worker = threading.Thread(target=_invoke)
+    worker.start()
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        if child_pid_file.exists() and child_heartbeat_file.exists():
+            break
+        time.sleep(0.05)
+
+    assert child_pid_file.exists()
+    assert child_heartbeat_file.exists()
+
+    first_heartbeat = child_heartbeat_file.read_text(encoding="utf-8")
+    time.sleep(0.2)
+    second_heartbeat = child_heartbeat_file.read_text(encoding="utf-8")
+    assert second_heartbeat != first_heartbeat
+
+    get_task_control_registry().request_cancel(run.id, "Stopped by user")
+    worker.join(timeout=5)
+
+    assert result["cancelled"] == "Stopped by user"
+
+    stopped_heartbeat = child_heartbeat_file.read_text(encoding="utf-8")
+    time.sleep(0.35)
+    final_heartbeat = child_heartbeat_file.read_text(encoding="utf-8")
+    child_pid = int(child_pid_file.read_text(encoding="utf-8"))
+
+    try:
+        assert final_heartbeat == stopped_heartbeat
+    finally:
+        try:
+            os.kill(child_pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass

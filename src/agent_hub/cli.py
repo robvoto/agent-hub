@@ -10,10 +10,30 @@ from .log_config import configure_logging
 
 _HELP_TEXT = (
     "Send a plain message to dispatch it to a specialist agent.\n"
-    "Commands: /help, /new (reset session), /agents (list agents), "
-    "/status, /last, /learn, /memory, /forget, /learn-mode [on|off], "
-    "/project [<path>|clear] (set/show/clear the target project for specialists), "
-    "/stop, /approve, /reject, /quit or Ctrl-C to exit.\n"
+    "Commands:\n"
+    "/agents - list registered specialist agents\n"
+    "/approve - approve a task waiting on approval\n"
+    "/forget <id> - remove a stored learning\n"
+    "/help - show this\n"
+    "/last - show the most recently finished task\n"
+    "/learn <fact> - store an explicit learning\n"
+    "/learn-mode [on|off] - toggle automatic background learning\n"
+    "/memory - list stored learnings\n"
+    "/new - start a fresh conversation; keep active work running\n"
+    "/project [<path>|clear] - set/show/clear the target project for specialists\n"
+    "/quit - exit chat mode\n"
+    "/reject [reason] - reject a task waiting on approval\n"
+    "/reset - stop the active specialist tree here, then start a fresh conversation\n"
+    "/status - show the active or paused task\n"
+    "/stop - cancel the active task and its specialist tree; keep this conversation\n"
+    "Ctrl-C - exit\n"
+    "\n"
+    "Thread model:\n"
+    "Reply normally to continue a clarification pause in the same thread.\n"
+    "Use /approve to continue an approval pause in the same thread.\n"
+    "/new starts a fresh empty thread; it is not a fork.\n"
+    "Cancelled work from /stop or /reset is not resumable.\n"
+    "There is no /fork or generic /resume command yet.\n"
 )
 
 
@@ -60,6 +80,10 @@ def _run_chat(model: str) -> None:
         if text == "/new":
             orch.new_session()
             print("New session started.")
+            continue
+
+        if text == "/reset":
+            print(f"\nHub: {orch.reset_session()}\n")
             continue
 
         if text == "/agents":

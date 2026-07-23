@@ -21,20 +21,22 @@ Run this again after pulling changes that affect the project name or console scr
 ```bash
 uv run agent-hub --help
 uv run agent-hub chat
+uv run agent-hub --debug chat
 ```
 
 Equivalent wrapper:
 
 ```bash
 ./run.sh chat
+./run.sh chat --debug
 ```
 
 Interactive chat supports:
 
-- `/help` to show the command list
-- `/new` to start a fresh session
 - `/agents` to list callable specialists
-- `/status` to show the current active or paused task
+- `/approve` to resume a paused approval
+- `/forget <memory id>` to delete a stored hub learning
+- `/help` to show the command list
 - `/last` to show the most recently completed or failed task
 - `/learn <instruction or fact>` to store an explicit, immediately-authoritative hub
   learning (typed as `semantic`/`operator`/`active` internally — see below). Active
@@ -43,8 +45,6 @@ Interactive chat supports:
   `/learn` records are never deleted by compaction; only future automatically
   extracted memory is subject to the 25-record compaction threshold (oldest overflow
   beyond the 15 most recent merged into one `hub-compaction` summary via an LLM call).
-- `/memory` to list stored hub learnings, showing each record's `type` and `status`
-- `/forget <memory id>` to delete a stored hub learning
 - `/learn-mode [on|off]` to toggle automatic background learning (**off by default**).
   When on, after a session goes quiet (5 minutes since the last completed task) Hub
   reviews that session once and may store a high-confidence fact/preference/correction
@@ -52,8 +52,26 @@ Interactive chat supports:
   You get a passive one-line Telegram FYI (`\U0001f9e0 Learned: ...`) when it stores
   something; nothing is ever silently applied without that notice. A hub restart loses
   the on/off flag and any pending timer — by design, not a bug.
-- `/stop` to cancel the current active or paused task
-- `/approve` to resume a paused approval
+- `/memory` to list stored hub learnings, showing each record's `type` and `status`
+- `/new` to start a fresh LangGraph thread for future turns without cancelling
+  active work in the current conversation
+- `/project [<path>|clear]` to set/show/clear the target project passed to specialists
+- `/reject optional reason` to reject a paused approval
+- `/reset` to cancel the current active or paused task and its running specialist
+  process tree for this conversation, then immediately start a fresh LangGraph thread
+- `/status` to show the current active or paused task, including current phase,
+  latest progress summary, last specialist activity, and live-progress state
+- `/stop` to cancel the current active or paused task and its running specialist
+  process tree while keeping the same conversation/session
+
+### Thread Control Model
+
+- normal messages continue the current LangGraph thread for the active session/project
+- if a task is waiting for clarification, the next normal message resumes that same paused run
+- `/approve` resumes the same paused run when Hub is waiting on approval
+- `/new` starts a fresh empty LangGraph thread; it does not branch the current one
+- `/stop` and `/reset` cancel active work; cancelled runs are not resumable
+- `/fork` and a generic `/resume` command are not implemented yet; they are tracked as planned work in `AGENT-HUB-030`
 
 ### Memory model
 
@@ -67,7 +85,6 @@ Hub memory (`src/agent_hub/hub_memory.py`) is stored in typed namespaces:
 - **status**: `active`, `pending`, `rejected`, or `disabled`. Only `active` records are
   ever injected into the orchestrator's prompt. Everything `/learn` creates is `active`
   immediately — no approval gate.
-- `/reject optional reason` to reject a paused approval
 - if a task is waiting for clarification, the next normal message is treated as the clarification reply
 
 ## Telegram gateway
@@ -85,8 +102,14 @@ Equivalent wrapper:
 Run Telegram with debug logging:
 
 ```bash
+uv run agent-hub --debug telegram
 ./run.sh telegram --debug
 ```
+
+Telegram task runs now expect streamed specialist progress. For a routed
+specialist task, Hub should send an immediate acknowledgement, meaningful phase
+updates while work is active, quiet heartbeats only after a silent interval, and
+the final result without duplicate progress spam.
 
 ## Tests
 
@@ -108,8 +131,12 @@ Logs are written to:
 
 ```text
 logs/agent-hub.log
+logs/agent-hub-debug.log
 data/llm_usage.json
 ```
+
+- `logs/agent-hub.log`: human-readable workflow log
+- `logs/agent-hub-debug.log`: full technical debug trace
 
 Override the log directory with:
 

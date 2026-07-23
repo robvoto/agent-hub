@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -113,6 +114,66 @@ def test_invoke_emits_human_readable_progress_logs(monkeypatch, caplog):
     assert "Hub has a final answer ready for the operator." in caplog.text
 
 
+def test_new_session_explains_reset_effect_in_human_log(monkeypatch, caplog):
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _FakeGraph("unused"))
+
+    orchestrator = HubOrchestrator()
+
+    with caplog.at_level(logging.INFO, logger="agent_hub.human"):
+        orchestrator.new_session()
+
+    assert "Future turns use a fresh LangGraph thread" in caplog.text
+    assert "Existing active work is unchanged" in caplog.text
+    assert "clean session-scoped controls" in caplog.text
+
+
+def test_reset_session_stops_active_task_and_rotates_session(monkeypatch, caplog, tmp_path):
+    spec = AgentSpec(
+        id="ai-tech-lead",
+        name="AI Tech Lead",
+        purpose="Implements code changes",
+        runtime={
+            "mode": "subprocess",
+            "entrypoint": "fake-agent",
+            "working_directory": str(tmp_path),
+            "input_arg": "--input-json",
+            "output_arg": "--output-json",
+            "default_execution_mode": "execute",
+        },
+    )
+
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _FakeGraph("unused"))
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
+
+    orchestrator = HubOrchestrator()
+    original_session_id = orchestrator.session_id
+    run = get_task_run_store().create_run(
+        session_id=orchestrator.session_id,
+        user_message="Clean this up",
+    )
+    get_task_run_store().transition(
+        run.id,
+        TASK_STATE_WAITING_APPROVAL,
+        selected_agent_id=spec.id,
+        dispatched_task="Delete the generated files",
+        approval_token="approve-123",
+    )
+
+    with caplog.at_level(logging.INFO, logger="agent_hub.human"):
+        reply = orchestrator.reset_session()
+
+    assert reply == "Reset complete. Stopped the active task and started a fresh conversation."
+    assert orchestrator.session_id != original_session_id
+    updated = get_task_run_store().get_run(run.id)
+    assert updated is not None
+    assert updated.state == TASK_STATE_CANCELLED
+    assert updated.cancellation_reason == "Reset by user"
+    assert "Operator requested stop for agent 'ai-tech-lead'" in caplog.text
+    assert "Hub marked the task as cancelled." in caplog.text
+    assert "Reset the hub conversation." in caplog.text
+
+
 def test_invoke_stream_logs_langgraph_node_flow(monkeypatch, caplog):
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
     monkeypatch.setattr(
@@ -127,7 +188,6 @@ def test_invoke_stream_logs_langgraph_node_flow(monkeypatch, caplog):
         reply = orchestrator.invoke("Hello")
 
     assert reply == "All done"
-    assert "LangGraph task 'agent' started." in caplog.text
     assert "LangGraph entered node 'agent'." in caplog.text
     assert "Node 'agent' requested tool call(s): ai-tech-lead." in caplog.text
     assert "LangGraph rerouted from 'agent' to 'tools'." in caplog.text
@@ -170,7 +230,7 @@ def test_agent_tool_records_routed_dispatched_and_waiting_approval(monkeypatch, 
     )
 
     class _FakePopen:
-        def __init__(self, cmd, cwd, stdout, stderr, text):
+        def __init__(self, cmd, cwd, stdout, stderr, text, **kwargs):
             input_path = Path(cmd[-3])
             output_path = Path(cmd[-1])
             payload = json.loads(input_path.read_text(encoding="utf-8"))
@@ -256,7 +316,7 @@ def test_agent_tool_emits_human_readable_specialist_logs(monkeypatch, tmp_path, 
     )
 
     class _FakePopen:
-        def __init__(self, cmd, cwd, stdout, stderr, text):
+        def __init__(self, cmd, cwd, stdout, stderr, text, **kwargs):
             input_path = Path(cmd[-3])
             output_path = Path(cmd[-1])
             payload = json.loads(input_path.read_text(encoding="utf-8"))
@@ -326,7 +386,7 @@ def test_approve_pending_resumes_subprocess_run(monkeypatch, tmp_path):
     calls: list[dict] = []
 
     class _FakePopen:
-        def __init__(self, cmd, cwd, stdout, stderr, text):
+        def __init__(self, cmd, cwd, stdout, stderr, text, **kwargs):
             input_path = Path(cmd[-3])
             output_path = Path(cmd[-1])
             payload = json.loads(input_path.read_text(encoding="utf-8"))
@@ -462,7 +522,7 @@ def test_stop_current_task_terminates_active_subprocess(monkeypatch, tmp_path):
     result: dict[str, object] = {}
 
     class _FakePopen:
-        def __init__(self, cmd, cwd, stdout, stderr, text):
+        def __init__(self, cmd, cwd, stdout, stderr, text, **kwargs):
             self.returncode = None
             started.set()
 
@@ -508,6 +568,12 @@ def test_stop_current_task_terminates_active_subprocess(monkeypatch, tmp_path):
     worker = threading.Thread(target=_invoke)
     worker.start()
     assert started.wait(timeout=2)
+    deadline = time.time() + 2
+    while time.time() < deadline:
+        handle = get_task_control_registry().get_handle(run.id)
+        if handle is not None and handle.process is not None:
+            break
+        time.sleep(0.01)
 
     reply = orchestrator.stop_current_task()
     worker.join(timeout=2)

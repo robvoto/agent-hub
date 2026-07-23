@@ -45,7 +45,7 @@ from .project_context import get_project_context_registry
 from .registry import AgentSpec, load_registry
 from .run_status import format_current_run_status, format_last_run_status
 from .shared_docs import make_shared_docs_tool
-from .task_control import TaskCancelled, get_task_control_registry
+from .task_control import TaskCancelled, get_task_control_registry, subprocess_popen_kwargs
 from .task_runs import (
     DEFAULT_PROJECT_KEY,
     TASK_STATE_CANCELLED,
@@ -222,20 +222,9 @@ def _consume_graph_stream_event(
                     name,
                     namespace_prefix,
                 )
-            elif "result" in data:
-                _human_task_log(
-                    task_run_id,
-                    "LangGraph task '%s'%s finished.",
-                    name,
-                    namespace_prefix,
-                )
-            else:
-                _human_task_log(
-                    task_run_id,
-                    "LangGraph task '%s'%s started.",
-                    name,
-                    namespace_prefix,
-                )
+            # "started"/"finished" are intentionally not logged here — they're
+            # redundant with the "entered node"/"produced message" lines below
+            # for every non-error, non-interrupt task event.
         return last_node, None
 
     if mode == "updates" and isinstance(data, dict):
@@ -360,6 +349,7 @@ def _dispatch_subprocess(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            **subprocess_popen_kwargs(),
         )
         progress_tailer = SpecialistProgressTailer(
             run_id=task_run_id or request_id,
@@ -378,11 +368,9 @@ def _dispatch_subprocess(
                 background = progress_tailer.maybe_emit_background_update()
                 if background is not None:
                     _emit_progress_update(background)
-                try:
-                    proc.wait(timeout=PROGRESS_POLL_INTERVAL_SECONDS)
+                if proc.poll() is not None:
                     break
-                except subprocess.TimeoutExpired:
-                    continue
+                time.sleep(PROGRESS_POLL_INTERVAL_SECONDS)
             for update in progress_tailer.poll(final=True):
                 _emit_progress_update(update)
             progress_tailer.finish()
@@ -692,10 +680,36 @@ class HubOrchestrator:
     def registry(self) -> list[AgentSpec]:
         return self._registry
 
-    def new_session(self) -> None:
+    def _rotate_session(self, *, carry_active_work: bool) -> None:
+        previous_session_id = self._session_id
         self._session_id = str(uuid.uuid4())
-        human_logger.info("Started a new hub conversation.")
-        logger.info("Started new hub session: %s", self._session_id)
+        if carry_active_work:
+            human_logger.info(
+                "Started a new hub conversation. Future turns use a fresh LangGraph thread "
+                "and clean session-scoped controls. Existing active work is unchanged."
+            )
+        else:
+            human_logger.info(
+                "Reset the hub conversation. Future turns use a fresh LangGraph thread "
+                "and clean session-scoped controls."
+            )
+        logger.info(
+            "Rotated hub session: old=%s new=%s carry_active_work=%s",
+            previous_session_id,
+            self._session_id,
+            carry_active_work,
+        )
+
+    def new_session(self) -> None:
+        self._rotate_session(carry_active_work=True)
+
+    def reset_session(self) -> str:
+        stop_reply = self.stop_current_task(reason="Reset by user")
+        stopped_active_task = stop_reply != "No task is currently active."
+        self._rotate_session(carry_active_work=False)
+        if stopped_active_task:
+            return "Reset complete. Stopped the active task and started a fresh conversation."
+        return "Reset complete. Started a fresh conversation."
 
     def pending_run(self) -> TaskRun | None:
         project_key = _project_key_for_session(self._session_id)
@@ -853,10 +867,20 @@ class HubOrchestrator:
         project_key = _project_key_for_session(self._session_id)
         run = store.get_latest_active_or_paused_run(self._session_id, project_key=project_key)
         if run is None:
+            human_logger.info(
+                "Stop requested for project '%s', but no active or paused task was found.",
+                _friendly_project_label(project_key),
+            )
             return "No task is currently active."
 
         agent_id = run.selected_agent_id or "unknown-agent"
         confirmation = f"Stopped run {run.id} for agent '{agent_id}'. State is now cancelled."
+        _human_task_log(
+            run.id,
+            "Operator requested stop for agent '%s' in project '%s'.",
+            agent_id,
+            _friendly_project_label(project_key),
+        )
         handle = get_task_control_registry().request_cancel(run.id, reason)
 
         current = store.get_run(run.id)
@@ -870,6 +894,7 @@ class HubOrchestrator:
                 cancellation_reason=reason,
                 raw_result={"status": "cancelled", "summary": reason},
             )
+            _human_task_log(run.id, "Hub marked the task as cancelled.")
         if handle is not None:
             handle.mark_stop_reply_sent()
         return confirmation

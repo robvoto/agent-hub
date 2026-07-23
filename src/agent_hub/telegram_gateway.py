@@ -143,12 +143,20 @@ class TelegramGateway:
             "/learn-mode [on|off] - toggle automatic background learning "
             "(off by default; shows status with no argument)\n"
             "/memory - list stored learnings\n"
-            "/new - start a fresh conversation\n"
+            "/new - start a fresh conversation; keep active work running\n"
             "/project [<path>|clear] - set/show/clear the target project "
             "passed to specialists (shows current with no argument)\n"
             "/reject [reason] - reject a task waiting on approval\n"
+            "/reset - stop the active specialist tree here, then start a fresh conversation\n"
             "/status - show the active or paused task\n"
-            "/stop - cancel the active task\n"
+            "/stop - cancel the active task and its specialist tree; keep this conversation\n"
+            "\n"
+            "Thread model:\n"
+            "Reply normally to continue a clarification pause in the same thread.\n"
+            "Use /approve to continue an approval pause in the same thread.\n"
+            "/new starts a fresh empty thread; it is not a fork.\n"
+            "Cancelled work from /stop or /reset is not resumable.\n"
+            "There is no /fork or generic /resume command yet.\n"
         )
 
     def _handle_message(self, msg: dict) -> None:
@@ -171,6 +179,13 @@ class TelegramGateway:
             with self._progress_lock:
                 self._progress_last_sent.clear()
             _send_message(self._token, chat_id, "Started a fresh conversation.")
+            return
+
+        if text == "/reset":
+            reply = self._orch.reset_session()
+            with self._progress_lock:
+                self._progress_last_sent.clear()
+            _send_message(self._token, chat_id, reply, parse_mode=None)
             return
 
         if text == "/agents":

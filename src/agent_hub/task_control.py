@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import logging
+import os
+import signal
+import subprocess
 import threading
 from dataclasses import dataclass, field
 from subprocess import Popen
@@ -47,22 +50,63 @@ class ActiveTaskHandle:
             return
 
         try:
-            process.terminate()
+            _terminate_process_tree(process, force=False)
         except Exception as exc:
-            logger.warning("Could not terminate active specialist subprocess: %s", exc)
+            logger.warning("Could not terminate active specialist process tree: %s", exc)
             return
 
         try:
             process.wait(timeout=2)
         except Exception:
             try:
-                process.kill()
+                _terminate_process_tree(process, force=True)
             except Exception as exc:
-                logger.warning("Could not kill active specialist subprocess: %s", exc)
+                logger.warning("Could not kill active specialist process tree: %s", exc)
 
     def mark_stop_reply_sent(self) -> None:
         with self._lock:
             self.stop_reply_sent = True
+
+
+def subprocess_popen_kwargs() -> dict[str, object]:
+    """Launch specialist subprocesses in their own process group/session.
+
+    This lets Hub cancel the whole specialist tree rather than only the
+    immediate parent process when a specialist shells out to child agents
+    or helper commands.
+    """
+    if os.name == "posix":
+        return {"start_new_session": True}
+    creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    if creationflags:
+        return {"creationflags": creationflags}
+    return {}
+
+
+def _terminate_process_tree(process: Popen[str], *, force: bool) -> None:
+    sig_name = "SIGKILL" if force else "SIGTERM"
+    if os.name == "posix":
+        pid = getattr(process, "pid", None)
+        if isinstance(pid, int):
+            signal_to_send = signal.SIGKILL if force else signal.SIGTERM
+            try:
+                os.killpg(pid, signal_to_send)
+                logger.info("Sent %s to specialist process group %s", sig_name, pid)
+                return
+            except ProcessLookupError:
+                return
+            except Exception as exc:
+                logger.warning(
+                    "Process-group %s failed for pid %s, falling back to direct process signal: %s",
+                    sig_name,
+                    pid,
+                    exc,
+                )
+
+    if force:
+        process.kill()
+    else:
+        process.terminate()
 
 
 class TaskControlRegistry:

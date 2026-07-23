@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 _BASE_FIELDS = {
     "formulated_task": "",
@@ -222,6 +224,29 @@ def _write_progress_events(scenario: str, input_data: dict) -> None:
         return
 
 
+def _spawn_child_worker() -> None:
+    heartbeat_file = Path("stub-child-heartbeat.txt")
+    pid_file = Path("stub-child.pid")
+    child_script = (
+        "from pathlib import Path\n"
+        "import os\n"
+        "import time\n"
+        "heartbeat = Path('stub-child-heartbeat.txt')\n"
+        "pid_file = Path('stub-child.pid')\n"
+        "pid_file.write_text(str(os.getpid()), encoding='utf-8')\n"
+        "while True:\n"
+        "    heartbeat.write_text(str(time.time()), encoding='utf-8')\n"
+        "    time.sleep(0.1)\n"
+    )
+    subprocess.Popen([sys.executable, "-c", child_script])
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        if heartbeat_file.exists() and pid_file.exists():
+            return
+        time.sleep(0.05)
+    raise RuntimeError("Stub child process did not start in time.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input-json", required=True)
@@ -235,6 +260,10 @@ def main() -> None:
         scenario = task.split(":", 1)[1].split(None, 1)[0]
 
     _write_progress_events(scenario, input_data)
+
+    if scenario == "spawn_child":
+        _spawn_child_worker()
+        time.sleep(60)
 
     response = {
         "request_id": input_data.get("request_id", ""),

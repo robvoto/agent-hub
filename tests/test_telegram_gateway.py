@@ -10,6 +10,16 @@ from agent_hub.progress_events import ProgressUpdate
 from agent_hub.telegram_gateway import TelegramGateway
 
 
+def test_help_text_explains_current_thread_controls() -> None:
+    help_text = TelegramGateway._help_text()
+
+    assert "Reply normally to continue a clarification pause in the same thread." in help_text
+    assert "Use /approve to continue an approval pause in the same thread." in help_text
+    assert "/new starts a fresh empty thread; it is not a fork." in help_text
+    assert "Cancelled work from /stop or /reset is not resumable." in help_text
+    assert "There is no /fork or generic /resume command yet." in help_text
+
+
 def test_new_command_resets_session_once_and_sends_one_reply(monkeypatch):
     sent: list[dict] = []
 
@@ -46,6 +56,43 @@ def test_new_command_resets_session_once_and_sends_one_reply(monkeypatch):
     ]
 
 
+def test_reset_command_stops_active_work_and_sends_one_reply(monkeypatch):
+    sent: list[dict] = []
+
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway._send_message",
+        lambda token, chat_id, text, *, parse_mode="Markdown": sent.append(
+            {
+                "token": token,
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": parse_mode,
+            }
+        ),
+    )
+
+    calls: list[str] = []
+    orch = SimpleNamespace(
+        reset_session=lambda: calls.append("reset_session")
+        or "Reset complete. Stopped the active task and started a fresh conversation.",
+        registry=[],
+        set_learning_notifier=lambda callback: None,
+    )
+    gateway = TelegramGateway("token-123", orch)
+
+    gateway._handle_message({"chat": {"id": 42}, "text": "/reset"})
+
+    assert calls == ["reset_session"]
+    assert sent == [
+        {
+            "token": "token-123",
+            "chat_id": 42,
+            "text": "Reset complete. Stopped the active task and started a fresh conversation.",
+            "parse_mode": None,
+        }
+    ]
+
+
 def test_telegram_message_uses_human_logger(caplog, monkeypatch):
     monkeypatch.setattr(
         "agent_hub.telegram_gateway._send_message",
@@ -54,6 +101,7 @@ def test_telegram_message_uses_human_logger(caplog, monkeypatch):
 
     orch = SimpleNamespace(
         new_session=lambda: None,
+        reset_session=lambda: "unused",
         registry=[],
         set_learning_notifier=lambda callback: None,
     )
@@ -96,6 +144,7 @@ def test_duplicate_telegram_message_is_ignored(monkeypatch):
     calls: list[str] = []
     orch = SimpleNamespace(
         new_session=lambda: calls.append("new_session"),
+        reset_session=lambda: "unused",
         registry=[],
         set_learning_notifier=lambda callback: None,
     )
@@ -133,6 +182,7 @@ def test_run_logs_api_base_url_in_human_log(monkeypatch, caplog):
     )
 
     orch = SimpleNamespace(
+        reset_session=lambda: "unused",
         registry=[],
         session_id="session-123",
         set_learning_notifier=lambda callback: None,
@@ -167,6 +217,7 @@ def test_status_command_sends_plain_text_status(monkeypatch):
         learn=lambda value, *, source: f"Stored learning from {source}: {value}",
         memory=lambda: "Stored hub learnings:\nmem-1\n  example",
         forget_learning=lambda identifier: f"Forgot learning {identifier}.",
+        reset_session=lambda: "unused",
         stop_current_task=lambda: "unused",
         registry=[],
         set_learning_notifier=lambda callback: None,
@@ -206,6 +257,7 @@ def test_last_command_sends_plain_text_summary(monkeypatch):
         learn=lambda value, *, source: f"Stored learning from {source}: {value}",
         memory=lambda: "Stored hub learnings:\nmem-1\n  example",
         forget_learning=lambda identifier: f"Forgot learning {identifier}.",
+        reset_session=lambda: "unused",
         stop_current_task=lambda: "unused",
         registry=[],
         set_learning_notifier=lambda callback: None,
@@ -245,6 +297,7 @@ def test_stop_command_sends_plain_text_confirmation(monkeypatch):
         learn=lambda value, *, source: f"Stored learning from {source}: {value}",
         memory=lambda: "Stored hub learnings:\nmem-1\n  example",
         forget_learning=lambda identifier: f"Forgot learning {identifier}.",
+        reset_session=lambda: "unused",
         stop_current_task=(
             lambda: "Stopped run run-123 for agent 'ai-tech-lead'. State is now cancelled."
         ),
@@ -286,6 +339,7 @@ def test_learn_command_sends_plain_text_confirmation(monkeypatch):
         learn=lambda value, *, source: f"Stored learning from {source}: {value}",
         memory=lambda: "unused",
         forget_learning=lambda identifier: f"unused {identifier}",
+        reset_session=lambda: "unused",
         stop_current_task=lambda: "unused",
         registry=[],
         set_learning_notifier=lambda callback: None,
