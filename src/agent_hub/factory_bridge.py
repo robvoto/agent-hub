@@ -290,6 +290,8 @@ def _run_bridge(*, working_directory: str, payload: dict[str, Any]) -> dict[str,
             proc.wait()
             for thread in reader_threads:
                 thread.join(timeout=5)
+            if handle is not None and handle.cancel_requested:
+                raise TaskCancelled(handle.cancellation_reason or "Stopped by user")
             if progress_tailer is not None:
                 progress_tailer.finish()
                 progress_tailer.ensure_progress_started()

@@ -302,6 +302,11 @@ class SpecialistProgressTailer:
             self._buffer = ""
         return updates
 
+    def process_line(self, raw_line: str) -> ProgressUpdate | None:
+        """Validate and persist one JSONL line from a live stdout stream."""
+
+        return self._process_line(raw_line.rstrip("\r\n"))
+
     def maybe_emit_background_update(self) -> ProgressUpdate | None:
         now = time.monotonic()
         store = get_task_run_store()
