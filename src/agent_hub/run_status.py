@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from .progress_events import PROGRESS_STALE_AFTER_SECONDS
+from .task_control import get_task_control_registry
 from .task_runs import TaskRun
 
 _OPEN_STATES = {
@@ -37,6 +39,10 @@ def _format_run(run: TaskRun, *, heading: str) -> str:
         f"Task summary: {_task_summary(run)}",
         f"Start time: {_format_timestamp(run.created_at)}",
         f"Duration: {_format_duration(run)}",
+        f"Current phase: {_format_phase(run)}",
+        f"Latest progress: {_format_progress_summary(run)}",
+        f"Last specialist activity: {_format_last_activity(run)}",
+        f"Live progress: {_format_live_progress(run)}",
         f"Result or error: {_result_or_error(run)}",
         f"Token usage: {_format_usage(run.usage)}",
         f"Estimated cost: {_format_cost(run.cost)}",
@@ -59,6 +65,39 @@ def _result_or_error(run: TaskRun) -> str:
         if isinstance(summary, str) and summary.strip():
             return _one_line(summary)
     return "No result recorded yet"
+
+
+def _format_phase(run: TaskRun) -> str:
+    return run.latest_progress_phase or "Not reported yet"
+
+
+def _format_progress_summary(run: TaskRun) -> str:
+    return run.latest_progress_summary or "No progress reported yet"
+
+
+def _format_last_activity(run: TaskRun) -> str:
+    latest = _latest_activity(run)
+    if latest is None:
+        return "Not recorded"
+    age = _relative_age(latest)
+    return f"{_format_timestamp(latest)} ({age} ago)"
+
+
+def _format_live_progress(run: TaskRun) -> str:
+    if run.progress_mode == "pending":
+        return "Waiting for first streamed update"
+    if run.progress_mode == "streaming":
+        latest = _latest_activity(run)
+        handle = get_task_control_registry().get_handle(run.id)
+        process_alive = bool(
+            handle is not None and handle.process is not None and handle.process.poll() is None
+        )
+        if process_alive and latest is not None:
+            silence = (datetime.now(timezone.utc) - latest).total_seconds()
+            if silence > PROGRESS_STALE_AFTER_SECONDS:
+                return f"Stale ({_format_duration_ms(int(silence * 1000))} since last update)"
+        return "Active"
+    return "Not tracked"
 
 
 def _format_usage(usage: dict | None) -> str:
@@ -127,6 +166,21 @@ def _format_duration_ms(duration_ms: int) -> str:
 
 def _format_timestamp(value: datetime) -> str:
     return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def _latest_activity(run: TaskRun) -> datetime | None:
+    candidates = [ts for ts in (run.last_progress_event_at, run.last_progress_heartbeat_at) if ts]
+    if not candidates:
+        return None
+    return max(candidates)
+
+
+def _relative_age(value: datetime) -> str:
+    delta_ms = max(
+        0,
+        int((datetime.now(timezone.utc) - value.astimezone(timezone.utc)).total_seconds() * 1000),
+    )
+    return _format_duration_ms(delta_ms)
 
 
 def _one_line(text: str) -> str:

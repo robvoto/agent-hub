@@ -17,6 +17,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
+from datetime import datetime, timezone
 
 _BASE_FIELDS = {
     "formulated_task": "",
@@ -94,6 +96,132 @@ def _scenario_response(scenario: str, input_data: dict) -> dict:
     }
 
 
+def _event_payload(
+    input_data: dict,
+    *,
+    sequence: int,
+    event_type: str,
+    phase: str,
+    human_summary: str,
+    run_id: str | None = None,
+    request_id: str | None = None,
+    metadata: dict | None = None,
+) -> dict:
+    return {
+        "schema_version": 1,
+        "run_id": run_id or input_data.get("run_id"),
+        "request_id": request_id or input_data.get("request_id"),
+        "sequence": sequence,
+        "event_type": event_type,
+        "phase": phase,
+        "human_summary": human_summary,
+        "occurred_at": datetime.now(timezone.utc).isoformat(),
+        "metadata": metadata or {},
+    }
+
+
+def _append_progress_line(path: str, payload: dict | None = None, *, raw_line: str | None = None) -> None:
+    with open(path, "a", encoding="utf-8") as fh:
+        if raw_line is not None:
+            fh.write(raw_line)
+        else:
+            fh.write(json.dumps(payload) + "\n")
+        fh.flush()
+
+
+def _write_progress_events(scenario: str, input_data: dict) -> None:
+    progress_path = input_data.get("progress_jsonl")
+    if not isinstance(progress_path, str) or not progress_path:
+        return
+
+    if scenario == "no_progress":
+        return
+
+    if scenario == "progress_success":
+        _append_progress_line(
+            progress_path,
+            _event_payload(
+                input_data,
+                sequence=1,
+                event_type="phase",
+                phase="scoping",
+                human_summary="Scoping the requested change.",
+            ),
+        )
+        time.sleep(0.05)
+        _append_progress_line(
+            progress_path,
+            _event_payload(
+                input_data,
+                sequence=2,
+                event_type="phase",
+                phase="editing",
+                human_summary="Applying the requested change.",
+            ),
+        )
+        return
+
+    _append_progress_line(
+        progress_path,
+        _event_payload(
+            input_data,
+            sequence=1,
+            event_type="phase",
+            phase="working",
+            human_summary="Working on the requested task.",
+        ),
+    )
+
+    if scenario == "progress_heartbeat":
+        _append_progress_line(
+            progress_path,
+            _event_payload(
+                input_data,
+                sequence=1,
+                event_type="phase",
+                phase="waiting-on-tests",
+                human_summary="Running the verification step.",
+            ),
+        )
+        time.sleep(0.65)
+        return
+
+    if scenario == "progress_invalid":
+        _append_progress_line(progress_path, raw_line="{bad json\n")
+        _append_progress_line(
+            progress_path,
+            _event_payload(
+                input_data,
+                sequence=1,
+                event_type="phase",
+                phase="scoping",
+                human_summary="First valid progress update.",
+            ),
+        )
+        _append_progress_line(
+            progress_path,
+            _event_payload(
+                input_data,
+                sequence=1,
+                event_type="phase",
+                phase="duplicate",
+                human_summary="Duplicate sequence should be rejected.",
+            ),
+        )
+        _append_progress_line(
+            progress_path,
+            _event_payload(
+                input_data,
+                sequence=2,
+                event_type="phase",
+                phase="wrong-run",
+                human_summary="Wrong run id should be rejected.",
+                run_id="wrong-run-id",
+            ),
+        )
+        return
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input-json", required=True)
@@ -105,6 +233,8 @@ def main() -> None:
     scenario = ""
     if task.startswith("SCENARIO:"):
         scenario = task.split(":", 1)[1].split(None, 1)[0]
+
+    _write_progress_events(scenario, input_data)
 
     response = {
         "request_id": input_data.get("request_id", ""),

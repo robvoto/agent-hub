@@ -40,6 +40,7 @@ from .knowledge_store import get_knowledge_store
 from .learning_mode import get_learning_mode_registry
 from .log_config import get_human_logger
 from .manifest_cache import get_manifest_cache
+from .progress_events import PROGRESS_POLL_INTERVAL_SECONDS, ProgressUpdate, SpecialistProgressTailer
 from .project_context import get_project_context_registry
 from .registry import AgentSpec, load_registry
 from .run_status import format_current_run_status, format_last_run_status
@@ -57,6 +58,7 @@ from .task_runs import (
     TASK_STATE_WAITING_CLARIFICATION,
     TaskRun,
     active_task_run,
+    get_current_progress_callback,
     get_current_task_run_id,
     get_task_run_store,
     is_active_state,
@@ -77,6 +79,17 @@ def _project_key_for_session(session_id: str) -> str:
     return get_project_context_registry().get(session_id) or DEFAULT_PROJECT_KEY
 
 
+def _friendly_project_label(project_key: str) -> str:
+    return "default" if project_key == DEFAULT_PROJECT_KEY else project_key
+
+
+def _human_task_log(task_run_id: str | None, message: str, *args: Any) -> None:
+    if task_run_id:
+        human_logger.info("Task %s: " + message, task_run_id[:8], *args)
+        return
+    human_logger.info(message, *args)
+
+
 def _current_project_for_task_run(task_run_id: str | None) -> str | None:
     """Look up the operator's /project selection for this task run's session.
 
@@ -90,6 +103,16 @@ def _current_project_for_task_run(task_run_id: str | None) -> str | None:
     if run is None:
         return None
     return get_project_context_registry().get(run.session_id)
+
+
+def _emit_progress_update(update: ProgressUpdate) -> None:
+    callback = get_current_progress_callback()
+    if callback is None:
+        return
+    try:
+        callback(update)
+    except Exception:
+        logger.exception("Progress notifier failed for run %s", update.run_id)
 
 _SYSTEM_PROMPT = """You are the Agent Hub orchestrator. You coordinate specialist AI agents.
 
@@ -117,6 +140,129 @@ def _build_system_prompt(state: Any) -> list[Any]:
     learnings_block = format_learnings_for_prompt(HubMemoryManager().list_learnings())
     content = f"{_SYSTEM_PROMPT}\n\n{learnings_block}" if learnings_block else _SYSTEM_PROMPT
     return [SystemMessage(content=content)] + list(messages)
+
+
+def _message_preview(message: Any) -> str | None:
+    tool_calls = getattr(message, "tool_calls", None)
+    if tool_calls:
+        names = [
+            call.get("name", "unknown-tool")
+            for call in tool_calls
+            if isinstance(call, dict)
+        ]
+        return f"requested tool call(s): {', '.join(names)}"
+
+    content = getattr(message, "content", None)
+    if isinstance(content, str) and content.strip():
+        return f"produced message: {_truncate(content.strip())}"
+    if content:
+        return f"produced message: {_truncate(str(content))}"
+
+    name = getattr(message, "name", None)
+    if name:
+        return f"updated message state for {name}"
+    return None
+
+
+def _update_preview(payload: Any) -> str:
+    if isinstance(payload, dict):
+        messages = payload.get("messages")
+        if isinstance(messages, list) and messages:
+            preview = _message_preview(messages[-1])
+            if preview:
+                return preview
+
+        keys = [key for key in sorted(payload) if key != "messages"]
+        if keys:
+            return f"updated state key(s): {', '.join(keys)}"
+        return "updated state"
+
+    if payload is None:
+        return "ran"
+
+    return f"updated state: {_truncate(str(payload))}"
+
+
+def _consume_graph_stream_event(
+    task_run_id: str,
+    event: Any,
+    last_node: str | None,
+) -> tuple[str | None, dict[str, Any] | None]:
+    namespace: tuple[Any, ...] = ()
+    mode: str | None = None
+    data: Any = None
+
+    if isinstance(event, tuple):
+        if len(event) == 3:
+            namespace, mode, data = event
+        elif len(event) == 2:
+            mode, data = event
+    if mode is None:
+        return last_node, data if isinstance(data, dict) else None
+
+    namespace_prefix = ""
+    if namespace:
+        namespace_prefix = f" within {'/'.join(str(part) for part in namespace)}"
+
+    if mode == "tasks" and isinstance(data, dict):
+        name = data.get("name") or data.get("node") or data.get("task")
+        if name:
+            if data.get("error"):
+                _human_task_log(
+                    task_run_id,
+                    "LangGraph task '%s'%s failed: %s",
+                    name,
+                    namespace_prefix,
+                    _truncate(str(data['error'])),
+                )
+            elif data.get("interrupts"):
+                _human_task_log(
+                    task_run_id,
+                    "LangGraph task '%s'%s interrupted.",
+                    name,
+                    namespace_prefix,
+                )
+            elif "result" in data:
+                _human_task_log(
+                    task_run_id,
+                    "LangGraph task '%s'%s finished.",
+                    name,
+                    namespace_prefix,
+                )
+            else:
+                _human_task_log(
+                    task_run_id,
+                    "LangGraph task '%s'%s started.",
+                    name,
+                    namespace_prefix,
+                )
+        return last_node, None
+
+    if mode == "updates" and isinstance(data, dict):
+        for node_name, payload in data.items():
+            if last_node is None:
+                _human_task_log(task_run_id, "LangGraph entered node '%s'.", node_name)
+            elif last_node != node_name:
+                _human_task_log(
+                    task_run_id,
+                    "LangGraph rerouted from '%s' to '%s'.",
+                    last_node,
+                    node_name,
+                )
+            _human_task_log(
+                task_run_id,
+                "Node '%s'%s %s.",
+                node_name,
+                namespace_prefix,
+                _update_preview(payload),
+            )
+            last_node = node_name
+        return last_node, None
+
+    if mode == "values" and isinstance(data, dict):
+        return last_node, data
+
+    return last_node, None
 
 
 def _dispatch_subprocess(
@@ -156,17 +302,25 @@ def _dispatch_subprocess(
     with tempfile.TemporaryDirectory() as tmpdir:
         input_file = Path(tmpdir) / "input.json"
         output_file = Path(tmpdir) / "output.json"
+        progress_file = Path(tmpdir) / "progress.jsonl"
 
         input_data = {
             "request_id": request_id,
+            "run_id": task_run_id,
             "task": task,
             "source": "agent-hub",
             "execution_mode": runtime["default_execution_mode"],
+            "progress_jsonl": str(progress_file),
         }
         project_root = _current_project_for_task_run(task_run_id)
         if project_root:
             input_data["project_root"] = project_root
-            human_logger.info("Dispatching %s with project_root=%s", spec.id, project_root)
+            _human_task_log(
+                task_run_id,
+                "Passing project path to %s: %s",
+                spec.name,
+                project_root,
+            )
         else:
             logger.debug("Dispatching %s with no project_root (specialist default)", spec.id)
         if human_approved:
@@ -179,11 +333,26 @@ def _dispatch_subprocess(
         output_arg = runtime["output_arg"]
         cmd = entrypoint.split() + [input_arg, str(input_file), output_arg, str(output_file)]
 
-        human_logger.info("Running module: %s — %s", spec.id, _truncate(task))
+        _human_task_log(
+            task_run_id,
+            "Calling %s (%s) with: %s",
+            spec.name,
+            spec.id,
+            _truncate(task),
+        )
         logger.info("Dispatching to %s (request_id=%s): %s", spec.id, request_id, task[:120])
         handle = get_task_control_registry().get_handle(task_run_id)
-        if handle is not None and handle.cancel_requested:
-            raise TaskCancelled(handle.cancellation_reason or "Stopped by user")
+        cancelled_run = get_task_run_store().get_run(task_run_id) if task_run_id else None
+        if (
+            (handle is not None and handle.cancel_requested)
+            or (cancelled_run is not None and cancelled_run.state == TASK_STATE_CANCELLED)
+        ):
+            reason = "Stopped by user"
+            if handle is not None and handle.cancellation_reason:
+                reason = handle.cancellation_reason
+            elif cancelled_run is not None and cancelled_run.cancellation_reason:
+                reason = cancelled_run.cancellation_reason
+            raise TaskCancelled(reason)
 
         proc = subprocess.Popen(
             cmd,
@@ -192,11 +361,31 @@ def _dispatch_subprocess(
             stderr=subprocess.PIPE,
             text=True,
         )
+        progress_tailer = SpecialistProgressTailer(
+            run_id=task_run_id or request_id,
+            request_id=request_id,
+            path=progress_file,
+            specialist_name=spec.name,
+        )
+        for update in progress_tailer.begin():
+            _emit_progress_update(update)
         if task_run_id is not None:
             get_task_control_registry().attach_process(task_run_id, proc, agent_id=spec.id)
         try:
-            while proc.poll() is None:
-                time.sleep(0.05)
+            while True:
+                for update in progress_tailer.poll():
+                    _emit_progress_update(update)
+                background = progress_tailer.maybe_emit_background_update()
+                if background is not None:
+                    _emit_progress_update(background)
+                try:
+                    proc.wait(timeout=PROGRESS_POLL_INTERVAL_SECONDS)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+            for update in progress_tailer.poll(final=True):
+                _emit_progress_update(update)
+            progress_tailer.finish()
             _, stderr = proc.communicate()
         finally:
             if task_run_id is not None:
@@ -205,6 +394,8 @@ def _dispatch_subprocess(
         if handle is not None and handle.cancel_requested:
             raise TaskCancelled(handle.cancellation_reason or "Stopped by user")
 
+        progress_tailer.ensure_progress_started()
+
         if not output_file.exists():
             raise RuntimeError(
                 f"Agent '{spec.id}' subprocess (exit={proc.returncode}) wrote no output.\n"
@@ -212,8 +403,11 @@ def _dispatch_subprocess(
             )
 
         output = json.loads(output_file.read_text(encoding="utf-8"))
-        human_logger.info(
-            "Module %s finished (status=%s)", spec.id, output.get("status", "unknown")
+        _human_task_log(
+            task_run_id,
+            "%s finished with status '%s'.",
+            spec.name,
+            output.get("status", "unknown"),
         )
         _update_manifest_cache(spec, output)
         if task_run_id:
@@ -234,6 +428,13 @@ def _dispatch_factory_brain(
     working_directory = runtime["working_directory"]
     resolved_thread_id = thread_id or new_factory_thread_id()
     task_run_id = get_current_task_run_id()
+    _human_task_log(
+        task_run_id,
+        "Calling %s (%s) in %s mode.",
+        spec.name,
+        spec.id,
+        action,
+    )
 
     if task_run_id:
         get_task_run_store().transition(
@@ -292,6 +493,12 @@ def _dispatch_factory_brain(
             raw_result=output,
             context_updates={"agent_thread_id": resolved_thread_id},
         )
+    _human_task_log(
+        task_run_id,
+        "%s finished with status '%s'.",
+        spec.name,
+        output["status"],
+    )
     _record_agent_status(spec, output, task_run_id)
     return output
 
@@ -342,6 +549,12 @@ def _record_agent_status(spec: AgentSpec, output: dict, task_run_id: str | None)
     summary = output.get("summary", "")
 
     if status == "needs_clarification":
+        _human_task_log(
+            task_run_id,
+            "%s needs clarification: %s",
+            spec.name,
+            summary or "no details provided.",
+        )
         store.transition(
             task_run_id,
             TASK_STATE_WAITING_CLARIFICATION,
@@ -349,6 +562,12 @@ def _record_agent_status(spec: AgentSpec, output: dict, task_run_id: str | None)
             selected_agent_id=spec.id,
         )
     elif status == "approval_required":
+        _human_task_log(
+            task_run_id,
+            "%s is waiting for approval: %s",
+            spec.name,
+            summary or "no details provided.",
+        )
         store.transition(
             task_run_id,
             TASK_STATE_WAITING_APPROVAL,
@@ -357,6 +576,12 @@ def _record_agent_status(spec: AgentSpec, output: dict, task_run_id: str | None)
             approval_token=output.get("approval_token"),
         )
     elif status == "failed":
+        _human_task_log(
+            task_run_id,
+            "%s reported a failure: %s",
+            spec.name,
+            summary or "no summary provided.",
+        )
         store.transition(
             task_run_id,
             TASK_STATE_FAILED,
@@ -380,6 +605,12 @@ def _make_agent_tool(spec: AgentSpec) -> Any:
     @lc_tool(spec.id, description=description)
     def _call_agent(task: str) -> str:
         task_run_id = get_current_task_run_id()
+        _human_task_log(
+            task_run_id,
+            "Hub chose %s (%s).",
+            spec.name,
+            spec.id,
+        )
         if task_run_id:
             get_task_run_store().transition(
                 task_run_id,
@@ -463,7 +694,8 @@ class HubOrchestrator:
 
     def new_session(self) -> None:
         self._session_id = str(uuid.uuid4())
-        logger.info("New hub session: %s", self._session_id)
+        human_logger.info("Started a new hub conversation.")
+        logger.info("Started new hub session: %s", self._session_id)
 
     def pending_run(self) -> TaskRun | None:
         project_key = _project_key_for_session(self._session_id)
@@ -642,12 +874,13 @@ class HubOrchestrator:
             handle.mark_stop_reply_sent()
         return confirmation
 
-    def approve_pending(self) -> str:
+    def approve_pending(self, *, progress_notify: Any | None = None) -> str:
         pending = self.pending_run()
         if pending is None or pending.state != TASK_STATE_WAITING_APPROVAL:
             return "No task is currently waiting for approval."
 
         spec = self._require_spec(pending.selected_agent_id)
+        _human_task_log(pending.id, "Approval received. Resuming %s.", spec.name)
         store = get_task_run_store()
         store.transition(
             pending.id,
@@ -655,7 +888,7 @@ class HubOrchestrator:
             detail="Human approved the pending task.",
             selected_agent_id=spec.id,
         )
-        with active_task_run(pending.id):
+        with active_task_run(pending.id, progress_callback=progress_notify):
             if spec.runtime["mode"] == "factory_brain":
                 output = _dispatch_factory_brain(
                     spec,
@@ -679,6 +912,7 @@ class HubOrchestrator:
             return "No task is currently waiting for approval."
 
         spec = self._require_spec(pending.selected_agent_id)
+        _human_task_log(pending.id, "Approval rejected. Stopping %s: %s", spec.name, reason)
         response_text: str
         raw_result: dict[str, Any]
         if spec.runtime["mode"] == "factory_brain" and pending.context.get("agent_thread_id"):
@@ -704,12 +938,18 @@ class HubOrchestrator:
         )
         return response_text
 
-    def provide_clarification(self, clarification: str) -> str:
+    def provide_clarification(
+        self,
+        clarification: str,
+        *,
+        progress_notify: Any | None = None,
+    ) -> str:
         pending = self.pending_run()
         if pending is None or pending.state != TASK_STATE_WAITING_CLARIFICATION:
-            return self.invoke(clarification)
+            return self.invoke(clarification, progress_notify=progress_notify)
 
         spec = self._require_spec(pending.selected_agent_id)
+        _human_task_log(pending.id, "Clarification received. Resuming %s.", spec.name)
         store = get_task_run_store()
         store.transition(
             pending.id,
@@ -717,7 +957,7 @@ class HubOrchestrator:
             detail="User provided clarification for the paused task.",
             selected_agent_id=spec.id,
         )
-        with active_task_run(pending.id):
+        with active_task_run(pending.id, progress_callback=progress_notify):
             if spec.runtime["mode"] == "factory_brain":
                 output = _dispatch_factory_brain(
                     spec,
@@ -737,7 +977,7 @@ class HubOrchestrator:
                 )
         return self._finalize_specialist_follow_up(pending.id, spec, output)
 
-    def invoke(self, message: str) -> str:
+    def invoke(self, message: str, *, progress_notify: Any | None = None) -> str:
         logger.info("Received user request: %s", message)
         logger.debug("Invoking graph with session_id=%s", self._session_id)
         task_store = get_task_run_store()
@@ -747,7 +987,7 @@ class HubOrchestrator:
         if busy_run is not None:
             human_logger.info(
                 "Rejected new task for project '%s' — run %s is still %s",
-                project_key,
+                _friendly_project_label(project_key),
                 busy_run.id[:8],
                 busy_run.state,
             )
@@ -758,6 +998,11 @@ class HubOrchestrator:
 
         task_run = task_store.create_run(session_id=self._session_id, user_message=message)
         task_store.update_run(task_run.id, context_updates={"target_project": project_key})
+        _human_task_log(
+            task_run.id,
+            "Hub is deciding how to handle this request for project '%s'.",
+            _friendly_project_label(project_key),
+        )
         thread_id = f"{self._session_id}:{project_key}"
         logger.debug("Task %s: project=%s thread_id=%s", task_run.id[:8], project_key, thread_id)
         config = {"configurable": {"thread_id": thread_id}}
@@ -766,11 +1011,27 @@ class HubOrchestrator:
         started_at = time.perf_counter()
         get_task_control_registry().register_run(task_run.id)
         try:
-            with active_task_run(task_run.id):
-                result = self._graph.invoke(
-                    {"messages": [HumanMessage(content=message)]},
-                    config=run_config,
-                )
+            with active_task_run(task_run.id, progress_callback=progress_notify):
+                if hasattr(self._graph, "stream"):
+                    result = None
+                    last_node = None
+                    for event in self._graph.stream(
+                        {"messages": [HumanMessage(content=message)]},
+                        config=run_config,
+                        stream_mode=["tasks", "updates", "values"],
+                    ):
+                        last_node, streamed_values = _consume_graph_stream_event(
+                            task_run.id, event, last_node
+                        )
+                        if streamed_values is not None:
+                            result = streamed_values
+                    if result is None:
+                        raise RuntimeError("Orchestrator stream returned no final state.")
+                else:
+                    result = self._graph.invoke(
+                        {"messages": [HumanMessage(content=message)]},
+                        config=run_config,
+                    )
             messages = result.get("messages", [])
             if not messages:
                 raise RuntimeError("Orchestrator returned no messages.")
@@ -789,6 +1050,7 @@ class HubOrchestrator:
                 raise RuntimeError(f"Task run disappeared: {task_run.id}")
 
             if is_active_state(current.state):
+                _human_task_log(task_run.id, "Hub has a final answer ready for the operator.")
                 task_store.transition(
                     task_run.id,
                     TASK_STATE_SUCCEEDED,
@@ -819,6 +1081,7 @@ class HubOrchestrator:
             current = task_store.get_run(task_run.id)
             if current is not None and current.state == TASK_STATE_CANCELLED:
                 raise
+            _human_task_log(task_run.id, "The task was cancelled while work was in progress.")
             task_store.transition(
                 task_run.id,
                 TASK_STATE_CANCELLED,
@@ -828,6 +1091,7 @@ class HubOrchestrator:
             )
             raise
         except Exception as exc:
+            _human_task_log(task_run.id, "Hub orchestration failed: %s", exc)
             run_record = _record_orchestrator_llm_run(
                 requested_model=self._model,
                 effective_model=self._model,
@@ -861,6 +1125,7 @@ class HubOrchestrator:
         if current is None:
             raise RuntimeError(f"Task run disappeared: {run_id}")
         if is_active_state(current.state):
+            _human_task_log(run_id, "Hub is sending %s's reply back to the operator.", spec.name)
             store.transition(
                 run_id,
                 TASK_STATE_SUCCEEDED,

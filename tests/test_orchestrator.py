@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -47,6 +48,40 @@ class _FakeGraph:
         return {"messages": [SimpleNamespace(content=self._response)]}
 
 
+class _FakeStreamingGraph:
+    def __init__(self, response: str = "Done") -> None:
+        self._response = response
+
+    def stream(self, payload, config, stream_mode):
+        assert stream_mode == ["tasks", "updates", "values"]
+        yield ("tasks", {"name": "agent"})
+        yield (
+            "updates",
+            {
+                "agent": {
+                    "messages": [
+                        SimpleNamespace(content="", tool_calls=[{"name": "ai-tech-lead"}])
+                    ]
+                }
+            },
+        )
+        yield ("tasks", {"name": "tools"})
+        yield (
+            "updates",
+            {
+                "tools": {
+                    "messages": [SimpleNamespace(name="ai-tech-lead", content="Implemented change")]
+                }
+            },
+        )
+        yield ("tasks", {"name": "agent", "result": "done"})
+        yield (
+            "updates",
+            {"agent": {"messages": [SimpleNamespace(content=self._response)]}},
+        )
+        yield ("values", {"messages": [SimpleNamespace(content=self._response)]})
+
+
 def test_invoke_records_successful_task_run(monkeypatch):
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
     monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _FakeGraph("All done"))
@@ -63,6 +98,41 @@ def test_invoke_records_successful_task_run(monkeypatch):
 
     events = get_task_run_store().list_events(runs[0].id)
     assert [event.to_state for event in events] == [TASK_STATE_RECEIVED, TASK_STATE_SUCCEEDED]
+
+
+def test_invoke_emits_human_readable_progress_logs(monkeypatch, caplog):
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _FakeGraph("All done"))
+
+    orchestrator = HubOrchestrator()
+
+    with caplog.at_level(logging.INFO, logger="agent_hub.human"):
+        orchestrator.invoke("Hello")
+
+    assert "Hub is deciding how to handle this request for project 'default'." in caplog.text
+    assert "Hub has a final answer ready for the operator." in caplog.text
+
+
+def test_invoke_stream_logs_langgraph_node_flow(monkeypatch, caplog):
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    monkeypatch.setattr(
+        HubOrchestrator,
+        "_build_graph",
+        lambda self: _FakeStreamingGraph("All done"),
+    )
+
+    orchestrator = HubOrchestrator()
+
+    with caplog.at_level(logging.INFO, logger="agent_hub.human"):
+        reply = orchestrator.invoke("Hello")
+
+    assert reply == "All done"
+    assert "LangGraph task 'agent' started." in caplog.text
+    assert "LangGraph entered node 'agent'." in caplog.text
+    assert "Node 'agent' requested tool call(s): ai-tech-lead." in caplog.text
+    assert "LangGraph rerouted from 'agent' to 'tools'." in caplog.text
+    assert "Node 'tools' produced message: Implemented change." in caplog.text
+    assert "LangGraph rerouted from 'tools' to 'agent'." in caplog.text
 
 
 def test_invoke_records_failed_task_run(monkeypatch):
@@ -101,7 +171,27 @@ def test_agent_tool_records_routed_dispatched_and_waiting_approval(monkeypatch, 
 
     class _FakePopen:
         def __init__(self, cmd, cwd, stdout, stderr, text):
+            input_path = Path(cmd[-3])
             output_path = Path(cmd[-1])
+            payload = json.loads(input_path.read_text(encoding="utf-8"))
+            progress_path = Path(payload["progress_jsonl"])
+            progress_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "run_id": payload["run_id"],
+                        "request_id": payload["request_id"],
+                        "sequence": 1,
+                        "event_type": "waiting",
+                        "phase": "awaiting-approval",
+                        "human_summary": "Waiting for approval before deleting files.",
+                        "occurred_at": "2026-07-23T00:00:00+00:00",
+                        "metadata": {},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             output_path.write_text(
                 json.dumps(
                     {
@@ -115,6 +205,9 @@ def test_agent_tool_records_routed_dispatched_and_waiting_approval(monkeypatch, 
             self.returncode = 0
 
         def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
             return self.returncode
 
         def communicate(self):
@@ -147,6 +240,74 @@ def test_agent_tool_records_routed_dispatched_and_waiting_approval(monkeypatch, 
     ]
 
 
+def test_agent_tool_emits_human_readable_specialist_logs(monkeypatch, tmp_path, caplog):
+    spec = AgentSpec(
+        id="ai-tech-lead",
+        name="AI Tech Lead",
+        purpose="Implements code changes",
+        runtime={
+            "mode": "subprocess",
+            "entrypoint": "fake-agent",
+            "working_directory": str(tmp_path),
+            "input_arg": "--input-json",
+            "output_arg": "--output-json",
+            "default_execution_mode": "execute",
+        },
+    )
+
+    class _FakePopen:
+        def __init__(self, cmd, cwd, stdout, stderr, text):
+            input_path = Path(cmd[-3])
+            output_path = Path(cmd[-1])
+            payload = json.loads(input_path.read_text(encoding="utf-8"))
+            progress_path = Path(payload["progress_jsonl"])
+            progress_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "run_id": payload["run_id"],
+                        "request_id": payload["request_id"],
+                        "sequence": 1,
+                        "event_type": "phase",
+                        "phase": "editing",
+                        "human_summary": "Applying the requested change.",
+                        "occurred_at": "2026-07-23T00:00:00+00:00",
+                        "metadata": {},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            output_path.write_text(
+                json.dumps({"status": "success", "summary": "Applied the fix."}),
+                encoding="utf-8",
+            )
+            self.returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def communicate(self):
+            return ("", "")
+
+    monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _FakePopen)
+
+    run = get_task_run_store().create_run(session_id="session-1", user_message="Clean this up")
+    tool = _make_agent_tool(spec)
+
+    with caplog.at_level(logging.INFO, logger="agent_hub.human"):
+        with active_task_run(run.id):
+            reply = tool.invoke("Delete the generated files")
+
+    assert "Applied the fix." in reply
+    assert "Hub chose AI Tech Lead (ai-tech-lead)." in caplog.text
+    assert "Calling AI Tech Lead (ai-tech-lead) with: Delete the generated files" in caplog.text
+    assert "AI Tech Lead finished with status 'success'." in caplog.text
+
+
 def test_approve_pending_resumes_subprocess_run(monkeypatch, tmp_path):
     spec = AgentSpec(
         id="ai-tech-lead",
@@ -170,6 +331,24 @@ def test_approve_pending_resumes_subprocess_run(monkeypatch, tmp_path):
             output_path = Path(cmd[-1])
             payload = json.loads(input_path.read_text(encoding="utf-8"))
             calls.append(payload)
+            progress_path = Path(payload["progress_jsonl"])
+            progress_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "run_id": payload["run_id"],
+                        "request_id": payload["request_id"],
+                        "sequence": 1,
+                        "event_type": "phase",
+                        "phase": "resuming",
+                        "human_summary": "Resuming the approved task.",
+                        "occurred_at": "2026-07-23T00:00:00+00:00",
+                        "metadata": {},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             if payload.get("human_approved"):
                 output = {
                     "status": "success",
@@ -185,6 +364,9 @@ def test_approve_pending_resumes_subprocess_run(monkeypatch, tmp_path):
             self.returncode = 0
 
         def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
             return self.returncode
 
         def communicate(self):

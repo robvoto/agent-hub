@@ -6,14 +6,18 @@ import logging
 import os
 import threading
 import time
+from collections import deque
 from typing import Any
 
 import httpx
 
+from .log_config import get_human_logger
 from .orchestrator import HubOrchestrator
+from .progress_events import ProgressUpdate
 from .task_control import TaskCancelled
 
 logger = logging.getLogger(__name__)
+human_logger = get_human_logger()
 
 _POLL_TIMEOUT = 30
 _API_BASE = os.getenv("TELEGRAM_API_BASE", "https://api.telegram.org")
@@ -54,7 +58,7 @@ def _send_message(
             if parse_mode is not None:
                 payload["parse_mode"] = parse_mode
             _api(token, "sendMessage", **payload)
-        logger.info("Reply to chat %d: %s", chat_id, _truncate(text))
+        human_logger.info("Telegram reply to chat %d: %s", chat_id, _truncate(text))
     except Exception as exc:
         logger.error("sendMessage failed: %s", exc)
 
@@ -78,6 +82,11 @@ class TelegramGateway:
         self._workers_lock = threading.Lock()
         self._workers: list[threading.Thread] = []
         self._last_chat_id: int | None = None
+        self._seen_lock = threading.Lock()
+        self._recent_update_ids: deque[int] = deque(maxlen=256)
+        self._recent_message_keys: deque[tuple[int, int]] = deque(maxlen=256)
+        self._progress_lock = threading.Lock()
+        self._progress_last_sent: dict[str, tuple[str, str]] = {}
         self._orch.set_learning_notifier(self._notify_learning)
 
     def _notify_learning(self, message: str) -> None:
@@ -88,27 +97,58 @@ class TelegramGateway:
     def _is_allowed(self, chat_id: int) -> bool:
         return not self._allowed or chat_id in self._allowed
 
+    def _is_duplicate_update(self, update: dict) -> bool:
+        update_id = update.get("update_id")
+        msg = update.get("message") or update.get("edited_message")
+        chat_id = msg.get("chat", {}).get("id") if isinstance(msg, dict) else None
+        message_id = msg.get("message_id") if isinstance(msg, dict) else None
+
+        with self._seen_lock:
+            if isinstance(update_id, int) and update_id in self._recent_update_ids:
+                human_logger.info("Ignoring duplicate Telegram update %d.", update_id)
+                return True
+
+            if (
+                isinstance(chat_id, int)
+                and isinstance(message_id, int)
+                and (chat_id, message_id) in self._recent_message_keys
+            ):
+                human_logger.info(
+                    "Ignoring duplicate Telegram message %d from chat %d.",
+                    message_id,
+                    chat_id,
+                )
+                if isinstance(update_id, int):
+                    self._recent_update_ids.append(update_id)
+                return True
+
+            if isinstance(update_id, int):
+                self._recent_update_ids.append(update_id)
+            if isinstance(chat_id, int) and isinstance(message_id, int):
+                self._recent_message_keys.append((chat_id, message_id))
+        return False
+
     @staticmethod
     def _help_text() -> str:
         return (
             "Agent Hub\n"
             "Send a plain message to dispatch it to a specialist agent "
             "(e.g. AI Tech Lead). Slash commands control the hub itself:\n\n"
-            "/help - show this\n"
             "/agents - list registered specialist agents\n"
-            "/new - start a fresh conversation\n"
-            "/status - show the active or paused task\n"
-            "/last - show the most recently finished task\n"
-            "/stop - cancel the active task\n"
             "/approve - approve a task waiting on approval\n"
-            "/reject [reason] - reject a task waiting on approval\n"
-            "/learn <fact> - store an explicit learning\n"
-            "/memory - list stored learnings\n"
             "/forget <id> - remove a stored learning\n"
+            "/help - show this\n"
+            "/last - show the most recently finished task\n"
+            "/learn <fact> - store an explicit learning\n"
             "/learn-mode [on|off] - toggle automatic background learning "
             "(off by default; shows status with no argument)\n"
+            "/memory - list stored learnings\n"
+            "/new - start a fresh conversation\n"
             "/project [<path>|clear] - set/show/clear the target project "
             "passed to specialists (shows current with no argument)\n"
+            "/reject [reason] - reject a task waiting on approval\n"
+            "/status - show the active or paused task\n"
+            "/stop - cancel the active task\n"
         )
 
     def _handle_message(self, msg: dict) -> None:
@@ -120,7 +160,7 @@ class TelegramGateway:
             return
 
         self._last_chat_id = chat_id
-        logger.info("Telegram message from chat %d: %s", chat_id, text)
+        human_logger.info("Telegram message from chat %d: %s", chat_id, _truncate(text))
 
         if text == "/help":
             _send_message(self._token, chat_id, self._help_text(), parse_mode=None)
@@ -128,6 +168,8 @@ class TelegramGateway:
 
         if text == "/new":
             self._orch.new_session()
+            with self._progress_lock:
+                self._progress_last_sent.clear()
             _send_message(self._token, chat_id, "Started a fresh conversation.")
             return
 
@@ -214,7 +256,9 @@ class TelegramGateway:
 
         if text == "/approve":
             try:
-                reply = self._orch.approve_pending()
+                reply = self._orch.approve_pending(
+                    progress_notify=lambda update: self._notify_progress(chat_id, update)
+                )
             except Exception as exc:
                 logger.exception("Approval resume error")
                 reply = f"Error: {exc}"
@@ -247,18 +291,37 @@ class TelegramGateway:
             self._workers = [w for w in self._workers if w.is_alive()]
             self._workers.append(worker)
             active_count = len(self._workers)
-        logger.info(
+        human_logger.info(
             "Starting worker for chat %d (%d worker(s) now active)", chat_id, active_count
         )
         worker.start()
+
+    def _prime_offset(self) -> int:
+        updates = _get_updates(self._token, 0)
+        if not updates:
+            return 0
+
+        next_offset = max(int(update["update_id"]) for update in updates) + 1
+        human_logger.info(
+            "Skipping %d queued Telegram update(s) on startup; next offset=%d",
+            len(updates),
+            next_offset,
+        )
+        return next_offset
 
     def _process_user_message(self, chat_id: int, text: str) -> None:
         try:
             pending = self._orch.pending_run()
             if pending is not None and pending.state == "waiting_clarification":
-                reply = self._orch.provide_clarification(text)
+                reply = self._orch.provide_clarification(
+                    text,
+                    progress_notify=lambda update: self._notify_progress(chat_id, update),
+                )
             else:
-                reply = self._orch.invoke(text)
+                reply = self._orch.invoke(
+                    text,
+                    progress_notify=lambda update: self._notify_progress(chat_id, update),
+                )
         except TaskCancelled:
             logger.info("Task was cancelled before completion message delivery.")
             return
@@ -268,21 +331,44 @@ class TelegramGateway:
 
         _send_message(self._token, chat_id, reply)
 
+    def _notify_progress(self, chat_id: int, update: ProgressUpdate) -> None:
+        key = (update.event_type, update.human_summary)
+        with self._progress_lock:
+            if update.event_type != "heartbeat" and self._progress_last_sent.get(update.run_id) == key:
+                return
+            self._progress_last_sent[update.run_id] = key
+        _send_message(self._token, chat_id, update.human_summary, parse_mode=None)
+
+    def _handle_update(self, update: dict) -> None:
+        if self._is_duplicate_update(update):
+            return
+        msg = update.get("message") or update.get("edited_message")
+        if msg:
+            self._handle_message(msg)
+
     def run(self) -> None:
-        logger.info("Hub Telegram gateway starting (session %s).", self._orch.session_id)
-        offset = 0
+        human_logger.info(
+            "Hub Telegram gateway starting (pid=%d, api=%s).",
+            os.getpid(),
+            _API_BASE,
+        )
+        logger.info(
+            "Hub Telegram gateway starting (pid=%d, session %s, api=%s).",
+            os.getpid(),
+            self._orch.session_id,
+            _API_BASE,
+        )
+        offset = self._prime_offset()
         try:
             while True:
                 updates = _get_updates(self._token, offset)
                 for update in updates:
                     offset = update["update_id"] + 1
-                    msg = update.get("message") or update.get("edited_message")
-                    if msg:
-                        self._handle_message(msg)
+                    self._handle_update(update)
                 if not updates:
                     time.sleep(1)
         except KeyboardInterrupt:
-            logger.info("Hub Telegram gateway stopped by user (Ctrl-C).")
+            human_logger.info("Hub Telegram gateway stopped by user (Ctrl-C).")
 
 
 def run_telegram(token: str | None = None) -> None:

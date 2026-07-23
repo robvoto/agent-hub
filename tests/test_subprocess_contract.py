@@ -12,11 +12,14 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import agent_hub.progress_events as progress_events
+import pytest
 from agent_hub.orchestrator import _dispatch_subprocess
 from agent_hub.project_context import get_project_context_registry
 from agent_hub.registry import AgentSpec
 from agent_hub.task_control import get_task_control_registry
 from agent_hub.task_runs import (
+    PROGRESS_MODE_STREAMING,
     TASK_STATE_FAILED,
     TASK_STATE_IN_PROGRESS,
     active_task_run,
@@ -123,3 +126,58 @@ def test_dispatch_subprocess_failed(tmp_path):
 
     updated = get_task_run_store().get_run(run.id)
     assert updated.state == TASK_STATE_FAILED
+
+
+def test_dispatch_subprocess_records_streamed_progress(tmp_path):
+    spec = _make_spec(tmp_path)
+    run, output = _run(spec, "SCENARIO:progress_success do the thing")
+
+    assert output["status"] == "success"
+
+    updated = get_task_run_store().get_run(run.id)
+    assert updated is not None
+    assert updated.progress_mode == PROGRESS_MODE_STREAMING
+    assert updated.latest_progress_phase == "editing"
+    assert updated.latest_progress_summary == "Applying the requested change."
+
+    events = get_task_run_store().list_progress_events(run.id)
+    accepted = [event for event in events if event.validation_status == "accepted"]
+    assert [event.event_type for event in accepted[:3]] == ["start", "phase", "phase"]
+    assert [event.sequence for event in accepted if event.sequence is not None] == [1, 2]
+
+
+def test_dispatch_subprocess_requires_streamed_progress(tmp_path):
+    spec = _make_spec(tmp_path)
+    with pytest.raises(RuntimeError, match="requires streamed specialist progress"):
+        _run(spec, "SCENARIO:no_progress do the thing")
+
+
+def test_dispatch_subprocess_records_rejected_progress_events(tmp_path):
+    spec = _make_spec(tmp_path)
+    run, output = _run(spec, "SCENARIO:progress_invalid do the thing")
+
+    assert output["status"] == "success"
+
+    events = get_task_run_store().list_progress_events(run.id)
+    statuses = [event.validation_status for event in events]
+    assert "malformed" in statuses
+    assert "rejected" in statuses
+    accepted_sequences = [
+        event.sequence
+        for event in events
+        if event.validation_status == "accepted" and event.sequence is not None
+    ]
+    assert accepted_sequences == [1]
+
+
+def test_dispatch_subprocess_emits_quiet_heartbeat(tmp_path, monkeypatch):
+    monkeypatch.setattr(progress_events, "PROGRESS_HEARTBEAT_INTERVAL_SECONDS", 0.1)
+
+    spec = _make_spec(tmp_path)
+    run, output = _run(spec, "SCENARIO:progress_heartbeat do the thing")
+
+    assert output["status"] == "success"
+
+    events = get_task_run_store().list_progress_events(run.id)
+    heartbeat_events = [event for event in events if event.event_type == "heartbeat"]
+    assert heartbeat_events

@@ -11,7 +11,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Generator
+from typing import Any, Generator
 
 from .config import TASK_RUN_DB
 from .log_config import get_human_logger
@@ -39,6 +39,8 @@ TASK_STATE_WAITING_APPROVAL = "waiting_approval"
 TASK_STATE_SUCCEEDED = "succeeded"
 TASK_STATE_FAILED = "failed"
 TASK_STATE_CANCELLED = "cancelled"
+PROGRESS_MODE_PENDING = "pending"
+PROGRESS_MODE_STREAMING = "streaming"
 
 TASK_STATES = {
     TASK_STATE_RECEIVED,
@@ -145,6 +147,11 @@ CREATE TABLE IF NOT EXISTS task_runs (
     cost_json TEXT,
     cancellation_reason TEXT,
     cancelled_at TEXT,
+    progress_mode TEXT,
+    latest_progress_phase TEXT,
+    latest_progress_summary TEXT,
+    last_progress_event_at TEXT,
+    last_progress_heartbeat_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     finished_at TEXT
@@ -162,9 +169,32 @@ CREATE TABLE IF NOT EXISTS task_run_events (
     FOREIGN KEY (task_run_id) REFERENCES task_runs(id)
 );
 
+CREATE TABLE IF NOT EXISTS task_progress_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_run_id TEXT NOT NULL,
+    schema_version INTEGER,
+    event_run_id TEXT,
+    request_id TEXT,
+    sequence INTEGER,
+    event_type TEXT,
+    phase TEXT,
+    human_summary TEXT,
+    occurred_at TEXT,
+    metadata_json TEXT,
+    validation_status TEXT NOT NULL,
+    validation_message TEXT,
+    raw_json TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (task_run_id) REFERENCES task_runs(id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_task_runs_session_id ON task_runs (session_id);
 CREATE INDEX IF NOT EXISTS idx_task_runs_state ON task_runs (state);
 CREATE INDEX IF NOT EXISTS idx_task_run_events_task_run_id ON task_run_events (task_run_id);
+CREATE INDEX IF NOT EXISTS idx_task_progress_events_task_run_id
+ON task_progress_events (task_run_id);
+CREATE INDEX IF NOT EXISTS idx_task_progress_events_task_run_id_sequence
+ON task_progress_events (task_run_id, sequence);
 """
 _TASK_RUN_MIGRATION_COLUMNS = {
     "context_json": "TEXT NOT NULL DEFAULT '{}'",
@@ -176,6 +206,11 @@ _TASK_RUN_MIGRATION_COLUMNS = {
     "cost_json": "TEXT",
     "cancellation_reason": "TEXT",
     "cancelled_at": "TEXT",
+    "progress_mode": "TEXT",
+    "latest_progress_phase": "TEXT",
+    "latest_progress_summary": "TEXT",
+    "last_progress_event_at": "TEXT",
+    "last_progress_heartbeat_at": "TEXT",
 }
 
 
@@ -208,6 +243,11 @@ class TaskRun:
     cost: dict | None
     cancellation_reason: str | None
     cancelled_at: datetime | None
+    progress_mode: str | None
+    latest_progress_phase: str | None
+    latest_progress_summary: str | None
+    last_progress_event_at: datetime | None
+    last_progress_heartbeat_at: datetime | None
     created_at: datetime
     updated_at: datetime
     finished_at: datetime | None
@@ -222,6 +262,25 @@ class TaskRunEvent:
     detail: str | None
     selected_agent_id: str | None
     approval_token: str | None
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class TaskProgressEvent:
+    id: int
+    task_run_id: str
+    schema_version: int | None
+    event_run_id: str | None
+    request_id: str | None
+    sequence: int | None
+    event_type: str | None
+    phase: str | None
+    human_summary: str | None
+    occurred_at: datetime | None
+    metadata: dict[str, Any] | None
+    validation_status: str
+    validation_message: str | None
+    raw_json: str | None
     created_at: datetime
 
 
@@ -260,6 +319,19 @@ def _row_to_task_run(row: sqlite3.Row) -> TaskRun:
         cost=_json_dict(row["cost_json"]),
         cancellation_reason=row["cancellation_reason"],
         cancelled_at=datetime.fromisoformat(row["cancelled_at"]) if row["cancelled_at"] else None,
+        progress_mode=row["progress_mode"],
+        latest_progress_phase=row["latest_progress_phase"],
+        latest_progress_summary=row["latest_progress_summary"],
+        last_progress_event_at=(
+            datetime.fromisoformat(row["last_progress_event_at"])
+            if row["last_progress_event_at"]
+            else None
+        ),
+        last_progress_heartbeat_at=(
+            datetime.fromisoformat(row["last_progress_heartbeat_at"])
+            if row["last_progress_heartbeat_at"]
+            else None
+        ),
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
         finished_at=datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None,
@@ -275,6 +347,26 @@ def _row_to_task_run_event(row: sqlite3.Row) -> TaskRunEvent:
         detail=row["detail"],
         selected_agent_id=row["selected_agent_id"],
         approval_token=row["approval_token"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def _row_to_task_progress_event(row: sqlite3.Row) -> TaskProgressEvent:
+    return TaskProgressEvent(
+        id=row["id"],
+        task_run_id=row["task_run_id"],
+        schema_version=row["schema_version"],
+        event_run_id=row["event_run_id"],
+        request_id=row["request_id"],
+        sequence=row["sequence"],
+        event_type=row["event_type"],
+        phase=row["phase"],
+        human_summary=row["human_summary"],
+        occurred_at=datetime.fromisoformat(row["occurred_at"]) if row["occurred_at"] else None,
+        metadata=_json_dict(row["metadata_json"]),
+        validation_status=row["validation_status"],
+        validation_message=row["validation_message"],
+        raw_json=row["raw_json"],
         created_at=datetime.fromisoformat(row["created_at"]),
     )
 
@@ -408,6 +500,14 @@ class TaskRunStore:
                 (run_id,),
             ).fetchall()
         return [_row_to_task_run_event(row) for row in rows]
+
+    def list_progress_events(self, run_id: str) -> list[TaskProgressEvent]:
+        with _connect(self._db_path) as conn:
+            rows = conn.execute(
+                "SELECT * FROM task_progress_events WHERE task_run_id=? ORDER BY id ASC",
+                (run_id,),
+            ).fetchall()
+        return [_row_to_task_progress_event(row) for row in rows]
 
     def transition(
         self,
@@ -611,6 +711,111 @@ class TaskRunStore:
         assert updated is not None
         return _row_to_task_run(updated)
 
+    def set_progress_mode(self, run_id: str, mode: str) -> TaskRun:
+        with _connect(self._db_path) as conn:
+            row = conn.execute("SELECT * FROM task_runs WHERE id=?", (run_id,)).fetchone()
+            if row is None:
+                raise KeyError(f"Unknown task run: {run_id}")
+            now = _utcnow()
+            conn.execute(
+                "UPDATE task_runs SET progress_mode=?, updated_at=? WHERE id=?",
+                (mode, now, run_id),
+            )
+            updated = conn.execute("SELECT * FROM task_runs WHERE id=?", (run_id,)).fetchone()
+        assert updated is not None
+        return _row_to_task_run(updated)
+
+    def record_progress_event(
+        self,
+        run_id: str,
+        *,
+        schema_version: int | None,
+        event_run_id: str | None,
+        request_id: str | None,
+        sequence: int | None,
+        event_type: str | None,
+        phase: str | None,
+        human_summary: str | None,
+        occurred_at: datetime | str | None,
+        metadata: dict[str, Any] | None,
+        validation_status: str,
+        validation_message: str | None,
+        raw_json: str | None,
+        promote_mode: bool = True,
+    ) -> TaskProgressEvent:
+        with _connect(self._db_path) as conn:
+            row = conn.execute("SELECT * FROM task_runs WHERE id=?", (run_id,)).fetchone()
+            if row is None:
+                raise KeyError(f"Unknown task run: {run_id}")
+            current = _row_to_task_run(row)
+            now = _utcnow()
+            occurred_at_raw = _isoformat(occurred_at)
+            conn.execute(
+                """INSERT INTO task_progress_events (
+                       task_run_id, schema_version, event_run_id, request_id, sequence,
+                       event_type, phase, human_summary, occurred_at, metadata_json,
+                       validation_status, validation_message, raw_json, created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    run_id,
+                    schema_version,
+                    event_run_id,
+                    request_id,
+                    sequence,
+                    event_type,
+                    phase,
+                    human_summary,
+                    occurred_at_raw,
+                    _json_or_none(metadata),
+                    validation_status,
+                    validation_message,
+                    raw_json,
+                    now,
+                ),
+            )
+            if validation_status == "accepted":
+                progress_mode = current.progress_mode
+                if promote_mode:
+                    progress_mode = PROGRESS_MODE_STREAMING
+                latest_phase = current.latest_progress_phase
+                latest_summary = current.latest_progress_summary
+                last_event_at = current.last_progress_event_at.isoformat() if current.last_progress_event_at else None
+                last_heartbeat_at = (
+                    current.last_progress_heartbeat_at.isoformat()
+                    if current.last_progress_heartbeat_at
+                    else None
+                )
+                if event_type == "heartbeat":
+                    last_heartbeat_at = occurred_at_raw or now
+                else:
+                    latest_phase = phase or latest_phase
+                    latest_summary = human_summary or latest_summary
+                    last_event_at = occurred_at_raw or now
+                conn.execute(
+                    """UPDATE task_runs
+                       SET progress_mode=?,
+                           latest_progress_phase=?,
+                           latest_progress_summary=?,
+                           last_progress_event_at=?,
+                           last_progress_heartbeat_at=?,
+                           updated_at=?
+                       WHERE id=?""",
+                    (
+                        progress_mode,
+                        latest_phase,
+                        latest_summary,
+                        last_event_at,
+                        last_heartbeat_at,
+                        now,
+                        run_id,
+                    ),
+                )
+            inserted = conn.execute(
+                "SELECT * FROM task_progress_events WHERE id=last_insert_rowid()"
+            ).fetchone()
+        assert inserted is not None
+        return _row_to_task_progress_event(inserted)
+
     def _insert_event(
         self,
         conn: sqlite3.Connection,
@@ -641,6 +846,9 @@ class TaskRunStore:
 
 _store: TaskRunStore | None = None
 _current_task_run_id: ContextVar[str | None] = ContextVar("current_task_run_id", default=None)
+_current_progress_callback: ContextVar[Any | None] = ContextVar(
+    "current_progress_callback", default=None
+)
 
 
 def get_task_run_store(db_path: Path | None = None) -> TaskRunStore:
@@ -655,13 +863,23 @@ def get_current_task_run_id() -> str | None:
     return _current_task_run_id.get()
 
 
+def get_current_progress_callback() -> Any | None:
+    return _current_progress_callback.get()
+
+
 @contextmanager
-def active_task_run(run_id: str) -> Generator[None, None, None]:
+def active_task_run(
+    run_id: str,
+    *,
+    progress_callback: Any | None = None,
+) -> Generator[None, None, None]:
     token = _current_task_run_id.set(run_id)
+    callback_token = _current_progress_callback.set(progress_callback)
     try:
         yield
     finally:
         _current_task_run_id.reset(token)
+        _current_progress_callback.reset(callback_token)
 
 
 def is_active_state(state: str) -> bool:
@@ -700,3 +918,17 @@ def _merge_json_value(value: dict | None, current: dict | None) -> str | None:
         return None
     merged = current if value is None else value
     return json.dumps(merged, sort_keys=True)
+
+
+def _json_or_none(value: dict[str, Any] | None) -> str | None:
+    if value is None:
+        return None
+    return json.dumps(value, sort_keys=True)
+
+
+def _isoformat(value: datetime | str | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    return value.astimezone(timezone.utc).isoformat()
