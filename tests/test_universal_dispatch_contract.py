@@ -21,6 +21,7 @@ is the proof that adding a new conforming specialist requires no Hub code.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 from agent_hub.orchestrator import HubOrchestrator, _make_agent_tool
@@ -145,7 +146,7 @@ class _ScriptedFakePopen:
 
 
 def test_widget_forge_discovered_and_dispatched_through_universal_envelope(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, caplog
 ):
     registry_dir = tmp_path / "agents"
     working_directory = tmp_path / "workdir"
@@ -188,8 +189,11 @@ def test_widget_forge_discovered_and_dispatched_through_universal_envelope(
         session_id=orchestrator.session_id, user_message="Forge some widgets"
     )
     tool = _make_agent_tool(spec)
-    with active_task_run(run.id):
+    with caplog.at_level(logging.INFO, logger="agent_hub.human"), active_task_run(run.id):
         reply = tool.invoke({"task": "Forge some widgets", "references": ["spec://widget-42"]})
+
+    # A human operator watching the log should see the reference being relayed.
+    assert "Passing 1 reference(s) to Widget Forge: spec://widget-42" in caplog.text
 
     assert "Which shape should the widgets be?" in reply
     after_clarification_request = get_task_run_store().get_run(run.id)

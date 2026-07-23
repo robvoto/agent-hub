@@ -376,6 +376,16 @@ def _dispatch_subprocess(
             )
         else:
             logger.debug("Dispatching %s with no project_root (specialist default)", spec.id)
+        if references:
+            _human_task_log(
+                task_run_id,
+                "Passing %d reference(s) to %s: %s",
+                len(references),
+                spec.name,
+                ", ".join(references),
+            )
+        else:
+            logger.debug("Dispatching %s with no references", spec.id)
         input_data = build_task_envelope(
             task=task,
             request_id=request_id,
