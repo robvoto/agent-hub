@@ -10,7 +10,7 @@ Prove the bounded real workflow:
 Telegram -> Agent Hub -> AI Tech Lead -> Agent Hub -> Telegram
 ```
 
-This validation is required for `HUB-MVP-005`.
+This validation is required for `AGENT-HUB-015`.
 
 ## Prerequisites
 
@@ -54,12 +54,16 @@ Use one Telegram chat that is included in `HUB_ALLOWED_CHAT_IDS`.
 6. Send `/approve` and confirm the same task resumes
 7. Run a second bounded request that you intentionally reject if approval is requested
 8. Send `/reject <reason>` and confirm the paused task closes safely
-9. Send `/status` during active or paused work and confirm the current run details are shown
-10. Send `/last` after a completed or failed run and confirm the last run details are shown
-11. If a long-running task is active, send `/stop` and confirm the run moves to `cancelled`
-12. Send `/learn test learning from telegram`
-13. Send `/memory` and confirm the learning appears with a stable identifier
-14. Send `/forget <identifier>` and confirm the learning is removed
+9. Confirm Telegram sends an immediate start acknowledgement for the routed task
+10. During active work, confirm Telegram shows meaningful live progress updates rather than staying silent
+11. If the task runs long enough, confirm Hub sends only quiet periodic heartbeat updates instead of duplicate spam
+12. Send `/status` during active or paused work and confirm the current run details include phase, latest progress summary, and last specialist activity
+13. If you intentionally pause progress long enough, confirm `/status` reports stale progress honestly
+14. Send `/last` after a completed or failed run and confirm the last run details are shown
+15. If a long-running task is active, send `/stop` and confirm the run moves to `cancelled`
+16. Send `/learn test learning from telegram`
+17. Send `/memory` and confirm the learning appears with a stable identifier
+18. Send `/forget <identifier>` and confirm the learning is removed
 
 ## Evidence To Capture
 
@@ -69,6 +73,9 @@ Capture enough evidence to prove the real flow without exposing secrets:
 - Telegram screenshots or copied replies for:
   - `/agents`
   - routing to `AI Tech Lead`
+  - initial run acknowledgement
+  - streamed phase updates
+  - quiet heartbeat behavior if exercised
   - clarification flow if triggered
   - approval flow and `/approve`
   - rejection flow and `/reject`
@@ -94,10 +101,14 @@ The run is valid only if all of the following are true:
 - Agent Hub starts successfully in Telegram mode
 - `/agents` lists `AI Tech Lead`
 - a bounded Telegram request routes to `AI Tech Lead`
+- Telegram sends an immediate acknowledgement when the routed task starts
+- live progress updates appear during specialist execution without duplicate spam
 - clarification and approval behavior works if requested by the specialist
 - `/approve` resumes the paused task
 - `/reject` safely closes the paused task
-- `/status` and `/last` return persisted run information
+- `/status` and `/last` return persisted run information, including current phase,
+  latest progress summary, and last specialist activity where applicable
+- stale progress is reported honestly if specialist activity stops while the run is still alive
 - `/stop` cancels active work without silently converting it to `failed`
 - `/learn`, `/memory`, and `/forget` work against the Hub knowledge store
 - task lifecycle is persisted in `data/task_runs.sqlite3`
@@ -106,4 +117,4 @@ The run is valid only if all of the following are true:
 
 ## Validation Notes
 
-Record the final evidence location and outcome in the live backlog row for `HUB-MVP-005`.
+Record the final evidence location and outcome in the live backlog row for `AGENT-HUB-015`.

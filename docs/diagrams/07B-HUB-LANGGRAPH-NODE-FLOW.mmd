@@ -1,0 +1,26 @@
+flowchart LR
+    Operator([Operator message])
+    TaskRun["Hub task run"]
+    Agent["LangGraph node: agent<br/>LLM reasoning"]
+    Tools["LangGraph node: tools<br/>execute requested tool"]
+    Reply([Hub reply])
+
+    subgraph Toolset["Tools callable from node: tools"]
+        SharedDocs["Tool: search_shared_docs<br/>shared hub/factory context"]
+        AITechLead["Tool: ai-tech-lead<br/>dispatch specialist task"]
+    end
+
+    Operator --> TaskRun --> Agent
+    Agent -->|"answer directly"| Reply
+    Agent -->|"request tool(s)"| Tools
+    Tools -->|"shared docs query"| SharedDocs -->|"tool result"| Agent
+    Tools -->|"coding task"| AITechLead -->|"specialist result"| Agent
+
+    classDef core fill:#eef6ff,stroke:#2b6cb0,stroke-width:2px,color:#0f172a;
+    classDef node fill:#fff8e8,stroke:#b7791f,stroke-width:2px,color:#1f2937;
+    classDef tool fill:#eefbf3,stroke:#2f855a,stroke-width:2px,color:#1f2937;
+    classDef terminal fill:#f7f0ff,stroke:#6b46c1,stroke-width:2px,color:#1f2937;
+
+    class TaskRun,Agent,Tools core;
+    class SharedDocs,AITechLead tool;
+    class Reply,Operator terminal;

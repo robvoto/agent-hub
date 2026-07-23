@@ -103,9 +103,16 @@ def build_factory_agent_spec(root: Path | None = None) -> AgentSpec | None:
     return AgentSpec(
         id="agent-factory",
         name="Agent Factory",
-        purpose="Specialist agent for creating, configuring, validating, and staging agents.",
-        aliases=["factory", "create-agent", "agent-builder"],
+        purpose=(
+            "Primary responsibility: Design and govern new specialist agent packages.\n"
+            "Select for: Creating, configuring, validating, staging, approving, rejecting, or "
+            "promoting a specialist agent package as the requested deliverable.\n"
+            "Do not select for: Implementing backlog items, fixing bugs, changing documentation, "
+            "or modifying source code in the existing Agent Factory repository or any other "
+            "existing software project."
+        ),
         tools=["factory_brain"],
+        extensions={"knowledge_db": str(project_root / "data" / "knowledge_store.sqlite3")},
         runtime={
             "mode": "factory_brain",
             "working_directory": str(project_root),
@@ -294,7 +301,6 @@ def _run_bridge(*, working_directory: str, payload: dict[str, Any]) -> dict[str,
                 raise TaskCancelled(handle.cancellation_reason or "Stopped by user")
             if progress_tailer is not None:
                 progress_tailer.finish()
-                progress_tailer.ensure_progress_started()
         finally:
             if task_run_id is not None:
                 get_task_control_registry().clear_process(task_run_id)
@@ -311,6 +317,8 @@ def _run_bridge(*, working_directory: str, payload: dict[str, Any]) -> dict[str,
         if not output_file.exists():
             raise RuntimeError("Agent Factory bridge produced no output.")
         result = json.loads(output_file.read_text(encoding="utf-8"))
+        if progress_tailer is not None and not result.get("interrupted"):
+            progress_tailer.ensure_progress_started()
         human_logger.info(
             "Module agent-factory finished (interrupted=%s)",
             result.get("interrupted"),

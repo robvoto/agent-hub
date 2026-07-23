@@ -15,12 +15,6 @@ AGENT_FACTORY_ROOT = Path(
     os.environ.get("AGENT_FACTORY_ROOT", Path.home() / "projects" / "agent-factory")
 )
 AGENT_REGISTRY_DIR = AGENT_FACTORY_ROOT / "config" / "agents"
-AGENT_FACTORY_KNOWLEDGE_DB = Path(
-    os.environ.get(
-        "AGENT_FACTORY_KNOWLEDGE_DB",
-        str(AGENT_FACTORY_ROOT / "data" / "knowledge_store.sqlite3"),
-    )
-)
 
 # Hub-owned persistence — hub is the control plane; all runtime state lives here.
 CHECKPOINT_DB = DATA_DIR / "checkpoints.sqlite3"

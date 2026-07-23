@@ -93,16 +93,11 @@ class ManifestCache:
         return record
 
     def description_for(self, spec: Any) -> str:
-        record = self.get_or_refresh(spec)
-        if record is None:
-            return f"{spec.name}: {spec.purpose}"
-        one_line = _string_or_none(record.manifest.get("one_line"))
-        if one_line:
-            return f"{spec.name}: {one_line}"
-        capabilities = record.manifest.get("capabilities")
-        if isinstance(capabilities, list) and capabilities:
-            joined = "; ".join(str(item) for item in capabilities[:2])
-            return f"{spec.name}: {joined}"
+        """Build the routing description for an agent tool.
+
+        `spec.purpose` is the complete routing contract. Factory owns writing
+        and validating it; Hub uses that field unchanged.
+        """
         return f"{spec.name}: {spec.purpose}"
 
     def _fetch_manifest(

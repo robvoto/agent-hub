@@ -223,6 +223,34 @@ def _truncate(text: str, limit: int = 200) -> str:
     return text if len(text) <= limit else f"{text[:limit]}…"
 
 
+def _flow_label(state: str, selected_agent_id: str | None) -> str:
+    if state == TASK_STATE_RECEIVED:
+        return "asked"
+    if state == TASK_STATE_ROUTED:
+        return f"routed:{selected_agent_id}" if selected_agent_id else "routed"
+    if state == TASK_STATE_DISPATCHED:
+        return "dispatched"
+    if state == TASK_STATE_IN_PROGRESS:
+        return "running"
+    if state == TASK_STATE_WAITING_CLARIFICATION:
+        return "clarification"
+    if state == TASK_STATE_WAITING_APPROVAL:
+        return "approval"
+    if state == TASK_STATE_SUCCEEDED:
+        return "replied"
+    if state == TASK_STATE_FAILED:
+        return "failed"
+    if state == TASK_STATE_CANCELLED:
+        return "cancelled"
+    return state
+
+
+def _render_flow(events: list["TaskRunEvent"]) -> str:
+    return " -> ".join(
+        f"[{_flow_label(event.to_state, event.selected_agent_id)}]" for event in events
+    )
+
+
 @dataclass(frozen=True)
 class TaskRun:
     id: str
@@ -528,6 +556,7 @@ class TaskRunStore:
         usage: dict | None = None,
         cost: dict | None = None,
         cancellation_reason: str | None = None,
+        human_log: bool = True,
     ) -> TaskRun:
         if to_state not in TASK_STATES:
             raise ValueError(f"Unknown task state: {to_state}")
@@ -607,7 +636,8 @@ class TaskRunStore:
             updated = conn.execute("SELECT * FROM task_runs WHERE id=?", (run_id,)).fetchone()
         assert updated is not None
         result = _row_to_task_run(updated)
-        human_logger.info(
+        log = human_logger.info if human_log else logger.debug
+        log(
             "Task %s: %s -> %s%s",
             run_id[:8],
             current.state,
@@ -618,6 +648,13 @@ class TaskRunStore:
             human_logger.info(
                 "Task %s: I responded: %s", run_id[:8], _truncate(result.final_response)
             )
+        # The cumulative flow summary is only worth a human-facing line at a
+        # checkpoint where the task stops actively running (finished or
+        # paused waiting on the user) — logging it after every intermediate
+        # transition just restates the same growing chain repeatedly.
+        if to_state in _TERMINAL_STATES or to_state in _PAUSED_STATES:
+            events = self.list_events(run_id)
+            human_logger.info("Task %s: Hub lifecycle: %s", run_id[:8], _render_flow(events))
         return result
 
     def set_final_response(self, run_id: str, final_response: str) -> TaskRun:

@@ -41,6 +41,22 @@ def _setup_logging(verbose: bool, level: str | None = None) -> None:
     configure_logging(level or ("DEBUG" if verbose else "INFO"))
 
 
+def _handle_cli_shutdown_interrupt() -> None:
+    """Terminate any in-flight specialist subprocess before exiting on Ctrl-C.
+
+    Without this, Ctrl-C during an active dispatch leaves the specialist
+    subprocess running headless (it has its own process group, see
+    task_control.subprocess_popen_kwargs) and its task-run row stuck at
+    in_progress forever, since nothing is left to record its result.
+    """
+    from .orchestrator import cancel_all_active_tasks
+
+    cancelled = cancel_all_active_tasks("CLI stopped by user (Ctrl-C).")
+    if cancelled:
+        print(f"\nCancelled {len(cancelled)} in-flight task(s).")
+    print("\nBye.")
+
+
 def _run_chat(model: str) -> None:
     from .orchestrator import HubOrchestrator
     from .startup_health import ensure_healthy_startup
@@ -62,8 +78,11 @@ def _run_chat(model: str) -> None:
     while True:
         try:
             text = input("You: ").strip()
-        except (KeyboardInterrupt, EOFError):
+        except EOFError:
             print("\nBye.")
+            break
+        except KeyboardInterrupt:
+            _handle_cli_shutdown_interrupt()
             break
 
         if not text:
@@ -149,6 +168,9 @@ def _run_chat(model: str) -> None:
             try:
                 reply = orch.approve_pending()
                 print(f"\nHub: {reply}\n")
+            except KeyboardInterrupt:
+                _handle_cli_shutdown_interrupt()
+                return
             except Exception as exc:
                 print(f"Error: {exc}", file=sys.stderr)
             continue
@@ -158,6 +180,9 @@ def _run_chat(model: str) -> None:
             try:
                 reply = orch.reject_pending(reason)
                 print(f"\nHub: {reply}\n")
+            except KeyboardInterrupt:
+                _handle_cli_shutdown_interrupt()
+                return
             except Exception as exc:
                 print(f"Error: {exc}", file=sys.stderr)
             continue
@@ -167,6 +192,9 @@ def _run_chat(model: str) -> None:
             try:
                 reply = orch.provide_clarification(text)
                 print(f"\nHub: {reply}\n")
+            except KeyboardInterrupt:
+                _handle_cli_shutdown_interrupt()
+                return
             except Exception as exc:
                 print(f"Error: {exc}", file=sys.stderr)
             continue
@@ -174,6 +202,9 @@ def _run_chat(model: str) -> None:
         try:
             reply = orch.invoke(text)
             print(f"\nHub: {reply}\n")
+        except KeyboardInterrupt:
+            _handle_cli_shutdown_interrupt()
+            return
         except Exception as exc:
             print(f"Error: {exc}", file=sys.stderr)
 

@@ -5,8 +5,11 @@ automatic memory as user-controlled, never silently always-on. When a Rob
 turns it on, extraction is deferred until the session goes quiet, so a burst
 of messages costs one extraction pass instead of one per task.
 
-In-memory only: a hub restart loses both the on/off flag and any pending
-timer. That is an accepted tradeoff, not a bug — see HUB-LEARN-002.
+The on/off flag is persisted in the Hub knowledge store, keyed by session_id,
+so a hub restart does not silently revert /learn-mode now that session_id
+itself survives a restart (see AGENT-HUB-032). Pending debounce timers remain
+in-memory only — a restart legitimately drops a scheduled dream pass, since
+OS-level timers cannot be persisted.
 """
 
 from __future__ import annotations
@@ -14,10 +17,16 @@ from __future__ import annotations
 import logging
 import threading
 from collections.abc import Callable
+from typing import Any
+
+from langgraph.store.base import GetOp, PutOp
+
+from .knowledge_store import get_knowledge_store
 
 logger = logging.getLogger(__name__)
 
 DREAM_DELAY_SECONDS = 300.0
+_NAMESPACE = ("hub", "learning_mode")
 
 
 class LearningModeRegistry:
@@ -26,20 +35,27 @@ class LearningModeRegistry:
         *,
         delay_seconds: float = DREAM_DELAY_SECONDS,
         timer_factory: Callable[[float, Callable[[], None]], threading.Timer] = threading.Timer,
+        store: Any = None,
     ) -> None:
         self._delay_seconds = delay_seconds
         self._timer_factory = timer_factory
+        self._store = store or get_knowledge_store()
         self._lock = threading.Lock()
-        self._enabled: dict[str, bool] = {}
         self._timers: dict[str, threading.Timer] = {}
 
     def is_enabled(self, session_id: str) -> bool:
         with self._lock:
-            return self._enabled.get(session_id, False)
+            return self._is_enabled_locked(session_id)
+
+    def _is_enabled_locked(self, session_id: str) -> bool:
+        item = self._store.batch([GetOp(namespace=_NAMESPACE, key=session_id)])[0]
+        return bool(item.value.get("enabled")) if item is not None else False
 
     def set_enabled(self, session_id: str, enabled: bool) -> None:
         with self._lock:
-            self._enabled[session_id] = enabled
+            self._store.batch(
+                [PutOp(namespace=_NAMESPACE, key=session_id, value={"enabled": enabled})]
+            )
             if not enabled:
                 self._cancel_locked(session_id)
 
@@ -51,7 +67,7 @@ class LearningModeRegistry:
         triggers one extraction pass after things go quiet.
         """
         with self._lock:
-            if not self._enabled.get(session_id, False):
+            if not self._is_enabled_locked(session_id):
                 return
             self._cancel_locked(session_id)
             timer = self._timer_factory(self._delay_seconds, lambda: on_fire(session_id))

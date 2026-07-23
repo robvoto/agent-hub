@@ -17,18 +17,61 @@ from .runtime_policy import validate_runtime_config
 logger = logging.getLogger(__name__)
 
 
+_CORE_FIELDS = {
+    "id",
+    "name",
+    "purpose",
+    "tools",
+    "version",
+    "runtime",
+    "input_contract",
+    "interaction_contract",
+}
+
+
 @dataclass(frozen=True)
 class AgentSpec:
-    """Minimal view of an enabled agent needed for routing."""
+    """Minimal view of an enabled agent needed for routing and dispatch.
+
+    `input_contract`/`interaction_contract` are the specialist's declared
+    universal-envelope and lifecycle-capability metadata (see Agent Factory's
+    `docs/agent-contract.md`) — discovery data Hub stores but does not branch
+    dispatch behavior on.
+
+    Any agent.json field outside the core set above (e.g. a specialist's own
+    backlog pointer, a knowledge_db path, or a future custom field) lands in
+    `extensions` unchanged — Hub never needs a new named field, let alone new
+    dispatch logic, for a specialist to declare specialist-owned metadata.
+    """
 
     id: str
     name: str
     purpose: str
-    aliases: list[str] = field(default_factory=list)
     tools: list[str] = field(default_factory=list)
     version: str = "1.0.0"
-    backlog_sheet_id: str | None = None
+    input_contract: dict = field(default_factory=dict)
+    interaction_contract: dict = field(default_factory=dict)
     runtime: dict = field(default_factory=dict)
+    extensions: dict = field(default_factory=dict)
+
+
+def parse_agent_spec(data: dict) -> AgentSpec:
+    """Build an AgentSpec from a raw agent.json dict.
+
+    Shared by the registry loader and startup health validation so both read
+    exactly the same fields and can't drift from each other.
+    """
+    return AgentSpec(
+        id=data["id"],
+        name=data.get("name", data["id"]),
+        purpose=data.get("purpose", ""),
+        tools=data.get("tools", []),
+        version=data.get("version", "1.0.0"),
+        input_contract=data.get("input_contract", {}),
+        interaction_contract=data.get("interaction_contract", {}),
+        runtime=data.get("runtime", {}),
+        extensions={key: value for key, value in data.items() if key not in _CORE_FIELDS},
+    )
 
 
 def load_registry(registry_dir: Path | None = None) -> list[AgentSpec]:
@@ -51,16 +94,7 @@ def load_registry(registry_dir: Path | None = None) -> list[AgentSpec]:
             continue
         try:
             data = json.loads(spec_file.read_text(encoding="utf-8"))
-            spec = AgentSpec(
-                id=data["id"],
-                name=data.get("name", data["id"]),
-                purpose=data.get("purpose", ""),
-                aliases=data.get("aliases", []),
-                tools=data.get("tools", []),
-                version=data.get("version", "1.0.0"),
-                backlog_sheet_id=data.get("backlog_sheet_id"),
-                runtime=data.get("runtime", {}),
-            )
+            spec = parse_agent_spec(data)
             validate_runtime_config(spec.id, spec.runtime)
             specs.append(spec)
             logger.debug("Loaded agent: %s (%s)", spec.id, spec.version)
@@ -69,14 +103,3 @@ def load_registry(registry_dir: Path | None = None) -> list[AgentSpec]:
 
     logger.info("Agent registry: %d enabled agent(s) loaded.", len(specs))
     return specs
-
-
-def find_agent(registry: list[AgentSpec], query: str) -> AgentSpec | None:
-    """Find an agent by ID or alias (case-insensitive)."""
-    q = query.strip().lower()
-    for spec in registry:
-        if spec.id.lower() == q:
-            return spec
-        if q in [a.lower() for a in spec.aliases]:
-            return spec
-    return None

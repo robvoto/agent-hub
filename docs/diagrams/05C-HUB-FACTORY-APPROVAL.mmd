@@ -1,0 +1,31 @@
+sequenceDiagram
+    actor You
+    participant Bot as Telegram or CLI entry
+    participant Runs as Task run store
+    participant Orch as Hub orchestrator
+    participant Mem as Hub memory store
+    participant FB as Factory Brain
+
+    You->>Bot: factory-style request
+    Bot->>Orch: forward message
+    Orch->>Mem: load relevant preferences
+    Mem-->>Orch: active preference records
+    Note over Orch,FB: Factory requests use a resumable Hub thread<br/>Hub keeps the factory thread id in task context
+    Orch->>Orch: LLM routes request to Factory Brain
+    Orch->>Runs: transition routed -> dispatched -> in_progress
+    Orch->>FB: invoke design request
+
+    FB-->>Orch: interrupted, approval_token
+    Orch->>Runs: transition waiting_approval
+    Orch-->>Bot: approval-required response
+    Bot-->>You: spec summary and /approve hint
+
+    You->>Bot: /approve
+    Bot->>Orch: approve paused run
+    Orch->>Runs: transition routed
+    Orch->>FB: resume using saved factory thread
+
+    FB-->>Orch: success response
+    Orch->>Runs: finalize succeeded
+    Orch-->>Bot: operator-facing response
+    Bot-->>You: result

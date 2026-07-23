@@ -90,7 +90,7 @@ def test_update_reference_preserves_existing_manifest_and_ttl(tmp_path) -> None:
             "ttl_seconds": 900,
             "manifest": {
                 "agent_id": "ai-tech-lead",
-                "one_line": "Existing full manifest",
+                "purpose": "Existing routing purpose",
                 "manifest_hash": "old-hash",
                 MANIFEST_CACHE_TTL_FIELD: 900,
             },
@@ -109,6 +109,24 @@ def test_update_reference_preserves_existing_manifest_and_ttl(tmp_path) -> None:
     )
 
     assert record.ttl_seconds == 900
-    assert record.manifest["one_line"] == "Existing full manifest"
+    assert record.manifest["purpose"] == "Existing routing purpose"
     assert record.manifest["package_version"] == "1.2.3"
     assert record.manifest["manifest_hash"] == "new-hash"
+
+
+def test_description_for_falls_back_to_purpose_when_no_manifest(monkeypatch, tmp_path) -> None:
+    cache = ManifestCache(tmp_path / "agent_manifest_cache.json")
+    spec = SimpleNamespace(
+        id="ai-tech-lead",
+        name="AI Tech Lead",
+        purpose="Specialist coding agent for software engineering tasks.",
+        runtime={"working_directory": str(tmp_path)},
+    )
+    monkeypatch.setattr(
+        "agent_hub.manifest_cache.derive_manifest_command",
+        lambda _runtime: None,
+    )
+
+    description = cache.description_for(spec)
+
+    assert description == "AI Tech Lead: Specialist coding agent for software engineering tasks."

@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+import pytest
+
 from agent_hub.progress_events import ProgressUpdate
-from agent_hub.telegram_gateway import TelegramGateway
+from agent_hub.task_control import get_task_control_registry
+from agent_hub.task_runs import TASK_STATE_CANCELLED, get_task_run_store
+from agent_hub.telegram_gateway import TelegramGateway, _raise_keyboard_interrupt
 
 
 def test_help_text_explains_current_thread_controls() -> None:
@@ -113,12 +118,20 @@ def test_telegram_message_uses_human_logger(caplog, monkeypatch):
     assert "Telegram message from chat 42: /new" in caplog.text
 
 
-def test_prime_offset_skips_queued_updates_and_advances_offset(monkeypatch):
+def test_prime_offset_skips_only_stale_queued_updates_and_advances_offset(monkeypatch):
+    old_timestamp = time.time() - 3600  # well past the startup staleness window
+
     monkeypatch.setattr(
         "agent_hub.telegram_gateway._get_updates",
         lambda token, offset: [
-            {"update_id": 100, "message": {"chat": {"id": 42}, "text": "/new"}},
-            {"update_id": 104, "message": {"chat": {"id": 42}, "text": "/status"}},
+            {
+                "update_id": 100,
+                "message": {"chat": {"id": 42}, "text": "/new", "date": old_timestamp},
+            },
+            {
+                "update_id": 104,
+                "message": {"chat": {"id": 42}, "text": "/status", "date": old_timestamp},
+            },
         ]
         if offset == 0
         else [],
@@ -131,6 +144,35 @@ def test_prime_offset_skips_queued_updates_and_advances_offset(monkeypatch):
     gateway = TelegramGateway("token-123", orch)
 
     assert gateway._prime_offset() == 105
+
+
+def test_prime_offset_processes_fresh_queued_update_instead_of_dropping_it(monkeypatch):
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway._send_message",
+        lambda token, chat_id, text, *, parse_mode="Markdown": None,
+    )
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway._get_updates",
+        lambda token, offset: [
+            {
+                "update_id": 100,
+                "message": {"chat": {"id": 42}, "text": "/new", "date": time.time()},
+            },
+        ]
+        if offset == 0
+        else [],
+    )
+
+    calls: list[str] = []
+    orch = SimpleNamespace(
+        new_session=lambda: calls.append("new_session"),
+        registry=[],
+        set_learning_notifier=lambda callback: None,
+    )
+    gateway = TelegramGateway("token-123", orch)
+
+    assert gateway._prime_offset() == 101
+    assert calls == ["new_session"]
 
 
 def test_duplicate_telegram_message_is_ignored(monkeypatch):
@@ -194,6 +236,69 @@ def test_run_logs_api_base_url_in_human_log(monkeypatch, caplog):
 
     assert "pid=424242" in caplog.text
     assert "api=https://example-telegram.invalid" in caplog.text
+
+
+def test_run_cancels_in_flight_tasks_on_keyboard_interrupt(monkeypatch, caplog):
+    monkeypatch.setattr(TelegramGateway, "_prime_offset", lambda self: 0)
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway._get_updates",
+        lambda token, offset: [],
+    )
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway.time.sleep",
+        lambda seconds: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+
+    run = get_task_run_store().create_run(session_id="s1", user_message="hi")
+    get_task_control_registry().register_run(run.id)
+
+    orch = SimpleNamespace(
+        reset_session=lambda: "unused",
+        registry=[],
+        session_id="session-123",
+        set_learning_notifier=lambda callback: None,
+    )
+    gateway = TelegramGateway("token-123", orch)
+
+    with caplog.at_level(logging.INFO, logger="agent_hub.human"):
+        gateway.run()
+
+    assert f"Cancelled 1 in-flight task(s) on shutdown: {run.id[:8]}" in caplog.text
+    updated = get_task_run_store().get_run(run.id)
+    assert updated is not None
+    assert updated.state == TASK_STATE_CANCELLED
+
+
+def test_run_installs_and_restores_sigterm_handler(monkeypatch):
+    import signal
+
+    monkeypatch.setattr(TelegramGateway, "_prime_offset", lambda self: 0)
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway._get_updates",
+        lambda token, offset: [],
+    )
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway.time.sleep",
+        lambda seconds: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+
+    original_handler = signal.getsignal(signal.SIGTERM)
+    orch = SimpleNamespace(
+        reset_session=lambda: "unused",
+        registry=[],
+        session_id="session-123",
+        set_learning_notifier=lambda callback: None,
+    )
+    gateway = TelegramGateway("token-123", orch)
+
+    gateway.run()
+
+    assert signal.getsignal(signal.SIGTERM) is original_handler
+
+
+def test_raise_keyboard_interrupt_converts_signal_to_exception():
+    with pytest.raises(KeyboardInterrupt):
+        _raise_keyboard_interrupt(15, None)
 
 
 def test_status_command_sends_plain_text_status(monkeypatch):

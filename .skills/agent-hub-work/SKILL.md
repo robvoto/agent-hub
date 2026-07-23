@@ -33,6 +33,9 @@ Use this skill when working in `agent-hub` and you need the repo-specific owners
 - Only document Hub-owned flows in this repo.
 - Verify every referenced command, file, and entrypoint exists in this repo.
 - If a diagram has drifted and the concept does not belong to Agent Hub, delete it rather than polishing it.
+- Prefer one interaction diagram per relevant Hub path: normal specialist routing, clarification resume, factory approval, explicit `/learn`, etc.
+- Keep diagram notes small and concrete so Mermaid renders cleanly into reusable SVG artifacts.
+- Default diagram wording to operator-facing behavior, not internal implementation names.
 
 ## Cross-repo boundary in practice
 

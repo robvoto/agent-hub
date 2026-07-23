@@ -126,6 +126,18 @@ class TaskControlRegistry:
         with self._lock:
             return self._handles.get(run_id)
 
+    def list_active_run_ids(self) -> list[str]:
+        """Run ids with a currently registered handle, across every session.
+
+        A handle only exists while a specialist subprocess is actually
+        dispatched (registered in HubOrchestrator.invoke, unregistered once
+        that call returns) — paused runs waiting on approval/clarification
+        have no live process and are intentionally excluded, since they are
+        durable and resumable after a restart.
+        """
+        with self._lock:
+            return list(self._handles.keys())
+
     def attach_process(self, run_id: str, process: Popen[str], *, agent_id: str) -> None:
         handle = self.get_handle(run_id)
         if handle is not None:

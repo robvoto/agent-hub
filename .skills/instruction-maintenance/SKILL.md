@@ -25,6 +25,10 @@ Keep instructions useful, small, current, and non-contradictory.
 - Avoid duplicating the same rule across `AGENTS.md`, skills, and docs.
 - If a skill grows too large, keep `SKILL.md` compact and move detailed reference material into normal docs.
 - If unsure whether information is stale, mark it for review instead of rewriting it as fact.
+- For Mermaid interaction diagrams, prefer one user-visible path per diagram instead of stacking unrelated `alt` branches into one large sequence.
+- Keep Mermaid note text short and renderer-safe: plain wording, explicit `<br/>` breaks, and no dense paragraph-style note blocks.
+- When editing a `.mmd`, rerender the matching `.svg` and treat a render failure as a doc bug to fix, not as a reason to leave the SVG stale.
+- Prefer human-facing labels in diagrams. Put real file names or Python method names in short supporting prose only when they genuinely clarify the behavior.
 
 ## Audit checklist
 

@@ -59,6 +59,13 @@ def _isolate_project_context_registry(monkeypatch):
     monkeypatch.setattr(pc_mod, "_registry", None)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_learning_mode_registry(monkeypatch):
+    import agent_hub.learning_mode as lm_mod
+
+    monkeypatch.setattr(lm_mod, "_registry", None)
+
+
 @pytest.fixture()
 def sample_registry_dir(tmp_path):
     """Create a minimal agent registry directory for testing."""
@@ -66,7 +73,7 @@ def sample_registry_dir(tmp_path):
     (registry / "code-reviewer").mkdir(parents=True)
     (registry / "code-reviewer" / "agent.json").write_text(
         '{"id": "code-reviewer", "name": "Code Reviewer", "purpose": "Reviews code for quality",'
-        ' "aliases": ["reviewer"], "tools": ["read_file"], "version": "1.0.0",'
+        ' "tools": ["read_file"], "version": "1.0.0",'
         ' "runtime": {"mode": "subprocess", "entrypoint": "fake-reviewer",'
         ' "working_directory": "/tmp", "input_arg": "--input-json",'
         ' "output_arg": "--output-json", "default_execution_mode": "instruction_only"}}'
@@ -74,7 +81,7 @@ def sample_registry_dir(tmp_path):
     (registry / "job-hunter").mkdir()
     (registry / "job-hunter" / "agent.json").write_text(
         '{"id": "job-hunter", "name": "Job Hunter", "purpose": "Finds job listings",'
-        ' "aliases": [], "tools": [], "version": "2.0.0",'
+        ' "tools": [], "version": "2.0.0",'
         ' "runtime": {"mode": "subprocess", "entrypoint": "fake-hunter",'
         ' "working_directory": "/tmp", "input_arg": "--input-json",'
         ' "output_arg": "--output-json", "default_execution_mode": "instruction_only"}}'

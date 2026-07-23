@@ -7,36 +7,47 @@ project the operator picked with /project, so it can pass project_root
 through on dispatch instead of always defaulting to the specialist's own
 project.
 
-In-memory only, keyed by session_id: a hub restart loses the selection,
-same accepted tradeoff as learning_mode.py.
+Persisted in the Hub knowledge store, keyed by session_id, so a hub restart
+does not silently revert an operator's /project selection now that session_id
+itself survives a restart (see AGENT-HUB-032).
 """
 
 from __future__ import annotations
 
 import threading
 from pathlib import Path
+from typing import Any
+
+from langgraph.store.base import GetOp, PutOp
+
+from .knowledge_store import get_knowledge_store
+
+_NAMESPACE = ("hub", "project_context")
 
 
 class ProjectContextRegistry:
-    def __init__(self) -> None:
+    def __init__(self, store: Any = None) -> None:
         self._lock = threading.Lock()
-        self._current: dict[str, str] = {}
+        self._store = store or get_knowledge_store()
 
     def get(self, session_id: str) -> str | None:
         with self._lock:
-            return self._current.get(session_id)
+            item = self._store.batch([GetOp(namespace=_NAMESPACE, key=session_id)])[0]
+        return item.value.get("path") if item is not None else None
 
     def set(self, session_id: str, path: str) -> str:
         resolved = Path(path).expanduser().resolve()
         if not resolved.is_dir():
             raise ValueError(f"'{path}' is not a directory.")
         with self._lock:
-            self._current[session_id] = str(resolved)
+            self._store.batch(
+                [PutOp(namespace=_NAMESPACE, key=session_id, value={"path": str(resolved)})]
+            )
         return str(resolved)
 
     def clear(self, session_id: str) -> None:
         with self._lock:
-            self._current.pop(session_id, None)
+            self._store.batch([PutOp(namespace=_NAMESPACE, key=session_id, value=None)])
 
 
 _registry: ProjectContextRegistry | None = None

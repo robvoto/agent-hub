@@ -144,6 +144,7 @@ def test_chat_healthcheck_passes_for_valid_configuration(monkeypatch, tmp_path):
 
     assert not report.has_failures
     assert "Summary:" in report.render()
+    assert "Startup check looks good for chat." in report.render_human()
     assert all(check.status != "FAIL" for check in report.checks)
 
 
@@ -263,5 +264,16 @@ def test_ensure_healthy_startup_prints_report_and_exits_on_failure(
         ensure_healthy_startup("chat")
 
     captured = capsys.readouterr()
-    assert "Startup health check (chat)" in captured.out
-    assert "FAIL" in captured.out
+    assert captured.out == ""
+
+
+def test_human_startup_report_is_concise_for_telegram(monkeypatch, tmp_path):
+    _configure_valid_startup(monkeypatch, tmp_path)
+
+    report = run_startup_healthcheck("telegram")
+    human = report.render_human()
+
+    assert "Startup check looks good for telegram." in human
+    assert "PASS" not in human
+    assert "SQLite write access verified" not in human
+    assert "parsed 2 allowed telegram chat id(s)" in human.lower()

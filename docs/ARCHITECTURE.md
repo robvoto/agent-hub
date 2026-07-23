@@ -67,34 +67,50 @@ HubOrchestrator (LangGraph)
   ├── records hub LLM usage in data/llm_usage.json
   │   └── token counts are always logged; cost stays unknown unless the catalog has a verified rate
   │
-  └── searches shared docs across hub and factory knowledge stores
+  └── searches hub's own knowledge store plus any specialist that opts in via knowledge_db
 ```
 
 ## Agent registry contract
 
-Agents are registered in `agent-factory/config/agents/<id>/agent.json`. Hub reads:
+Agents are registered in `agent-factory/config/agents/<id>/agent.json`. Hub's
+loader (`registry.parse_agent_spec`) reads a small, fixed core:
 
 | Field | Required | Purpose |
 |-------|----------|---------|
 | `id` | yes | unique identifier |
 | `name` | yes | display name |
-| `purpose` | yes | used by orchestrator for routing decisions |
-| `aliases` | yes | command aliases |
+| `purpose` | yes | the complete routing contract — orchestrator selects a specialist by this field alone. Aliases, project names, and identifier prefixes play no part in routing |
 | `tools` | yes | declared tool list |
-| `version` | no | defaults to "1.0.0" |
-| `backlog_sheet_id` | no | Google Sheets spreadsheet ID for this agent's backlog — hub uses this to add backlog items without hardcoded URLs |
+| `version` | no | the specialist's own version, defaults to "1.0.0" |
+| `input_contract` | no | declares the `agent-hub.task` protocol version, required/optional envelope fields, and which context fields (`project_root`, `references`) the specialist reads |
+| `interaction_contract` | no | declared lifecycle support — `progress`, `clarification`, `approval`, `resume`, `cancellation`. Hub does not branch dispatch behavior on this; the generic `output_contract`/`runtime.progress` mechanism still drives actual behavior |
+| `runtime` | yes | how Hub invokes the agent (subprocess entrypoint, or Agent Factory's in-process `factory_brain` mode) |
+
+Every other top-level `agent.json` field — `backlog_sheet_id`, `knowledge_db`,
+`aliases`, `permissions`, `memory`, `output_contract`, or anything a future
+specialist invents — is captured verbatim into `AgentSpec.extensions` with no
+dedicated field and no Hub code change. `shared_docs.py` reads
+`extensions.get("knowledge_db")` this way: if a specialist declares it, Hub's
+`search_shared_docs` tool includes that specialist's store, labeled by its
+`id`; if not, it isn't searched. Agent Factory's own spec is built in-code by
+`factory_bridge.py` rather than read from a JSON file, but sets the same
+`extensions` field.
 
 Factory is responsible for writing all fields. Hub reads but never writes.
 
-### Backlog routing
+`search_shared_docs` is not called automatically — it is one tool among several
+that the LangGraph react agent may choose to call, and the current system
+prompt is focused on dispatching to a specialist rather than searching docs
+first, so in practice it is called at the model's discretion, not on every turn.
 
-When the user asks hub to add a backlog item for a specialist agent, hub:
-1. Looks up the agent in the registry by name/alias
-2. Reads `backlog_sheet_id` from the agent's spec
-3. Appends the item to that agent's Google Sheet
-4. If `backlog_sheet_id` is null, reports that the agent has no backlog sheet configured
+### Dispatch envelope
 
-This means hub can manage any agent's backlog without hardcoding sheet locations — the location is declared in the agent's own registry entry.
+Hub dispatches every subprocess specialist through the same universal task
+envelope (`task_envelope.build_task_envelope`): task text, request/run
+identity, source, execution mode, the selected project when known, any
+user-provided or Hub-observed `references` (relayed uninterpreted), and
+resume/approval fields when resuming a paused run. The envelope shape does not
+vary per specialist — a specialist that doesn't use a field simply ignores it.
 
 ## Persistence
 
@@ -108,6 +124,35 @@ This means hub can manage any agent's backlog without hardcoding sheet locations
 | Staged agents | `factory/data/agent_factory.sqlite3` | Factory |
 | Factory checkpoints | `factory/data/factory_checkpoints.sqlite3` | Factory |
 | Factory knowledge | `factory/data/knowledge_store.sqlite3` | Factory |
+
+Hub's knowledge store is shared across Hub sessions and Hub-owned memory/tools.
+That is appropriate for operator-established Hub facts such as routing or
+interaction preferences. It is not a universal database for every specialist:
+specialists keep their own repo-local state unless they are explicitly designed
+to read a Hub-owned shared namespace.
+
+## Current Visibility Model
+
+Hub currently has three different kinds of runtime visibility, and they are not
+the same thing:
+
+- Telegram ingress is polled by the Hub gateway.
+- Hub's own LangGraph run can stream internal task/node events while the router is working.
+- Ordinary subprocess specialists now use a two-part contract: Hub sends one
+  input JSON that includes a `progress_jsonl` path, specialists append bounded
+  progress events to that JSONL stream while they work, and they still write one
+  final output JSON at completion.
+
+That means Hub can show live specialist phase updates, heartbeats, and the last
+human-readable progress summary while a subprocess specialist is running.
+Progress is persisted in the existing `task_runs.sqlite3` database, not a second
+runtime database.
+
+`/status` is still a persisted snapshot, but that snapshot now includes live
+specialist progress fields such as current phase, latest human summary, and last
+specialist activity time. Hub requires streamed specialist progress for
+subprocess specialists; a specialist that finishes without emitting progress is
+treated as a contract failure, not silently downgraded.
 
 ## Backlog
 

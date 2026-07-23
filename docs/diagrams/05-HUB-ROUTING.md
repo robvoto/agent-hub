@@ -1,96 +1,50 @@
-# Hub Routing — Interaction Diagram
+# Hub Routing — Generic Specialist Path
 
-This is the interaction diagram for how a request reaches the right agent.
-The orchestrator receives every request and decides which agent handles it.
-You never route manually unless you want to.
+This page now shows only the default routed-task path.
+Each other relevant path has its own diagram so the interaction stays readable.
 
-```mermaid
-sequenceDiagram
-    actor You
-    participant Bot as Hub Telegram Bot
-    participant Orch as Orchestrator LLM<br/>(create_react_agent)
-    participant Mem as Hub Memory<br/>(hub_memory.py)
-    participant Reg as Agent Registry<br/>(config/agents/)
-    participant ATL as AI Tech Lead<br/>subprocess
-    participant FB as Factory Brain<br/>(factory_bridge, resumable thread)
+- Clarification loop: [05B-HUB-CLARIFICATION.md](05B-HUB-CLARIFICATION.md)
+- Factory approval flow: [05C-HUB-FACTORY-APPROVAL.md](05C-HUB-FACTORY-APPROVAL.md)
+- Explicit `/learn` command: [05D-HUB-EXPLICIT-LEARNING.md](05D-HUB-EXPLICIT-LEARNING.md)
 
-    You->>Bot: "Fix the null pointer bug"
-    Bot->>Orch: forward message
+![Hub routing generic path](05-HUB-ROUTING.svg)
 
-    Note over Orch,Mem: System prompt is rebuilt every turn,<br/>folding in active stored learnings<br/>(operator /learn facts ranked ahead<br/>of auto-inferred ones)
-    Orch->>Mem: format_learnings_for_prompt()
-    Mem-->>Orch: learnings block
+Source: [05-HUB-ROUTING.mmd](05-HUB-ROUTING.mmd) | Rendered asset: [05-HUB-ROUTING.svg](05-HUB-ROUTING.svg)
 
-    Orch->>Reg: list available agents
-    Reg-->>Orch: [ai-tech-lead, ...]
+## Why Preferences Appear Here
 
-    Orch->>Orch: LLM decides: coding task -> ai-tech-lead
+Hub checks already-saved preferences before routing. That can affect specialist
+selection or how the task is framed, but it does not mean Hub is creating new
+learning from the first message.
 
-    Orch->>ATL: run-agent-task input.json
+## What “Result Or Next Action” Means
 
-    alt Needs clarification
-        ATL-->>Orch: status: needs_clarification
-        Orch-->>Bot: relay question
-        Bot-->>You: "Which null pointer bug?"
-        You->>Bot: "The result parser"
-        Orch->>ATL: run-agent-task (updated input)
-    end
+That label is intentionally broader than the old “summary + instruction” text.
 
-    ATL-->>Orch: status: success, instruction ready
-    Orch-->>Bot: formatted response
-    Bot-->>You: summary + instruction
+- On success, the specialist may return a plain result summary, an execution instruction, or both.
+- On other paths, Hub may send back a clarification question or an approval prompt instead.
 
-    Note over You, FB: Design request
+The operator-visible message is formatted from the specialist status contract in
+`src/agent_hub/orchestrator.py` `_format_output()`.
 
-    You->>Bot: "Design me an agent for X"
-    Bot->>Orch: forward message
-    Orch->>Orch: LLM decides: factory/design -> factory brain
-    Orch->>FB: invoke_factory_request(thread_id)
+## What This Diagram Does Not Show
 
-    alt Approval required
-        FB-->>Orch: interrupted, approval_token
-        Orch-->>Bot: "Factory Brain drafted a spec. /approve to stage it."
-        Bot-->>You: spec summary
-        You->>Bot: /approve
-        Bot->>Orch: approval
-        Orch->>FB: resume_factory_request(thread_id)
-        FB-->>Orch: status: success
-    end
+This diagram stays simplified on purpose.
 
-    Orch-->>Bot: formatted response
-    Bot-->>You: result
+- Hub does read saved preferences before routing.
+- Hub does stream its own internal LangGraph node/task events.
+- Hub now also expects streamed progress events from subprocess specialists while
+  they are running.
 
-    Note over You, Mem: Explicit learning (bypasses the orchestrator LLM entirely)
+What is omitted here is the progress detail itself: the specialist can send
+phase updates and heartbeats back to Hub during execution, and Hub can surface
+those live in Telegram and `/status`.
 
-    You->>Bot: "/learn Prefer Telegram for operator control"
-    Bot->>Mem: orchestrator.learn(value, source)
-    Note over Mem: Stored immediately as an active,<br/>operator-scoped record — no approval<br/>gate, never auto-superseded
-    Mem-->>Bot: confirmation
-    Bot-->>You: "Stored learning mem-xxxxxxxx"
-```
+## Implementation Map
 
-## How the LLM decides which agent to call
+- Router prompt rebuild: `src/agent_hub/orchestrator.py` `_build_system_prompt`
+- Preference formatting: `src/agent_hub/hub_memory.py` `format_learnings_for_prompt`
+- Explicit memory writes: `src/agent_hub/orchestrator.py` `learn`
 
-Each enabled agent in `config/agents/` (plus Factory Brain, wired in directly) becomes a tool in the orchestrator's tool list:
-
-```
-Tool: ai-tech-lead
-Description: "AI Tech Lead: Handles coding task clarification, risk review,
-              planning, and instruction generation for coding backends."
-
-Tool: factory-brain
-Description: "Specialist agent for creating, configuring, validating,
-              and staging agents."
-```
-
-The orchestrator LLM reads your message and picks the right tool. If no agent fits, it answers directly or says what's missing.
-
-## Memory: automatic vs. explicit
-
-`/learn`, `/memory`, `/forget`, and `/learn-mode` are intercepted as commands before the
-message ever reaches the orchestrator LLM — `HubOrchestrator.learn()` writes directly
-to storage with no approval gate. Separately, on every LLM turn `_build_system_prompt`
-re-reads the store and folds active learnings into the system prompt, with
-operator-established (`/learn`) records always ranked ahead of auto-inferred ones so a
-newer background guess can never crowd out an older explicit instruction. See
-`src/agent_hub/hub_memory.py` for the full operator/auto scope model.
+Examples of selected specialists live in separate path diagrams, such as Factory
+approval and explicit learning.

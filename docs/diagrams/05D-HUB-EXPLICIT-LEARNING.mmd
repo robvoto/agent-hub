@@ -1,0 +1,13 @@
+sequenceDiagram
+    actor You
+    participant Bot as Telegram or CLI entry
+    participant Orch as Hub command handler
+    participant Mem as Hub memory store
+
+    You->>Bot: /learn "Prefer Telegram for operator control"
+    Bot->>Orch: explicit learning command
+    Orch->>Mem: create active operator semantic memory
+    Note over Orch,Mem: Bypasses the routing LLM path<br/>No approval gate<br/>Later auto-learning cannot override this operator record
+    Mem-->>Orch: learning id + stored value
+    Orch-->>Bot: confirmation text
+    Bot-->>You: stored learning confirmation

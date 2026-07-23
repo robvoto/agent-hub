@@ -31,6 +31,9 @@ Read the owner module before editing. If one module clearly owns the behavior, s
 - If a specialist status cannot be resumed cleanly by Hub, surface that explicitly instead of inventing a resume path.
 - If a change lets more than one task run at once (new dispatch path, new concurrency mode), check whether it shares LangGraph `thread_id`/session state with another concurrent path — two invokes sharing one thread can interleave conversation state. This was a real bug caught mid-build, not a hypothetical.
 - Cross-repo permission/allowlist decisions (which projects a specialist may write to) are not Hub's call — they live in the specialist's own local settings and Agent Factory's registry, not Hub code.
+- `human_logger` output (`_consume_graph_stream_event` in `orchestrator.py`) must not repeat the same fact via multiple LangGraph `stream_mode`s — e.g. don't reintroduce "task started"/"task finished" lines alongside "entered node"/"produced message", they say the same thing twice per node.
+- Node-level explanations of what a LangGraph node does (`_NODE_EXPLANATIONS`/`_node_intro`) are shown once per task run, not on every loop iteration — if you add a new node type, add its explanation to `_NODE_EXPLANATIONS`, but don't make it repeat on reroutes.
+- `config/llm_costs.json` fails closed by design: a model entry with `"status": "unknown"` means nobody has verified its per-1M pricing yet, not that cost tracking is broken. Fix by adding real rates (cross-check the source), don't add fallback/guessed pricing.
 
 ## Checklist
 
@@ -38,7 +41,7 @@ Read the owner module before editing. If one module clearly owns the behavior, s
 - Does every branch on `status` also have a plan for `failed` (terminal, no resume)?
 - If this touches session/project/task-run scoping, does `/status` and `/last` still behave as whole-conversation (not per-project) unless a decision explicitly changed that?
 - Did a new concurrency path get a real test against something closer to a real subprocess, not just a mocked `Popen`?
-- Is there human-readable log output (`human_logger`) at the decision points an operator would want to see live, not just debug-level detail?
+- Is there human-readable log output (`human_logger`) at the decision points an operator would want to see live, not just debug-level detail — and does it say each fact exactly once per event?
 
 ## Definition of Done
 

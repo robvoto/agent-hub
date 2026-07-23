@@ -3,10 +3,10 @@
 /learn remains Rob's immediate, authoritative command — it always writes an
 active, operator-scoped semantic record with no approval gate.
 
-Automatic semantic extraction (HUB-LEARN-002, see learning_mode.py and
+Automatic semantic extraction (AGENT-HUB-017, see learning_mode.py and
 HubOrchestrator.run_learning_pass) writes scope="auto" semantic records
 through the same typed storage. Episodic curation and procedural proposals
-(HUB-LEARN-003/005) are still future work.
+(AGENT-HUB-018/005) are still future work.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ MemoryStatus = Literal["active", "pending", "rejected", "disabled"]
 
 MEMORY_TYPES: tuple[MemoryType, ...] = ("semantic", "episodic", "procedural")
 
-# Pre-HUB-LEARN-001 flat namespace. Migrated into the typed semantic namespace
+# Pre-AGENT-HUB-016 flat namespace. Migrated into the typed semantic namespace
 # on first use of HubMemoryManager and never written to again.
 _LEGACY_LEARNINGS_NS = ("hub", "learnings")
 
@@ -90,7 +90,7 @@ class HubMemoryManager:
         self, value: str, *, source: str, evidence: Iterable[str] = ()
     ) -> LearningRecord:
         """Store a system-derived (scope=auto) semantic memory, e.g. from
-        automatic extraction (HUB-LEARN-002). Subject to compaction, unlike
+        automatic extraction (AGENT-HUB-017). Subject to compaction, unlike
         operator-authored /learn records.
         """
         record = self._store_record(
@@ -189,7 +189,7 @@ class HubMemoryManager:
 
         Never deletes — use forget() for that. Used by supersession (an auto
         semantic record superseding an older one) and, later, procedural
-        approve/reject (HUB-LEARN-005).
+        approve/reject (AGENT-HUB-020).
         """
         key = identifier.strip()
         if not key:
@@ -385,7 +385,7 @@ def extract_semantic_candidates(
     Only runs when Learning Mode is on and a session has gone quiet (see
     learning_mode.py) — never per-message, never silently on by default.
     Skip candidates are dropped here; callers should further filter by
-    confidence (HUB-LEARN-002: only "high" is auto-stored).
+    confidence (AGENT-HUB-017: only "high" is auto-stored).
 
     existing_active_operator (Rob's explicit /learn records) is shown so the
     model can avoid duplicating or contradicting them, but is never a valid

@@ -33,11 +33,14 @@ def test_build_mermaid_lists_real_langgraph_tools_and_not_learn_commands():
 
     mermaid = module.build_mermaid(registry)
 
-    assert 'tool_search_shared_docs["Search shared docs<br/>(hub + factory)"]' in mermaid
+    assert (
+        'tool_search_shared_docs["Callable tool: search_shared_docs'
+        '<br/>shared hub/factory context"]'
+    ) in mermaid
     assert "Hub --> tool_search_shared_docs" in mermaid
-    assert 'agent_ai_tech_lead["AI Tech Lead<br/>(ai-tech-lead)"]' in mermaid
+    assert 'agent_ai_tech_lead["Callable tool: ai-tech-lead<br/>AI Tech Lead specialist"]' in mermaid
     assert "memory_hub_learnings" not in mermaid
-    assert "/learn, /memory, and /forget are operator commands" in mermaid
+    assert "This is a callable-tool map, not a LangGraph node map." in mermaid
 
 
 def test_build_mermaid_keeps_no_agents_placeholder():

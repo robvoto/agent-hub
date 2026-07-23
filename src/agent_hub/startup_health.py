@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shlex
 import sqlite3
@@ -22,12 +23,15 @@ from .config import (
 )
 from .cost_log import load_cost_catalog
 from .factory_bridge import build_factory_agent_spec
-from .registry import AgentSpec
+from .log_config import get_human_logger
+from .registry import AgentSpec, parse_agent_spec
 from .runtime_policy import derive_manifest_command, validate_runtime_config
 
 HealthStatus = Literal["PASS", "WARNING", "FAIL"]
 
 _SUPPORTED_MODES = {"chat", "telegram"}
+logger = logging.getLogger(__name__)
+human_logger = get_human_logger()
 
 
 @dataclass(frozen=True)
@@ -60,6 +64,33 @@ class StartupHealthReport:
         )
         return "\n".join(lines)
 
+    def render_human(self) -> str:
+        warnings = [check for check in self.checks if check.status == "WARNING"]
+        failures = [check for check in self.checks if check.status == "FAIL"]
+
+        if failures:
+            lines = [f"Startup check failed for {self.mode}."]
+            lines.extend(f"- {check.name}: {check.detail}" for check in failures)
+            if warnings:
+                lines.append("Warnings:")
+                lines.extend(f"- {check.name}: {check.detail}" for check in warnings)
+            return "\n".join(lines)
+
+        lines = [f"Startup check looks good for {self.mode}."]
+        if any(check.name == "OPENAI_API_KEY" and check.status == "PASS" for check in self.checks):
+            lines.append("- OpenAI credentials are configured.")
+        if self.mode == "telegram":
+            lines.append(f"- {_human_telegram_summary(self.checks)}")
+        lines.append(f"- {_human_factory_summary(self.checks)}")
+        lines.append(f"- {_human_agent_summary(self.checks)}")
+        lines.append(f"- {_human_storage_summary(self.checks)}")
+        if any(check.name == "LLM_COST_CATALOG" and check.status == "PASS" for check in self.checks):
+            lines.append("- LLM cost catalog loaded.")
+        if warnings:
+            lines.append("Warnings:")
+            lines.extend(f"- {check.name}: {check.detail}" for check in warnings)
+        return "\n".join(lines)
+
 
 def ensure_healthy_startup(
     mode: str,
@@ -67,10 +98,52 @@ def ensure_healthy_startup(
     telegram_token: str | None = None,
 ) -> StartupHealthReport:
     report = run_startup_healthcheck(mode, telegram_token=telegram_token)
-    print(report.render())
+    human_logger.info(report.render_human())
+    logger.info(report.render())
     if report.has_failures:
         raise SystemExit(1)
     return report
+
+
+def _human_telegram_summary(checks: tuple[HealthCheckResult, ...]) -> str:
+    token_ok = any(check.name == "HUB_BOT_TOKEN" and check.status == "PASS" for check in checks)
+    allowlist = next((check for check in checks if check.name == "HUB_ALLOWED_CHAT_IDS"), None)
+    parts: list[str] = []
+    if token_ok:
+        parts.append("Telegram bot token is configured")
+    if allowlist is not None:
+        if allowlist.status == "PASS":
+            parts.append(allowlist.detail.lower().rstrip("."))
+        elif allowlist.status == "WARNING":
+            parts.append("chat allowlist is open")
+    return ", ".join(parts).capitalize() + "."
+
+
+def _human_factory_summary(checks: tuple[HealthCheckResult, ...]) -> str:
+    root_ok = any(check.name == "AGENT_FACTORY_ROOT" and check.status == "PASS" for check in checks)
+    registry_ok = any(check.name == "AGENT_REGISTRY_DIR" and check.status == "PASS" for check in checks)
+    if root_ok and registry_ok:
+        return "Agent Factory project and registry are available."
+    return "Agent Factory startup checks ran."
+
+
+def _human_agent_summary(checks: tuple[HealthCheckResult, ...]) -> str:
+    count = sum(
+        check.status == "PASS"
+        and (check.name.startswith("agent spec:") or check.name.startswith("system agent:"))
+        for check in checks
+    )
+    if count == 1:
+        return "1 agent configuration validated."
+    return f"{count} agent configurations validated."
+
+
+def _human_storage_summary(checks: tuple[HealthCheckResult, ...]) -> str:
+    db_names = {"DATA_DIR", "CHECKPOINT_DB", "KNOWLEDGE_DB", "TASK_RUN_DB"}
+    count = sum(check.status == "PASS" and check.name in db_names for check in checks)
+    if count == len(db_names):
+        return "Hub data directory and databases are writable."
+    return "Hub storage checks completed."
 
 
 def run_startup_healthcheck(
@@ -268,16 +341,7 @@ def _check_agent_spec_file(spec_file: Path, loaded_specs: list[AgentSpec]) -> He
         data = json.loads(spec_file.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             raise ValueError("agent.json must contain a JSON object.")
-        spec = AgentSpec(
-            id=data["id"],
-            name=data.get("name", data["id"]),
-            purpose=data.get("purpose", ""),
-            aliases=data.get("aliases", []),
-            tools=data.get("tools", []),
-            version=data.get("version", "1.0.0"),
-            backlog_sheet_id=data.get("backlog_sheet_id"),
-            runtime=data.get("runtime", {}),
-        )
+        spec = parse_agent_spec(data)
     except Exception as exc:
         return HealthCheckResult(
             name=f"agent spec: {spec_file.parent.name}",

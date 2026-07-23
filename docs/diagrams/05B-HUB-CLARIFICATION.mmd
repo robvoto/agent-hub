@@ -7,23 +7,27 @@ sequenceDiagram
     participant Reg as Agent registry
     participant Agent as Selected specialist
 
-    You->>Bot: user request
-    Bot->>Runs: create task run (received)
+    You->>Bot: initial task
     Bot->>Orch: forward message
-
-    Note over Orch,Mem: Hub reads saved operator preferences before routing<br/>This is context lookup, not new learning
     Orch->>Mem: load relevant preferences
     Mem-->>Orch: active preference records
-
     Orch->>Reg: load enabled specialists
     Reg-->>Orch: callable agent specs
-
-    Orch->>Orch: LLM chooses best specialist
-    Orch->>Runs: transition routed
+    Orch->>Orch: LLM chooses specialist
+    Orch->>Runs: transition routed -> dispatched -> in_progress
     Orch->>Agent: dispatch bounded task
-    Orch->>Runs: transition dispatched -> in_progress
+
+    Agent-->>Orch: status: needs_clarification
+    Orch->>Runs: transition waiting_clarification
+    Orch-->>Bot: relay clarification question
+    Bot-->>You: specialist question
+
+    You->>Bot: clarification reply
+    Bot->>Orch: resume paused run
+    Orch->>Runs: transition routed
+    Orch->>Agent: resume with added clarification
 
     Agent-->>Orch: structured result
-    Orch->>Runs: finalize succeeded or paused state
+    Orch->>Runs: finalize succeeded
     Orch-->>Bot: operator-facing response
-    Bot-->>You: result, question, or approval prompt
+    Bot-->>You: result

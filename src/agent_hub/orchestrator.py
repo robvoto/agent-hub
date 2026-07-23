@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from langchain_core.callbacks import UsageMetadataCallbackHandler
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool as lc_tool
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
@@ -40,11 +40,17 @@ from .knowledge_store import get_knowledge_store
 from .learning_mode import get_learning_mode_registry
 from .log_config import get_human_logger
 from .manifest_cache import get_manifest_cache
-from .progress_events import PROGRESS_POLL_INTERVAL_SECONDS, ProgressUpdate, SpecialistProgressTailer
+from .progress_events import (
+    PROGRESS_POLL_INTERVAL_SECONDS,
+    ProgressUpdate,
+    SpecialistProgressTailer,
+)
 from .project_context import get_project_context_registry
 from .registry import AgentSpec, load_registry
 from .run_status import format_current_run_status, format_last_run_status
+from .session_state import load_or_create_session_id, persist_session_id
 from .shared_docs import make_shared_docs_tool
+from .task_envelope import build_task_envelope
 from .task_control import TaskCancelled, get_task_control_registry, subprocess_popen_kwargs
 from .task_runs import (
     DEFAULT_PROJECT_KEY,
@@ -116,17 +122,33 @@ def _emit_progress_update(update: ProgressUpdate) -> None:
 
 _SYSTEM_PROMPT = """You are the Agent Hub orchestrator. You coordinate specialist AI agents.
 
+Select the specialist using only each tool's purpose. Treat the purpose as the
+complete routing contract: primary responsibility; select for; do not select for.
+Match the user's requested action to that contract.
+
+Use the purpose as the only routing contract. Do not infer specialist scope
+from an agent name, project name, or alias.
+
+A named project is the target of the work, not automatically the specialist.
+A request naming a project is not routed to that project's own agent unless
+that agent's purpose is the one being asked for.
+
 When a user sends a request:
-1. Select the correct agent from your tool list based on their purpose.
+1. Select the correct agent from your tool list based only on their purpose.
 2. Call that agent's tool with a clear, bounded task description.
 3. Return the agent's result to the user.
+
+If the user gives an explicit pointer — a file path, URL, or ID — pass it via
+the tool's `references` argument verbatim instead of paraphrasing it into the
+task description. Do not interpret what a reference means; only relay it.
 
 Do not explain what you would do — invoke the agent and return the result.
 Do not answer coding, research, or creation tasks yourself — that is the specialist agent's job.
 
 If the agent returns a clarification question, relay it to the user verbatim.
 If the agent requires approval, tell the user exactly what needs approval and wait.
-If no registered agent fits the task, say so clearly — do not invent capabilities."""
+If no purpose clearly matches the request, ask the user for clarification instead
+of guessing."""
 
 
 def _build_system_prompt(state: Any) -> list[Any]:
@@ -136,7 +158,11 @@ def _build_system_prompt(state: Any) -> list[Any]:
     into the prompt at graph-construction time) means a /learn or /forget takes
     effect on the very next turn without restarting the hub.
     """
-    messages = state.get("messages", []) if isinstance(state, dict) else getattr(state, "messages", [])
+    messages = (
+        state.get("messages", [])
+        if isinstance(state, dict)
+        else getattr(state, "messages", [])
+    )
     learnings_block = format_learnings_for_prompt(HubMemoryManager().list_learnings())
     content = f"{_SYSTEM_PROMPT}\n\n{learnings_block}" if learnings_block else _SYSTEM_PROMPT
     return [SystemMessage(content=content)] + list(messages)
@@ -183,10 +209,48 @@ def _update_preview(payload: Any) -> str:
     return f"updated state: {_truncate(str(payload))}"
 
 
+def _graph_node_label(node_name: str) -> str:
+    return f"[{node_name}]"
+
+
+def _graph_path_label(path: list[str]) -> str:
+    return " -> ".join(_graph_node_label(node_name) for node_name in path)
+
+
+def _append_graph_step(
+    graph_steps: list[tuple[str, str]],
+    node_name: str,
+    summary: str,
+) -> None:
+    if graph_steps and graph_steps[-1] == (node_name, summary):
+        return
+    graph_steps.append((node_name, summary))
+
+
+def _render_graph_trace(
+    graph_path: list[str],
+    graph_steps: list[tuple[str, str]],
+) -> str | None:
+    if not graph_path:
+        return None
+
+    lines = [
+        "LangGraph node path:",
+        f"  {_graph_path_label(graph_path)}",
+    ]
+    if graph_steps:
+        for index, (node_name, summary) in enumerate(graph_steps):
+            branch = "`--" if index == len(graph_steps) - 1 else "|--"
+            lines.append(f"  {branch} {_graph_node_label(node_name)} {summary}")
+    return "\n".join(lines)
+
+
 def _consume_graph_stream_event(
     task_run_id: str,
     event: Any,
     last_node: str | None,
+    graph_path: list[str],
+    graph_steps: list[tuple[str, str]],
 ) -> tuple[str | None, dict[str, Any] | None]:
     namespace: tuple[Any, ...] = ()
     mode: str | None = None
@@ -208,6 +272,9 @@ def _consume_graph_stream_event(
         name = data.get("name") or data.get("node") or data.get("task")
         if name:
             if data.get("error"):
+                # A real failure inside the graph is worth surfacing to the
+                # human log even though the rest of this function is debug-only
+                # tracing — it's a state change (something broke), not noise.
                 _human_task_log(
                     task_run_id,
                     "LangGraph task '%s'%s failed: %s",
@@ -216,35 +283,38 @@ def _consume_graph_stream_event(
                     _truncate(str(data['error'])),
                 )
             elif data.get("interrupts"):
-                _human_task_log(
+                logger.debug(
+                    "Task %s: LangGraph task '%s'%s interrupted.",
                     task_run_id,
-                    "LangGraph task '%s'%s interrupted.",
                     name,
                     namespace_prefix,
                 )
-            # "started"/"finished" are intentionally not logged here — they're
-            # redundant with the "entered node"/"produced message" lines below
-            # for every non-error, non-interrupt task event.
+            # "started"/"finished" are intentionally not logged here — the
+            # compact graph path plus node summary lines already cover the
+            # non-error, non-interrupt flow.
         return last_node, None
 
     if mode == "updates" and isinstance(data, dict):
         for node_name, payload in data.items():
             if last_node is None:
-                _human_task_log(task_run_id, "LangGraph entered node '%s'.", node_name)
+                logger.debug("Task %s: LangGraph entered node '%s'.", task_run_id, node_name)
             elif last_node != node_name:
-                _human_task_log(
+                logger.debug(
+                    "Task %s: LangGraph rerouted from '%s' to '%s'.",
                     task_run_id,
-                    "LangGraph rerouted from '%s' to '%s'.",
                     last_node,
                     node_name,
                 )
-            _human_task_log(
+            if not graph_path or graph_path[-1] != node_name:
+                graph_path.append(node_name)
+            logger.debug(
+                "Task %s: Node '%s'%s %s.",
                 task_run_id,
-                "Node '%s'%s %s.",
                 node_name,
                 namespace_prefix,
                 _update_preview(payload),
             )
+            _append_graph_step(graph_steps, node_name, _update_preview(payload))
             last_node = node_name
         return last_node, None
 
@@ -258,6 +328,7 @@ def _dispatch_subprocess(
     spec: AgentSpec,
     task: str,
     *,
+    references: list[str] | None = None,
     human_approved: bool = False,
     approval_token: str | None = None,
     request_id: str | None = None,
@@ -280,12 +351,14 @@ def _dispatch_subprocess(
                 "agent_request_id": request_id,
                 "runtime_mode": "subprocess",
             },
+            human_log=False,
         )
         get_task_run_store().transition(
             task_run_id,
             TASK_STATE_IN_PROGRESS,
             detail=f"Specialist agent '{spec.id}' is running.",
             selected_agent_id=spec.id,
+            human_log=False,
         )
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -293,17 +366,8 @@ def _dispatch_subprocess(
         output_file = Path(tmpdir) / "output.json"
         progress_file = Path(tmpdir) / "progress.jsonl"
 
-        input_data = {
-            "request_id": request_id,
-            "run_id": task_run_id,
-            "task": task,
-            "source": "agent-hub",
-            "execution_mode": runtime["default_execution_mode"],
-            "progress_jsonl": str(progress_file),
-        }
         project_root = _current_project_for_task_run(task_run_id)
         if project_root:
-            input_data["project_root"] = project_root
             _human_task_log(
                 task_run_id,
                 "Passing project path to %s: %s",
@@ -312,10 +376,18 @@ def _dispatch_subprocess(
             )
         else:
             logger.debug("Dispatching %s with no project_root (specialist default)", spec.id)
-        if human_approved:
-            input_data["human_approved"] = True
-            if approval_token:
-                input_data["approval_token"] = approval_token
+        input_data = build_task_envelope(
+            task=task,
+            request_id=request_id,
+            run_id=task_run_id,
+            source="agent-hub",
+            execution_mode=runtime["default_execution_mode"],
+            progress_jsonl=str(progress_file),
+            project_root=project_root,
+            references=references,
+            human_approved=human_approved,
+            approval_token=approval_token,
+        )
         input_file.write_text(json.dumps(input_data, indent=2), encoding="utf-8")
 
         input_arg = runtime["input_arg"]
@@ -382,8 +454,6 @@ def _dispatch_subprocess(
         if handle is not None and handle.cancel_requested:
             raise TaskCancelled(handle.cancellation_reason or "Stopped by user")
 
-        progress_tailer.ensure_progress_started()
-
         if not output_file.exists():
             raise RuntimeError(
                 f"Agent '{spec.id}' subprocess (exit={proc.returncode}) wrote no output.\n"
@@ -391,6 +461,8 @@ def _dispatch_subprocess(
             )
 
         output = json.loads(output_file.read_text(encoding="utf-8"))
+        if output.get("status") not in ("needs_clarification", "approval_required"):
+            progress_tailer.ensure_progress_started()
         _human_task_log(
             task_run_id,
             "%s finished with status '%s'.",
@@ -423,7 +495,6 @@ def _dispatch_factory_brain(
         spec.id,
         action,
     )
-
     if task_run_id:
         get_task_run_store().transition(
             task_run_id,
@@ -435,12 +506,14 @@ def _dispatch_factory_brain(
                 "agent_thread_id": resolved_thread_id,
                 "runtime_mode": "factory_brain",
             },
+            human_log=False,
         )
         get_task_run_store().transition(
             task_run_id,
             TASK_STATE_IN_PROGRESS,
             detail=f"Specialist agent '{spec.id}' is running.",
             selected_agent_id=spec.id,
+            human_log=False,
         )
 
     if action == "resume":
@@ -528,6 +601,33 @@ def _format_output(spec: AgentSpec, output: dict) -> str:
     )
 
 
+_RELAY_VERBATIM_MARKERS = ("] Clarification needed:", "] Approval required:")
+
+
+def _relay_specialist_terminal_message(messages: list[Any]) -> str | None:
+    """Return the specialist's own clarification/approval text verbatim, if the
+    graph's final answer immediately followed one.
+
+    create_react_agent always routes tool results back through the LLM for a
+    final reply, even when the tool result is already the exact structured
+    question the user needs to see (see _format_output). Rewriting that text
+    adds nothing and risks paraphrasing away detail (or the approval token),
+    so for those two terminal statuses Hub relays the specialist's own text
+    instead of the model's second-pass rewrite.
+    """
+    for message in reversed(messages[:-1]):
+        if isinstance(message, HumanMessage):
+            return None
+        if isinstance(message, ToolMessage):
+            content = message.content
+            if isinstance(content, str) and content.startswith("["):
+                first_line = content.split("\n", 1)[0]
+                if any(marker in first_line for marker in _RELAY_VERBATIM_MARKERS):
+                    return content
+            return None
+    return None
+
+
 def _record_agent_status(spec: AgentSpec, output: dict, task_run_id: str | None) -> None:
     if not task_run_id:
         return
@@ -537,43 +637,28 @@ def _record_agent_status(spec: AgentSpec, output: dict, task_run_id: str | None)
     summary = output.get("summary", "")
 
     if status == "needs_clarification":
-        _human_task_log(
-            task_run_id,
-            "%s needs clarification: %s",
-            spec.name,
-            summary or "no details provided.",
-        )
+        detail = f"{spec.name} requested clarification" + (f": {summary}" if summary else ".")
         store.transition(
             task_run_id,
             TASK_STATE_WAITING_CLARIFICATION,
-            detail=summary or f"Agent '{spec.id}' requested clarification.",
+            detail=detail,
             selected_agent_id=spec.id,
         )
     elif status == "approval_required":
-        _human_task_log(
-            task_run_id,
-            "%s is waiting for approval: %s",
-            spec.name,
-            summary or "no details provided.",
-        )
+        detail = f"{spec.name} requested approval" + (f": {summary}" if summary else ".")
         store.transition(
             task_run_id,
             TASK_STATE_WAITING_APPROVAL,
-            detail=summary or f"Agent '{spec.id}' requested approval.",
+            detail=detail,
             selected_agent_id=spec.id,
             approval_token=output.get("approval_token"),
         )
     elif status == "failed":
-        _human_task_log(
-            task_run_id,
-            "%s reported a failure: %s",
-            spec.name,
-            summary or "no summary provided.",
-        )
+        detail = f"{spec.name} reported a failure" + (f": {summary}" if summary else ".")
         store.transition(
             task_run_id,
             TASK_STATE_FAILED,
-            detail=summary or f"Agent '{spec.id}' returned a terminal failure.",
+            detail=detail,
             selected_agent_id=spec.id,
             error_message=summary,
         )
@@ -591,23 +676,19 @@ def _make_agent_tool(spec: AgentSpec) -> Any:
     description = get_manifest_cache().description_for(spec)
 
     @lc_tool(spec.id, description=description)
-    def _call_agent(task: str) -> str:
+    def _call_agent(task: str, references: list[str] | None = None) -> str:
         task_run_id = get_current_task_run_id()
-        _human_task_log(
-            task_run_id,
-            "Hub chose %s (%s).",
-            spec.name,
-            spec.id,
-        )
         if task_run_id:
             get_task_run_store().transition(
                 task_run_id,
                 TASK_STATE_ROUTED,
-                detail=f"Hub routed task to specialist agent '{spec.id}'.",
+                detail=f"Routed to {spec.name}.",
                 selected_agent_id=spec.id,
             )
         if mode == "subprocess":
-            return _format_output(spec, _dispatch_subprocess(spec, task))
+            return _format_output(
+                spec, _dispatch_subprocess(spec, task, references=references)
+            )
         if mode == "factory_brain":
             return _format_output(spec, _dispatch_factory_brain(spec, task))
         raise RuntimeError(f"Unsupported runtime mode: {mode}")
@@ -615,8 +696,70 @@ def _make_agent_tool(spec: AgentSpec) -> Any:
     return _call_agent
 
 
-def _build_memory_tools(store: Any) -> list[Any]:
-    return [make_shared_docs_tool()]
+def _build_memory_tools(store: Any, registry: list[AgentSpec]) -> list[Any]:
+    return [make_shared_docs_tool(registry)]
+
+
+def _repair_dangling_tool_calls(graph: Any, thread_id: str, reason: str) -> list[str]:
+    """Close out any checkpointed AIMessage tool_calls left without a ToolMessage.
+
+    A specialist dispatch killed mid-call (process crash, forced subprocess
+    termination, Ctrl-C/SIGTERM to the whole Hub process) can leave the
+    LangGraph checkpoint for a thread holding an AIMessage that requested a
+    tool call with no matching ToolMessage. The next graph call on that same
+    thread then fails LangGraph's chat-history validation before ever
+    reaching the model. Since session_id now survives a restart (see
+    AGENT-HUB-032), that corruption is persistent rather than quietly
+    discarded by a fresh thread, so it must be repaired here, defensively,
+    before every graph call.
+    """
+    if not hasattr(graph, "get_state") or not hasattr(graph, "update_state"):
+        return []
+    config = {"configurable": {"thread_id": thread_id}}
+    try:
+        snapshot = graph.get_state(config)
+    except Exception:
+        logger.exception("Could not read graph state for thread %s while repairing", thread_id)
+        return []
+    values = getattr(snapshot, "values", None) if snapshot is not None else None
+    messages = list(values.get("messages", [])) if isinstance(values, dict) else []
+    if not messages:
+        return []
+
+    answered_ids = {
+        getattr(message, "tool_call_id", None)
+        for message in messages
+        if isinstance(message, ToolMessage)
+    }
+    repaired_ids: list[str] = []
+    synthetic_messages: list[ToolMessage] = []
+    for message in messages:
+        for call in getattr(message, "tool_calls", None) or []:
+            call_id = call.get("id") if isinstance(call, dict) else getattr(call, "id", None)
+            if not call_id or call_id in answered_ids:
+                continue
+            call_name = (
+                call.get("name") if isinstance(call, dict) else getattr(call, "name", None)
+            ) or "unknown-tool"
+            synthetic_messages.append(
+                ToolMessage(content=f"Cancelled: {reason}", tool_call_id=call_id, name=call_name)
+            )
+            repaired_ids.append(call_id)
+
+    if synthetic_messages:
+        graph.update_state(config, {"messages": synthetic_messages})
+        human_logger.info(
+            "Hub repaired %d interrupted specialist call(s) left over from a previous "
+            "session before continuing.",
+            len(synthetic_messages),
+        )
+        logger.warning(
+            "Repaired %d dangling tool call(s) on thread %s: %s",
+            len(synthetic_messages),
+            thread_id,
+            repaired_ids,
+        )
+    return repaired_ids
 
 
 class HubOrchestrator:
@@ -630,7 +773,7 @@ class HubOrchestrator:
     ) -> None:
         self._model = model
         self._registry = _load_specialists()
-        self._session_id = str(uuid.uuid4())
+        self._session_id = load_or_create_session_id()
         self._semantic_extractor = semantic_extractor or extract_semantic_candidates
         self._learning_notify: Any = None
         self._learning_watermark: dict[str, Any] = {}
@@ -650,7 +793,7 @@ class HubOrchestrator:
         checkpointer = get_checkpointer()
 
         agent_tools = [_make_agent_tool(s) for s in self._registry]
-        memory_tools = _build_memory_tools(store)
+        memory_tools = _build_memory_tools(store, self._registry)
         tools = agent_tools + memory_tools
 
         llm = ChatOpenAI(model=self._model, temperature=0)
@@ -683,6 +826,7 @@ class HubOrchestrator:
     def _rotate_session(self, *, carry_active_work: bool) -> None:
         previous_session_id = self._session_id
         self._session_id = str(uuid.uuid4())
+        persist_session_id(self._session_id)
         if carry_active_work:
             human_logger.info(
                 "Started a new hub conversation. Future turns use a fresh LangGraph thread "
@@ -1030,11 +1174,17 @@ class HubOrchestrator:
         )
         thread_id = f"{self._session_id}:{project_key}"
         logger.debug("Task %s: project=%s thread_id=%s", task_run.id[:8], project_key, thread_id)
+        _repair_dangling_tool_calls(
+            self._graph, thread_id, "Interrupted before the specialist could reply."
+        )
         config = {"configurable": {"thread_id": thread_id}}
         usage_cb = UsageMetadataCallbackHandler()
         run_config = {**config, "callbacks": [usage_cb]}
         started_at = time.perf_counter()
         get_task_control_registry().register_run(task_run.id)
+        graph_path: list[str] = []
+        graph_steps: list[tuple[str, str]] = []
+        graph_trace_emitted = False
         try:
             with active_task_run(task_run.id, progress_callback=progress_notify):
                 if hasattr(self._graph, "stream"):
@@ -1046,7 +1196,7 @@ class HubOrchestrator:
                         stream_mode=["tasks", "updates", "values"],
                     ):
                         last_node, streamed_values = _consume_graph_stream_event(
-                            task_run.id, event, last_node
+                            task_run.id, event, last_node, graph_path, graph_steps
                         )
                         if streamed_values is not None:
                             result = streamed_values
@@ -1061,7 +1211,12 @@ class HubOrchestrator:
             if not messages:
                 raise RuntimeError("Orchestrator returned no messages.")
 
-            reply = messages[-1].content
+            graph_trace = _render_graph_trace(graph_path, graph_steps)
+            if graph_trace:
+                logger.debug("Task %s: %s", task_run.id, graph_trace)
+                graph_trace_emitted = True
+
+            reply = _relay_specialist_terminal_message(messages) or messages[-1].content
             run_record = _record_orchestrator_llm_run(
                 requested_model=self._model,
                 effective_model=self._model,
@@ -1103,6 +1258,9 @@ class HubOrchestrator:
 
             return reply
         except TaskCancelled:
+            graph_trace = _render_graph_trace(graph_path, graph_steps)
+            if graph_trace and not graph_trace_emitted:
+                logger.debug("Task %s: %s", task_run.id, graph_trace)
             current = task_store.get_run(task_run.id)
             if current is not None and current.state == TASK_STATE_CANCELLED:
                 raise
@@ -1116,6 +1274,9 @@ class HubOrchestrator:
             )
             raise
         except Exception as exc:
+            graph_trace = _render_graph_trace(graph_path, graph_steps)
+            if graph_trace and not graph_trace_emitted:
+                logger.debug("Task %s: %s", task_run.id, graph_trace)
             _human_task_log(task_run.id, "Hub orchestration failed: %s", exc)
             run_record = _record_orchestrator_llm_run(
                 requested_model=self._model,
@@ -1171,6 +1332,39 @@ class HubOrchestrator:
             if spec.id == agent_id:
                 return spec
         raise RuntimeError(f"Selected agent is no longer registered: {agent_id}")
+
+
+def cancel_all_active_tasks(reason: str) -> list[str]:
+    """Terminate every in-flight specialist subprocess and mark its run cancelled.
+
+    Call this on graceful shutdown (Ctrl-C, SIGTERM). Without it, stopping the
+    Hub process leaves any dispatched specialist subprocess running headless
+    in its own process group (see subprocess_popen_kwargs) with no parent left
+    to record its result, and the task-run row stuck at in_progress forever.
+    Paused runs (waiting on approval/clarification) have no live process
+    attached and are intentionally left alone — they are durable and resume
+    normally after a restart.
+    """
+    registry = get_task_control_registry()
+    store = get_task_run_store()
+    cancelled_run_ids: list[str] = []
+    for run_id in registry.list_active_run_ids():
+        registry.request_cancel(run_id, reason)
+        current = store.get_run(run_id)
+        if current is None or is_terminal_state(current.state):
+            continue
+        store.transition(
+            run_id,
+            TASK_STATE_CANCELLED,
+            detail=f"Hub shutdown cancelled the task: {reason}",
+            selected_agent_id=current.selected_agent_id,
+            final_response=f"Cancelled: {reason}",
+            cancellation_reason=reason,
+            raw_result={"status": "cancelled", "summary": reason},
+        )
+        _human_task_log(run_id, "Hub marked the task as cancelled due to shutdown.")
+        cancelled_run_ids.append(run_id)
+    return cancelled_run_ids
 
 
 def _load_specialists() -> list[AgentSpec]:

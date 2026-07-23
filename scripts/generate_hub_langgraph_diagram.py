@@ -26,7 +26,10 @@ MMD_PATH = DIAGRAM_BASE.with_suffix(".mmd")
 SVG_PATH = DIAGRAM_BASE.with_suffix(".svg")
 
 LANGGRAPH_TOOL_NODES = [
-    ("search_shared_docs", "Search shared docs<br/>(hub + factory)"),
+    (
+        "search_shared_docs",
+        "Callable tool: search_shared_docs<br/>shared hub/factory context",
+    ),
 ]
 
 
@@ -38,7 +41,7 @@ def render_agent_nodes(registry: Iterable[object]) -> str:
     lines = []
     for spec in registry:
         node_id = sanitize_id("agent", spec.id)
-        label = f"{spec.name}<br/>({spec.id})"
+        label = f"Callable tool: {spec.id}<br/>{spec.name} specialist"
         lines.append(f"    {node_id}[\"{label}\"]")
     return "\n".join(lines)
 
@@ -70,7 +73,7 @@ def build_mermaid(registry: Iterable[object]) -> str:
     You([You])
     Hub[\"Hub Orchestrator<br/>(LangGraph react agent)\"]
 
-    subgraph Tools[\"Hub tools\"]
+    subgraph Tools[\"Tools callable from LangGraph\"]
 {rendered_tool_nodes}
 {agent_nodes}
     end
@@ -80,7 +83,7 @@ def build_mermaid(registry: Iterable[object]) -> str:
 
     classDef note fill:#fff8dc,stroke:#e6a817;
     note[\"Generated from current registry and HubOrchestrator LangGraph tool wiring\"]:::note
-    commands_note[\"/learn, /memory, and /forget are operator commands<br/>outside the LangGraph tool list\"]:::note
+    commands_note[\"This is a callable-tool map, not a LangGraph node map.<br/>/learn, /memory, and /forget stay outside the tool list.\"]:::note
     Hub --> note
     Hub -.-> commands_note
 """

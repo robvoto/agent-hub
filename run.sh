@@ -11,7 +11,7 @@ case "$MODE" in
     uv run agent-hub telegram "${@:2}"
     ;;
   *)
-    echo "Usage: $0 [chat|telegram] [--verbose]"
+    echo "Usage: $0 [chat|telegram] [--verbose|--debug|--log-level LEVEL]"
     exit 1
     ;;
 esac

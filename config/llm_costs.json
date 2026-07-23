@@ -28,8 +28,10 @@
       "output_per_1m": 1.25
     },
     "gpt-4.1-mini": {
-      "status": "unknown",
-      "notes": "No verified base pricing in the current official pricing snapshot. Logs will record token counts but leave cost unknown until this entry is updated."
+      "input_per_1m": 0.4,
+      "cached_input_per_1m": 0.1,
+      "output_per_1m": 1.6,
+      "notes": "gpt-4.1-mini has been superseded on OpenAI's current official pricing page (only gpt-5.x models are listed there now). Rate cross-checked against OpenRouter/third-party trackers reflecting OpenAI's original published price, not re-verified on openai.com directly."
     }
   }
 }

@@ -15,7 +15,8 @@ Read only the smallest document needed for the task.
 
 - `diagrams/INDEX.md` - diagram index
 - `diagrams/05-HUB-ROUTING.md` - hub routing flow
-- `diagrams/07-HUB-LANGGRAPH-TOOLS.mmd` / `.svg` - generated LangGraph/tool wiring, if present
+- `diagrams/07-HUB-LANGGRAPH-TOOLS.md` - generated LangGraph/tool wiring
+
 ## Runtime code map
 
 - `../src/agent_hub/orchestrator.py` - LangGraph orchestrator

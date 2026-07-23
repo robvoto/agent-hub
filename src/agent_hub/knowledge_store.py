@@ -1,7 +1,8 @@
-"""Hub knowledge store — persistent SQLite-backed store for hub runtime knowledge.
+"""Hub knowledge store — persistent SQLite-backed store for hub-owned runtime knowledge.
 
-All agents dispatched by the hub share this namespace so knowledge compounds
-across sessions and tasks.
+This store is shared across Hub sessions and Hub-level tools such as routed
+prompt context and shared-doc search. Specialist agents may use their own
+separate repos and stores; they do not implicitly share this database.
 """
 
 from __future__ import annotations

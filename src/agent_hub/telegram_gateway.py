@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import signal
 import threading
 import time
 from collections import deque
@@ -12,7 +13,7 @@ from typing import Any
 import httpx
 
 from .log_config import get_human_logger
-from .orchestrator import HubOrchestrator
+from .orchestrator import HubOrchestrator, cancel_all_active_tasks
 from .progress_events import ProgressUpdate
 from .task_control import TaskCancelled
 
@@ -21,11 +22,25 @@ human_logger = get_human_logger()
 
 _POLL_TIMEOUT = 30
 _API_BASE = os.getenv("TELEGRAM_API_BASE", "https://api.telegram.org")
+# Startup only: updates already queued when Hub was down longer than this are treated
+# as stale backlog and skipped. Anything newer (e.g. a message sent right as Hub was
+# restarting) is processed normally instead of silently dropped.
+_STARTUP_STALE_SECONDS = 60.0
+
+
+def _raise_keyboard_interrupt(signum: int, frame: Any) -> None:
+    raise KeyboardInterrupt()
 
 
 def _truncate(text: str, limit: int = 200) -> str:
     text = " ".join(text.split())
     return text if len(text) <= limit else f"{text[:limit]}…"
+
+
+def _update_timestamp(update: dict) -> float | None:
+    msg = update.get("message") or update.get("edited_message")
+    date = msg.get("date") if isinstance(msg, dict) else None
+    return float(date) if isinstance(date, (int, float)) else None
 
 
 def _api(token: str, method: str, **kwargs: Any) -> dict:
@@ -317,11 +332,29 @@ class TelegramGateway:
             return 0
 
         next_offset = max(int(update["update_id"]) for update in updates) + 1
-        human_logger.info(
-            "Skipping %d queued Telegram update(s) on startup; next offset=%d",
-            len(updates),
-            next_offset,
-        )
+
+        now = time.time()
+        stale = []
+        fresh = []
+        for update in updates:
+            timestamp = _update_timestamp(update)
+            if timestamp is not None and now - timestamp > _STARTUP_STALE_SECONDS:
+                stale.append(update)
+            else:
+                fresh.append(update)
+
+        if stale:
+            human_logger.info(
+                "Skipping %d queued Telegram update(s) older than %ds on startup; "
+                "next offset=%d",
+                len(stale),
+                int(_STARTUP_STALE_SECONDS),
+                next_offset,
+            )
+
+        for update in fresh:
+            self._handle_update(update)
+
         return next_offset
 
     def _process_user_message(self, chat_id: int, text: str) -> None:
@@ -373,6 +406,7 @@ class TelegramGateway:
             self._orch.session_id,
             _API_BASE,
         )
+        previous_sigterm_handler = signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
         offset = self._prime_offset()
         try:
             while True:
@@ -383,7 +417,19 @@ class TelegramGateway:
                 if not updates:
                     time.sleep(1)
         except KeyboardInterrupt:
-            human_logger.info("Hub Telegram gateway stopped by user (Ctrl-C).")
+            self._shutdown()
+        finally:
+            signal.signal(signal.SIGTERM, previous_sigterm_handler)
+
+    def _shutdown(self) -> None:
+        cancelled = cancel_all_active_tasks("Hub Telegram gateway shut down.")
+        if cancelled:
+            human_logger.info(
+                "Cancelled %d in-flight task(s) on shutdown: %s",
+                len(cancelled),
+                ", ".join(run_id[:8] for run_id in cancelled),
+            )
+        human_logger.info("Hub Telegram gateway stopped by user (Ctrl-C).")
 
 
 def run_telegram(token: str | None = None) -> None:
