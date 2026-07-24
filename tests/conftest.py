@@ -27,7 +27,8 @@ def sample_registry_dir(tmp_path):
     (registry / "code-reviewer").mkdir(parents=True)
     (registry / "code-reviewer" / "agent.json").write_text(
         '{"id": "code-reviewer", "name": "Code Reviewer", "purpose": "Reviews code for quality",'
-        ' "aliases": ["reviewer"], "tools": ["read_file"], "version": "1.0.0"}'
+        ' "aliases": ["reviewer"], "tools": ["read_file"], "version": "1.0.0",'
+        ' "hub_integration": {"protocol": "subprocess", "supports_clarification": true}}'
     )
     (registry / "job-hunter").mkdir()
     (registry / "job-hunter" / "agent.json").write_text(
