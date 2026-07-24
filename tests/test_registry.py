@@ -30,6 +30,7 @@ def test_load_registry_parses_fields(sample_registry_dir):
     assert reviewer.purpose == "Reviews code for quality"
     assert reviewer.tools == ["read_file"]
     assert reviewer.version == "1.0.0"
+<<<<<<< HEAD
     assert reviewer.runtime["mode"] == "subprocess"
 
 
@@ -55,6 +56,18 @@ def test_load_registry_captures_unknown_fields_as_extensions(tmp_path):
         "webhook_url": "https://example.invalid/hook",
         "backlog_sheet_id": "some-sheet-id",
     }
+=======
+    assert reviewer.hub_integration == {
+        "protocol": "subprocess",
+        "supports_clarification": True,
+    }
+
+
+def test_load_registry_defaults_missing_hub_integration(sample_registry_dir):
+    specs = load_registry(sample_registry_dir)
+    job_hunter = next(s for s in specs if s.id == "job-hunter")
+    assert job_hunter.hub_integration == {}
+>>>>>>> e15201dc05d3c1c51c5ab409940bae090e360359
 
 
 def test_load_registry_skips_missing_json(tmp_path):

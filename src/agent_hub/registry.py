@@ -52,26 +52,7 @@ class AgentSpec:
     input_contract: dict = field(default_factory=dict)
     interaction_contract: dict = field(default_factory=dict)
     runtime: dict = field(default_factory=dict)
-    extensions: dict = field(default_factory=dict)
-
-
-def parse_agent_spec(data: dict) -> AgentSpec:
-    """Build an AgentSpec from a raw agent.json dict.
-
-    Shared by the registry loader and startup health validation so both read
-    exactly the same fields and can't drift from each other.
-    """
-    return AgentSpec(
-        id=data["id"],
-        name=data.get("name", data["id"]),
-        purpose=data.get("purpose", ""),
-        tools=data.get("tools", []),
-        version=data.get("version", "1.0.0"),
-        input_contract=data.get("input_contract", {}),
-        interaction_contract=data.get("interaction_contract", {}),
-        runtime=data.get("runtime", {}),
-        extensions={key: value for key, value in data.items() if key not in _CORE_FIELDS},
-    )
+    hub_integration: dict = field(default_factory=dict)
 
 
 def load_registry(registry_dir: Path | None = None) -> list[AgentSpec]:
@@ -94,8 +75,17 @@ def load_registry(registry_dir: Path | None = None) -> list[AgentSpec]:
             continue
         try:
             data = json.loads(spec_file.read_text(encoding="utf-8"))
-            spec = parse_agent_spec(data)
-            validate_runtime_config(spec.id, spec.runtime)
+            spec = AgentSpec(
+                id=data["id"],
+                name=data.get("name", data["id"]),
+                purpose=data.get("purpose", ""),
+                aliases=data.get("aliases", []),
+                tools=data.get("tools", []),
+                version=data.get("version", "1.0.0"),
+                backlog_sheet_id=data.get("backlog_sheet_id"),
+                runtime=data.get("runtime", {}),
+                hub_integration=data.get("hub_integration", {}),
+            )
             specs.append(spec)
             logger.debug("Loaded agent: %s (%s)", spec.id, spec.version)
         except Exception as exc:
