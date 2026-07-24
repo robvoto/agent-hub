@@ -332,14 +332,29 @@ def _dispatch_subprocess(
     human_approved: bool = False,
     approval_token: str | None = None,
     request_id: str | None = None,
+    resume: Any | None = None,
+    project_root_override: str | None = None,
 ) -> dict:
-    """Invoke a subprocess specialist and return its structured JSON output."""
+    """Invoke a subprocess specialist and return its structured JSON output.
+
+    `resume` is an opaque value a specialist itself issued (its own
+    `resume_token`) when it last paused for clarification — Hub relays it
+    unchanged and never inspects its contents. `project_root_override`
+    replays the exact project the *original* dispatch used, for a true-resume
+    call, instead of re-deriving the operator's current `/project` selection
+    (which could have changed while the task was paused).
+    """
     runtime = spec.runtime
     entrypoint = runtime["entrypoint"]
     working_dir = runtime["working_directory"]
 
     request_id = request_id or str(uuid.uuid4())
     task_run_id = get_current_task_run_id()
+    project_root = (
+        project_root_override
+        if project_root_override is not None
+        else _current_project_for_task_run(task_run_id)
+    )
     if task_run_id:
         get_task_run_store().transition(
             task_run_id,
@@ -350,6 +365,8 @@ def _dispatch_subprocess(
             context_updates={
                 "agent_request_id": request_id,
                 "runtime_mode": "subprocess",
+                "agent_dispatch_project_root": project_root,
+                "agent_dispatch_references": references,
             },
             human_log=False,
         )
@@ -366,7 +383,6 @@ def _dispatch_subprocess(
         output_file = Path(tmpdir) / "output.json"
         progress_file = Path(tmpdir) / "progress.jsonl"
 
-        project_root = _current_project_for_task_run(task_run_id)
         if project_root:
             _human_task_log(
                 task_run_id,
@@ -397,6 +413,7 @@ def _dispatch_subprocess(
             references=references,
             human_approved=human_approved,
             approval_token=approval_token,
+            resume=resume,
         )
         input_file.write_text(json.dumps(input_data, indent=2), encoding="utf-8")
 
@@ -638,6 +655,27 @@ def _relay_specialist_terminal_message(messages: list[Any]) -> str | None:
     return None
 
 
+_MAX_RESUME_TOKEN_BYTES = 8192
+
+
+def _bounded_resume_token(value: Any) -> Any | None:
+    """Return `value` if it's JSON-serializable and reasonably small, else None.
+
+    A specialist's resume_token is opaque to Hub — this only guards against
+    an oversized or non-serializable value corrupting the stored task
+    context, never against anything about what the token means.
+    """
+    if value is None:
+        return None
+    try:
+        encoded = json.dumps(value)
+    except (TypeError, ValueError):
+        return None
+    if len(encoded.encode("utf-8")) > _MAX_RESUME_TOKEN_BYTES:
+        return None
+    return value
+
+
 def _record_agent_status(spec: AgentSpec, output: dict, task_run_id: str | None) -> None:
     if not task_run_id:
         return
@@ -648,11 +686,21 @@ def _record_agent_status(spec: AgentSpec, output: dict, task_run_id: str | None)
 
     if status == "needs_clarification":
         detail = f"{spec.name} requested clarification" + (f": {summary}" if summary else ".")
+        raw_resume_token = output.get("resume_token")
+        resume_token = _bounded_resume_token(raw_resume_token)
+        if raw_resume_token is not None and resume_token is None:
+            logger.warning(
+                "Task %s: %s returned an oversized or non-serializable resume_token; "
+                "treating it as absent.",
+                task_run_id,
+                spec.name,
+            )
         store.transition(
             task_run_id,
             TASK_STATE_WAITING_CLARIFICATION,
             detail=detail,
             selected_agent_id=spec.id,
+            context_updates={"specialist_resume_token": resume_token},
         )
     elif status == "approval_required":
         detail = f"{spec.name} requested approval" + (f": {summary}" if summary else ".")
@@ -1128,8 +1176,38 @@ class HubOrchestrator:
             return self.invoke(clarification, progress_notify=progress_notify)
 
         spec = self._require_spec(pending.selected_agent_id)
-        _human_task_log(pending.id, "Clarification received. Resuming %s.", spec.name)
         store = get_task_run_store()
+
+        true_resume = spec.runtime["mode"] != "factory_brain" and bool(
+            spec.interaction_contract.get("resume")
+        )
+        if true_resume and pending.context.get("specialist_resume_token") is None:
+            # The specialist declared true resume support but Hub has no
+            # resume state recorded for this pause — do not guess by falling
+            # back to the reconstructed-task shape, which may not even be a
+            # request a true-resume specialist knows how to interpret.
+            message = (
+                f"[{spec.name}] Cannot resume: no resume state was recorded "
+                "for this paused task."
+            )
+            _human_task_log(
+                pending.id,
+                "Clarification received, but %s declares true resume support "
+                "and no resume state was recorded. Failing clearly instead of "
+                "guessing.",
+                spec.name,
+            )
+            store.transition(
+                pending.id,
+                TASK_STATE_FAILED,
+                detail="Specialist declares resume support but no resume state was recorded.",
+                selected_agent_id=spec.id,
+                final_response=message,
+                error_message="Missing specialist_resume_token for a resume-capable specialist.",
+            )
+            return message
+
+        _human_task_log(pending.id, "Clarification received. Resuming %s.", spec.name)
         store.transition(
             pending.id,
             TASK_STATE_ROUTED,
@@ -1143,6 +1221,15 @@ class HubOrchestrator:
                     clarification,
                     thread_id=pending.context.get("agent_thread_id"),
                     action="invoke",
+                )
+            elif true_resume:
+                output = _dispatch_subprocess(
+                    spec,
+                    clarification,
+                    request_id=pending.context.get("agent_request_id"),
+                    resume=pending.context.get("specialist_resume_token"),
+                    project_root_override=pending.context.get("agent_dispatch_project_root"),
+                    references=pending.context.get("agent_dispatch_references"),
                 )
             else:
                 resumed_task = (

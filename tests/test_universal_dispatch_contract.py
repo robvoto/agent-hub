@@ -75,7 +75,10 @@ def _write_fake_specialist_manifest(registry_dir: Path, working_directory: Path)
             "progress": False,
             "clarification": True,
             "approval": True,
-            "resume": True,
+            # This specialist uses Hub's universal reconstructed-task
+            # fallback, not true checkpoint resume (see
+            # test_specialist_clarification_resume.py for that contract).
+            "resume": False,
             "cancellation": True,
         },
         "runtime": {

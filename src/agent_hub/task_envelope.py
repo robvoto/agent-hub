@@ -26,12 +26,17 @@ def build_task_envelope(
     references: list[str] | None = None,
     human_approved: bool = False,
     approval_token: str | None = None,
+    resume: Any | None = None,
 ) -> dict[str, Any]:
     """Build the JSON payload written to a subprocess specialist's input file.
 
     `references` are user-provided or Hub-observed pointers (file paths,
     URLs, ticket IDs, etc.) passed through uninterpreted — Hub does not
     parse or act on their contents, only relays them.
+
+    `resume` is an opaque value a specialist previously issued as its own
+    `resume_token` when it paused for clarification. Hub relays it back
+    unchanged on the resumed dispatch; it never inspects what's inside.
     """
     envelope: dict[str, Any] = {
         "request_id": request_id,
@@ -49,4 +54,6 @@ def build_task_envelope(
         envelope["human_approved"] = True
         if approval_token:
             envelope["approval_token"] = approval_token
+    if resume is not None:
+        envelope["resume"] = resume
     return envelope
