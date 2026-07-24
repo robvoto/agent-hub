@@ -35,6 +35,16 @@ def test_load_registry_parses_fields(sample_registry_dir):
     assert reviewer.aliases == ["reviewer"]
     assert reviewer.tools == ["read_file"]
     assert reviewer.version == "1.0.0"
+    assert reviewer.hub_integration == {
+        "protocol": "subprocess",
+        "supports_clarification": True,
+    }
+
+
+def test_load_registry_defaults_missing_hub_integration(sample_registry_dir):
+    specs = load_registry(sample_registry_dir)
+    job_hunter = next(s for s in specs if s.id == "job-hunter")
+    assert job_hunter.hub_integration == {}
 
 
 def test_load_registry_skips_missing_json(tmp_path):
