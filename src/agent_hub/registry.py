@@ -10,9 +10,9 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from .config import AGENT_REGISTRY_DIR
-from .runtime_policy import validate_runtime_config
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +26,7 @@ _CORE_FIELDS = {
     "runtime",
     "input_contract",
     "interaction_contract",
+    "hub_integration",
 }
 
 
@@ -49,10 +50,30 @@ class AgentSpec:
     purpose: str
     tools: list[str] = field(default_factory=list)
     version: str = "1.0.0"
-    input_contract: dict = field(default_factory=dict)
-    interaction_contract: dict = field(default_factory=dict)
-    runtime: dict = field(default_factory=dict)
-    hub_integration: dict = field(default_factory=dict)
+    input_contract: dict[str, Any] = field(default_factory=dict)
+    interaction_contract: dict[str, Any] = field(default_factory=dict)
+    runtime: dict[str, Any] = field(default_factory=dict)
+    hub_integration: dict[str, Any] = field(default_factory=dict)
+    extensions: dict[str, Any] = field(default_factory=dict)
+
+
+def parse_agent_spec(data: dict[str, Any]) -> AgentSpec:
+    """Parse one agent.json object into the Hub's bounded runtime view."""
+    if not isinstance(data, dict):
+        raise ValueError("agent.json must contain a JSON object.")
+
+    return AgentSpec(
+        id=data["id"],
+        name=data.get("name", data["id"]),
+        purpose=data.get("purpose", ""),
+        tools=list(data.get("tools", [])),
+        version=data.get("version", "1.0.0"),
+        input_contract=dict(data.get("input_contract", {})),
+        interaction_contract=dict(data.get("interaction_contract", {})),
+        runtime=dict(data.get("runtime", {})),
+        hub_integration=dict(data.get("hub_integration", {})),
+        extensions={key: value for key, value in data.items() if key not in _CORE_FIELDS},
+    )
 
 
 def load_registry(registry_dir: Path | None = None) -> list[AgentSpec]:
@@ -75,17 +96,7 @@ def load_registry(registry_dir: Path | None = None) -> list[AgentSpec]:
             continue
         try:
             data = json.loads(spec_file.read_text(encoding="utf-8"))
-            spec = AgentSpec(
-                id=data["id"],
-                name=data.get("name", data["id"]),
-                purpose=data.get("purpose", ""),
-                aliases=data.get("aliases", []),
-                tools=data.get("tools", []),
-                version=data.get("version", "1.0.0"),
-                backlog_sheet_id=data.get("backlog_sheet_id"),
-                runtime=data.get("runtime", {}),
-                hub_integration=data.get("hub_integration", {}),
-            )
+            spec = parse_agent_spec(data)
             specs.append(spec)
             logger.debug("Loaded agent: %s (%s)", spec.id, spec.version)
         except Exception as exc:
