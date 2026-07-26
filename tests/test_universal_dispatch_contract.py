@@ -34,6 +34,7 @@ from agent_hub.task_runs import (
     TASK_STATE_SUCCEEDED,
     TASK_STATE_WAITING_APPROVAL,
     TASK_STATE_WAITING_CLARIFICATION,
+    TASK_STATE_WAITING_DECISION,
     active_task_run,
     get_task_run_store,
 )
@@ -248,6 +249,90 @@ def test_widget_forge_discovered_and_dispatched_through_universal_envelope(
         TASK_STATE_IN_PROGRESS,
         TASK_STATE_SUCCEEDED,
     ]
+
+
+def test_widget_forge_resumes_a_generic_pending_decision_via_decide(
+    monkeypatch, tmp_path, caplog
+):
+    """A specialist can pause with a structured `pending_decision` (prompt +
+    named options) instead of the fixed approval shape, and Hub relays and
+    resumes it generically — no widget-forge-specific code exists for this
+    path either, proving the mechanism works for any option set a specialist
+    invents, not just approve/reject.
+    """
+    registry_dir = tmp_path / "agents"
+    working_directory = tmp_path / "workdir"
+    working_directory.mkdir()
+    _write_fake_specialist_manifest(registry_dir, working_directory)
+
+    specs = load_registry(registry_dir)
+    spec = specs[0]
+
+    _ScriptedFakePopen.calls = []
+    _ScriptedFakePopen.responses = [
+        {
+            "status": "waiting_decision",
+            "summary": "A decision is required.",
+            "pending_decision": {
+                "kind": "approval",
+                "thread_id": "subprocess-req-1",
+                "prompt": "Forge 3 widgets even though the mold is untested?",
+                "options": [
+                    {"name": "approve"},
+                    {"name": "request_changes", "needs_text": True},
+                    {"name": "cancel"},
+                ],
+            },
+        },
+        {"status": "success", "summary": "Forged 3 widgets with the requested changes."},
+    ]
+    monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _UnusedGraph())
+
+    orchestrator = HubOrchestrator()
+    run = get_task_run_store().create_run(
+        session_id=orchestrator.session_id, user_message="Forge some widgets"
+    )
+    tool = _make_agent_tool(spec)
+    with caplog.at_level(logging.INFO, logger="agent_hub.human"), active_task_run(run.id):
+        reply = tool.invoke({"task": "Forge some widgets"})
+
+    # Hub relays the specialist's own prompt and named options generically.
+    assert "Forge 3 widgets even though the mold is untested?" in reply
+    assert "approve" in reply
+    assert "request_changes (needs text)" in reply
+    assert "cancel" in reply
+
+    paused = get_task_run_store().get_run(run.id)
+    assert paused is not None
+    assert paused.state == TASK_STATE_WAITING_DECISION
+    assert paused.context["specialist_pending_decision"]["options"] == [
+        {"name": "approve"},
+        {"name": "request_changes", "needs_text": True},
+        {"name": "cancel"},
+    ]
+
+    # An option the specialist didn't offer is rejected without dispatching.
+    rejected = orchestrator.provide_decision("bogus_option")
+    assert "not a valid option" in rejected
+    assert len(_ScriptedFakePopen.calls) == 1
+
+    # Resuming with a valid option resubmits the same request_id plus a
+    # decision object — no separate resume token is needed for this path.
+    reply = orchestrator.provide_decision("request_changes", "Make them square")
+
+    assert "Forged 3 widgets with the requested changes." in reply
+    final = get_task_run_store().get_run(run.id)
+    assert final is not None
+    assert final.state == TASK_STATE_SUCCEEDED
+    assert len(_ScriptedFakePopen.calls) == 2
+    assert _ScriptedFakePopen.calls[1]["request_id"] == _ScriptedFakePopen.calls[0]["request_id"]
+    assert _ScriptedFakePopen.calls[1]["decision"] == {
+        "option": "request_changes",
+        "text": "Make them square",
+        "actor": "human",
+    }
 
 
 class _UnusedGraph:

@@ -62,6 +62,7 @@ from .task_runs import (
     TASK_STATE_SUCCEEDED,
     TASK_STATE_WAITING_APPROVAL,
     TASK_STATE_WAITING_CLARIFICATION,
+    TASK_STATE_WAITING_DECISION,
     TaskRun,
     active_task_run,
     get_current_progress_callback,
@@ -333,16 +334,20 @@ def _dispatch_subprocess(
     approval_token: str | None = None,
     request_id: str | None = None,
     resume: Any | None = None,
+    decision: dict[str, Any] | None = None,
     project_root_override: str | None = None,
 ) -> dict:
     """Invoke a subprocess specialist and return its structured JSON output.
 
     `resume` is an opaque value a specialist itself issued (its own
     `resume_token`) when it last paused for clarification — Hub relays it
-    unchanged and never inspects its contents. `project_root_override`
-    replays the exact project the *original* dispatch used, for a true-resume
-    call, instead of re-deriving the operator's current `/project` selection
-    (which could have changed while the task was paused).
+    unchanged and never inspects its contents. `decision` answers a
+    specialist's generic `pending_decision` pause (see `provide_decision`)
+    and is identified by resubmitting the same `request_id`, not `resume`.
+    `project_root_override` replays the exact project the *original*
+    dispatch used, for a resumed call, instead of re-deriving the
+    operator's current `/project` selection (which could have changed
+    while the task was paused).
     """
     runtime = spec.runtime
     entrypoint = runtime["entrypoint"]
@@ -414,6 +419,7 @@ def _dispatch_subprocess(
             human_approved=human_approved,
             approval_token=approval_token,
             resume=resume,
+            decision=decision,
         )
         input_file.write_text(json.dumps(input_data, indent=2), encoding="utf-8")
 
@@ -488,7 +494,10 @@ def _dispatch_subprocess(
             )
 
         output = json.loads(output_file.read_text(encoding="utf-8"))
-        if output.get("status") not in ("needs_clarification", "approval_required"):
+        if output.get("status") not in (
+            "needs_clarification",
+            "approval_required",
+        ) and _valid_pending_decision(output.get("pending_decision")) is None:
             progress_tailer.ensure_progress_started()
         _human_task_log(
             task_run_id,
@@ -591,6 +600,45 @@ def _dispatch_factory_brain(
     return output
 
 
+def _valid_pending_decision(value: Any) -> dict[str, Any] | None:
+    """Return `value` if it's a well-formed generic decision descriptor, else None.
+
+    A specialist reports `pending_decision` as `{prompt, options, ...}` when
+    it pauses on something it can describe generically. Hub only ever reads
+    `prompt` (text to show the user) and each option's `name` (the exact
+    `decision.option` values valid right now) — any other key (e.g. a
+    specialist's own internal `kind`) is stored and relayed back opaquely,
+    never interpreted. A missing or empty `options` list means the
+    specialist itself couldn't describe the pause generically, so Hub
+    treats it as absent rather than offering the user nothing to pick from.
+    """
+    if not isinstance(value, dict):
+        return None
+    options = value.get("options")
+    if not isinstance(options, list) or not options:
+        return None
+    for option in options:
+        if not isinstance(option, dict) or not str(option.get("name", "")).strip():
+            return None
+    return value
+
+
+def _describe_decision_option(option: dict[str, Any]) -> str:
+    name = option["name"]
+    return f"{name} (needs text)" if option.get("needs_text") else str(name)
+
+
+def _format_pending_decision(spec: AgentSpec, pending_decision: dict[str, Any]) -> str:
+    prompt = str(pending_decision.get("prompt", "")).strip() or "A decision is required."
+    options_text = ", ".join(
+        _describe_decision_option(option) for option in pending_decision["options"]
+    )
+    return (
+        f"[{spec.name}] Decision needed: {prompt}\n"
+        f"Reply with /decide <option> [text] — allowed options: {options_text}."
+    )
+
+
 def _format_output(spec: AgentSpec, output: dict) -> str:
     """Convert agent output JSON to a string for the orchestrator LLM."""
     status = output.get("status", "unknown")
@@ -603,6 +651,10 @@ def _format_output(spec: AgentSpec, output: dict) -> str:
         if instruction:
             return f"[{spec.name}] {instruction}".strip()
         return f"[{spec.name}] {summary}".strip()
+
+    pending_decision = _valid_pending_decision(output.get("pending_decision"))
+    if pending_decision is not None:
+        return _format_pending_decision(spec, pending_decision)
 
     if status == "needs_clarification":
         return f"[{spec.name}] Clarification needed: {summary}"
@@ -628,7 +680,11 @@ def _format_output(spec: AgentSpec, output: dict) -> str:
     )
 
 
-_RELAY_VERBATIM_MARKERS = ("] Clarification needed:", "] Approval required:")
+_RELAY_VERBATIM_MARKERS = (
+    "] Clarification needed:",
+    "] Approval required:",
+    "] Decision needed:",
+)
 
 
 def _relay_specialist_terminal_message(messages: list[Any]) -> str | None:
@@ -683,8 +739,19 @@ def _record_agent_status(spec: AgentSpec, output: dict, task_run_id: str | None)
     store = get_task_run_store()
     status = output.get("status", "unknown")
     summary = output.get("summary", "")
+    pending_decision = _valid_pending_decision(output.get("pending_decision"))
 
-    if status == "needs_clarification":
+    if pending_decision is not None:
+        prompt = str(pending_decision.get("prompt", "")).strip()
+        detail = f"{spec.name} needs a decision" + (f": {prompt}" if prompt else ".")
+        store.transition(
+            task_run_id,
+            TASK_STATE_WAITING_DECISION,
+            detail=detail,
+            selected_agent_id=spec.id,
+            context_updates={"specialist_pending_decision": pending_decision},
+        )
+    elif status == "needs_clarification":
         detail = f"{spec.name} requested clarification" + (f": {summary}" if summary else ".")
         raw_resume_token = output.get("resume_token")
         resume_token = _bounded_resume_token(raw_resume_token)
@@ -1241,6 +1308,57 @@ class HubOrchestrator:
                     resumed_task,
                     request_id=pending.context.get("agent_request_id"),
                 )
+        return self._finalize_specialist_follow_up(pending.id, spec, output)
+
+    def provide_decision(
+        self,
+        option: str,
+        text: str = "",
+        *,
+        actor: str = "human",
+        progress_notify: Any | None = None,
+    ) -> str:
+        """Resume a task paused on a specialist's generic `pending_decision`.
+
+        `option` must be one of the names the specialist itself last
+        reported in `pending_decision.options` — Hub validates against that
+        specialist-declared list, never against a fixed or specialist-
+        specific set of names. The paused conversation resumes by
+        resubmitting the same `request_id` alongside the decision; Hub does
+        not need or use a separate resume token for this path.
+        """
+        pending = self.pending_run()
+        if pending is None or pending.state != TASK_STATE_WAITING_DECISION:
+            return "No task is currently waiting for a decision."
+
+        spec = self._require_spec(pending.selected_agent_id)
+        pending_decision = pending.context.get("specialist_pending_decision") or {}
+        options = pending_decision.get("options") or []
+        allowed = {opt["name"] for opt in options if isinstance(opt, dict) and opt.get("name")}
+        if option not in allowed:
+            valid = ", ".join(sorted(allowed)) or "none"
+            return f"[{spec.name}] '{option}' is not a valid option right now. Valid options: {valid}."
+
+        _human_task_log(
+            pending.id, "Decision '%s' received. Resuming %s.", option, spec.name
+        )
+        store = get_task_run_store()
+        store.transition(
+            pending.id,
+            TASK_STATE_ROUTED,
+            detail=f"User provided decision '{option}' for the paused task.",
+            selected_agent_id=spec.id,
+        )
+        decision = {"option": option, "text": text, "actor": actor}
+        with active_task_run(pending.id, progress_callback=progress_notify):
+            output = _dispatch_subprocess(
+                spec,
+                "",
+                request_id=pending.context.get("agent_request_id"),
+                decision=decision,
+                project_root_override=pending.context.get("agent_dispatch_project_root"),
+                references=pending.context.get("agent_dispatch_references"),
+            )
         return self._finalize_specialist_follow_up(pending.id, spec, output)
 
     def _reconcile_registry(self) -> None:

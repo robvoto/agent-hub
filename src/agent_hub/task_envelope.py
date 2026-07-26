@@ -27,6 +27,7 @@ def build_task_envelope(
     human_approved: bool = False,
     approval_token: str | None = None,
     resume: Any | None = None,
+    decision: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the JSON payload written to a subprocess specialist's input file.
 
@@ -37,6 +38,14 @@ def build_task_envelope(
     `resume` is an opaque value a specialist previously issued as its own
     `resume_token` when it paused for clarification. Hub relays it back
     unchanged on the resumed dispatch; it never inspects what's inside.
+
+    `decision` answers a specialist's generic paused-decision block
+    (`pending_decision`: a `prompt` plus named `options`). It carries
+    `option` (one of the names the specialist itself last reported),
+    optional `text`, and `actor`. Hub only ever relays the option name the
+    user picked from that specialist-declared list — it never invents or
+    interprets option names itself. The paused conversation is identified
+    by resubmitting the same `request_id`, not a separate resume value.
     """
     envelope: dict[str, Any] = {
         "request_id": request_id,
@@ -56,4 +65,6 @@ def build_task_envelope(
             envelope["approval_token"] = approval_token
     if resume is not None:
         envelope["resume"] = resume
+    if decision is not None:
+        envelope["decision"] = decision
     return envelope

@@ -151,6 +151,7 @@ class TelegramGateway:
             "(e.g. AI Tech Lead). Slash commands control the hub itself:\n\n"
             "/agents - list registered specialist agents\n"
             "/approve - approve a task waiting on approval\n"
+            "/decide <option> [text] - answer a task waiting on a specialist decision\n"
             "/forget <id> - remove a stored learning\n"
             "/help - show this\n"
             "/last - show the most recently finished task\n"
@@ -169,6 +170,8 @@ class TelegramGateway:
             "Thread model:\n"
             "Reply normally to continue a clarification pause in the same thread.\n"
             "Use /approve to continue an approval pause in the same thread.\n"
+            "Use /decide <option> [text] to continue a decision pause; /status shows\n"
+            "the options a paused specialist last reported.\n"
             "/new starts a fresh empty thread; it is not a fork.\n"
             "Cancelled work from /stop or /reset is not resumable.\n"
             "There is no /fork or generic /resume command yet.\n"
@@ -301,6 +304,24 @@ class TelegramGateway:
                 reply = self._orch.reject_pending(reason)
             except Exception as exc:
                 logger.exception("Approval rejection error")
+                reply = f"Error: {exc}"
+            _send_message(self._token, chat_id, reply)
+            return
+
+        if text.startswith("/decide"):
+            argument = text[len("/decide"):].strip()
+            option, _, decision_text = argument.partition(" ")
+            if not option:
+                _send_message(self._token, chat_id, "Usage: /decide <option> [text]", parse_mode=None)
+                return
+            try:
+                reply = self._orch.provide_decision(
+                    option,
+                    decision_text.strip(),
+                    progress_notify=lambda update: self._notify_progress(chat_id, update),
+                )
+            except Exception as exc:
+                logger.exception("Decision resume error")
                 reply = f"Error: {exc}"
             _send_message(self._token, chat_id, reply)
             return

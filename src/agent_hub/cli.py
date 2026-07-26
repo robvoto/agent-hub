@@ -13,6 +13,7 @@ _HELP_TEXT = (
     "Commands:\n"
     "/agents - list registered specialist agents\n"
     "/approve - approve a task waiting on approval\n"
+    "/decide <option> [text] - answer a task waiting on a specialist decision\n"
     "/forget <id> - remove a stored learning\n"
     "/help - show this\n"
     "/last - show the most recently finished task\n"
@@ -31,6 +32,8 @@ _HELP_TEXT = (
     "Thread model:\n"
     "Reply normally to continue a clarification pause in the same thread.\n"
     "Use /approve to continue an approval pause in the same thread.\n"
+    "Use /decide <option> [text] to continue a decision pause; /status shows\n"
+    "the options a paused specialist last reported.\n"
     "/new starts a fresh empty thread; it is not a fork.\n"
     "Cancelled work from /stop or /reset is not resumable.\n"
     "There is no /fork or generic /resume command yet.\n"
@@ -179,6 +182,22 @@ def _run_chat(model: str) -> None:
             reason = text[len("/reject"):].strip() or "Rejected by user"
             try:
                 reply = orch.reject_pending(reason)
+                print(f"\nHub: {reply}\n")
+            except KeyboardInterrupt:
+                _handle_cli_shutdown_interrupt()
+                return
+            except Exception as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+            continue
+
+        if text.startswith("/decide"):
+            argument = text[len("/decide"):].strip()
+            option, _, decision_text = argument.partition(" ")
+            if not option:
+                print("\nHub: Usage: /decide <option> [text]\n")
+                continue
+            try:
+                reply = orch.provide_decision(option, decision_text.strip())
                 print(f"\nHub: {reply}\n")
             except KeyboardInterrupt:
                 _handle_cli_shutdown_interrupt()

@@ -11,6 +11,7 @@ from agent_hub.task_runs import (
     TASK_STATE_ROUTED,
     TASK_STATE_SUCCEEDED,
     TASK_STATE_WAITING_APPROVAL,
+    TASK_STATE_WAITING_DECISION,
     TaskRunStore,
 )
 
@@ -93,6 +94,45 @@ def test_waiting_approval_can_resume_to_routed(task_store):
         TASK_STATE_ROUTED,
         detail="Human approved the task.",
         selected_agent_id="release-agent",
+    )
+    assert resumed.state == TASK_STATE_ROUTED
+
+
+def test_waiting_decision_can_resume_to_routed(task_store):
+    run = task_store.create_run(session_id="session-1", user_message="Ship the widget change")
+    task_store.transition(run.id, TASK_STATE_ROUTED, selected_agent_id="widget-forge")
+    task_store.transition(run.id, TASK_STATE_DISPATCHED, selected_agent_id="widget-forge")
+    task_store.transition(
+        run.id,
+        TASK_STATE_WAITING_DECISION,
+        detail="A decision is required.",
+        selected_agent_id="widget-forge",
+        context_updates={
+            "specialist_pending_decision": {
+                "prompt": "Proceed?",
+                "options": [{"name": "approve"}, {"name": "cancel"}],
+            }
+        },
+    )
+
+    paused = task_store.get_run(run.id)
+    assert paused is not None
+    assert paused.state == TASK_STATE_WAITING_DECISION
+    assert paused.context["specialist_pending_decision"]["options"] == [
+        {"name": "approve"},
+        {"name": "cancel"},
+    ]
+    assert paused.finished_at is None
+
+    latest_paused = task_store.get_latest_paused_run("session-1")
+    assert latest_paused is not None
+    assert latest_paused.id == run.id
+
+    resumed = task_store.transition(
+        run.id,
+        TASK_STATE_ROUTED,
+        detail="User decided.",
+        selected_agent_id="widget-forge",
     )
     assert resumed.state == TASK_STATE_ROUTED
 

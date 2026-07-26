@@ -666,6 +666,18 @@ def test_invoke_reconciles_added_changed_and_removed_agents(monkeypatch, caplog)
     assert "removed: removed-agent" in caplog.text
 
 
+def test_provide_decision_with_nothing_pending_returns_friendly_message(monkeypatch):
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _FakeGraph("unused"))
+
+    orchestrator = HubOrchestrator()
+
+    assert (
+        orchestrator.provide_decision("approve")
+        == "No task is currently waiting for a decision."
+    )
+
+
 def test_agent_tool_records_routed_dispatched_and_waiting_approval(monkeypatch, tmp_path):
     spec = AgentSpec(
         id="ai-tech-lead",

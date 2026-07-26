@@ -20,9 +20,61 @@ def test_help_text_explains_current_thread_controls() -> None:
 
     assert "Reply normally to continue a clarification pause in the same thread." in help_text
     assert "Use /approve to continue an approval pause in the same thread." in help_text
+    assert "/decide <option> [text] - answer a task waiting on a specialist decision" in help_text
+    assert "Use /decide <option> [text] to continue a decision pause" in help_text
     assert "/new starts a fresh empty thread; it is not a fork." in help_text
     assert "Cancelled work from /stop or /reset is not resumable." in help_text
     assert "There is no /fork or generic /resume command yet." in help_text
+
+
+def test_decide_command_forwards_option_and_text_to_orchestrator(monkeypatch):
+    sent: list[dict] = []
+
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway._send_message",
+        lambda token, chat_id, text, *, parse_mode="Markdown": sent.append(
+            {"chat_id": chat_id, "text": text}
+        ),
+    )
+
+    calls: list[tuple[str, str]] = []
+
+    def _provide_decision(option, text, *, progress_notify=None):
+        calls.append((option, text))
+        return f"[Widget Forge] decided: {option} ({text!r})"
+
+    orch = SimpleNamespace(
+        provide_decision=_provide_decision,
+        set_learning_notifier=lambda callback: None,
+    )
+    gateway = TelegramGateway("token-123", orch)
+
+    gateway._handle_message(
+        {"chat": {"id": 42}, "text": "/decide request_changes Make them square"}
+    )
+
+    assert calls == [("request_changes", "Make them square")]
+    assert sent == [
+        {"chat_id": 42, "text": "[Widget Forge] decided: request_changes ('Make them square')"}
+    ]
+
+
+def test_decide_command_without_an_option_shows_usage(monkeypatch):
+    sent: list[dict] = []
+
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway._send_message",
+        lambda token, chat_id, text, *, parse_mode="Markdown": sent.append(
+            {"chat_id": chat_id, "text": text}
+        ),
+    )
+
+    orch = SimpleNamespace(set_learning_notifier=lambda callback: None)
+    gateway = TelegramGateway("token-123", orch)
+
+    gateway._handle_message({"chat": {"id": 42}, "text": "/decide"})
+
+    assert sent == [{"chat_id": 42, "text": "Usage: /decide <option> [text]"}]
 
 
 def test_new_command_resets_session_once_and_sends_one_reply(monkeypatch):

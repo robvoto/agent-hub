@@ -36,6 +36,7 @@ TASK_STATE_DISPATCHED = "dispatched"
 TASK_STATE_IN_PROGRESS = "in_progress"
 TASK_STATE_WAITING_CLARIFICATION = "waiting_clarification"
 TASK_STATE_WAITING_APPROVAL = "waiting_approval"
+TASK_STATE_WAITING_DECISION = "waiting_decision"
 TASK_STATE_SUCCEEDED = "succeeded"
 TASK_STATE_FAILED = "failed"
 TASK_STATE_CANCELLED = "cancelled"
@@ -49,6 +50,7 @@ TASK_STATES = {
     TASK_STATE_IN_PROGRESS,
     TASK_STATE_WAITING_CLARIFICATION,
     TASK_STATE_WAITING_APPROVAL,
+    TASK_STATE_WAITING_DECISION,
     TASK_STATE_SUCCEEDED,
     TASK_STATE_FAILED,
     TASK_STATE_CANCELLED,
@@ -57,6 +59,7 @@ TASK_STATES = {
 _PAUSED_STATES = {
     TASK_STATE_WAITING_CLARIFICATION,
     TASK_STATE_WAITING_APPROVAL,
+    TASK_STATE_WAITING_DECISION,
 }
 _TERMINAL_STATES = {
     TASK_STATE_SUCCEEDED,
@@ -76,6 +79,7 @@ _ALLOWED_TRANSITIONS = {
         TASK_STATE_IN_PROGRESS,
         TASK_STATE_WAITING_CLARIFICATION,
         TASK_STATE_WAITING_APPROVAL,
+        TASK_STATE_WAITING_DECISION,
         TASK_STATE_SUCCEEDED,
         TASK_STATE_FAILED,
         TASK_STATE_CANCELLED,
@@ -85,6 +89,7 @@ _ALLOWED_TRANSITIONS = {
         TASK_STATE_DISPATCHED,
         TASK_STATE_WAITING_CLARIFICATION,
         TASK_STATE_WAITING_APPROVAL,
+        TASK_STATE_WAITING_DECISION,
         TASK_STATE_SUCCEEDED,
         TASK_STATE_FAILED,
         TASK_STATE_CANCELLED,
@@ -95,6 +100,7 @@ _ALLOWED_TRANSITIONS = {
         TASK_STATE_IN_PROGRESS,
         TASK_STATE_WAITING_CLARIFICATION,
         TASK_STATE_WAITING_APPROVAL,
+        TASK_STATE_WAITING_DECISION,
         TASK_STATE_SUCCEEDED,
         TASK_STATE_FAILED,
         TASK_STATE_CANCELLED,
@@ -102,6 +108,7 @@ _ALLOWED_TRANSITIONS = {
     TASK_STATE_IN_PROGRESS: {
         TASK_STATE_WAITING_CLARIFICATION,
         TASK_STATE_WAITING_APPROVAL,
+        TASK_STATE_WAITING_DECISION,
         TASK_STATE_SUCCEEDED,
         TASK_STATE_FAILED,
         TASK_STATE_CANCELLED,
@@ -115,6 +122,14 @@ _ALLOWED_TRANSITIONS = {
         TASK_STATE_CANCELLED,
     },
     TASK_STATE_WAITING_APPROVAL: {
+        TASK_STATE_ROUTED,
+        TASK_STATE_DISPATCHED,
+        TASK_STATE_IN_PROGRESS,
+        TASK_STATE_SUCCEEDED,
+        TASK_STATE_FAILED,
+        TASK_STATE_CANCELLED,
+    },
+    TASK_STATE_WAITING_DECISION: {
         TASK_STATE_ROUTED,
         TASK_STATE_DISPATCHED,
         TASK_STATE_IN_PROGRESS,
@@ -236,6 +251,8 @@ def _flow_label(state: str, selected_agent_id: str | None) -> str:
         return "clarification"
     if state == TASK_STATE_WAITING_APPROVAL:
         return "approval"
+    if state == TASK_STATE_WAITING_DECISION:
+        return "decision"
     if state == TASK_STATE_SUCCEEDED:
         return "replied"
     if state == TASK_STATE_FAILED:
@@ -449,9 +466,14 @@ class TaskRunStore:
         with _connect(self._db_path) as conn:
             rows = conn.execute(
                 """SELECT * FROM task_runs
-                   WHERE session_id=? AND state IN (?, ?)
+                   WHERE session_id=? AND state IN (?, ?, ?)
                    ORDER BY updated_at DESC""",
-                (session_id, TASK_STATE_WAITING_CLARIFICATION, TASK_STATE_WAITING_APPROVAL),
+                (
+                    session_id,
+                    TASK_STATE_WAITING_CLARIFICATION,
+                    TASK_STATE_WAITING_APPROVAL,
+                    TASK_STATE_WAITING_DECISION,
+                ),
             ).fetchall()
         for row in rows:
             run = _row_to_task_run(row)
@@ -491,7 +513,7 @@ class TaskRunStore:
         with _connect(self._db_path) as conn:
             rows = conn.execute(
                 """SELECT * FROM task_runs
-                   WHERE session_id=? AND state IN (?, ?, ?, ?, ?, ?)
+                   WHERE session_id=? AND state IN (?, ?, ?, ?, ?, ?, ?)
                    ORDER BY updated_at DESC""",
                 (
                     session_id,
@@ -501,6 +523,7 @@ class TaskRunStore:
                     TASK_STATE_IN_PROGRESS,
                     TASK_STATE_WAITING_CLARIFICATION,
                     TASK_STATE_WAITING_APPROVAL,
+                    TASK_STATE_WAITING_DECISION,
                 ),
             ).fetchall()
         if project_key is None:
