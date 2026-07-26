@@ -82,7 +82,7 @@ loader (`registry.parse_agent_spec`) reads a small, fixed core:
 | `purpose` | yes | the complete routing contract — orchestrator selects a specialist by this field alone. Aliases, project names, and identifier prefixes play no part in routing |
 | `tools` | yes | declared tool list |
 | `version` | no | the specialist's own version, defaults to "1.0.0" |
-| `input_contract` | no | declares the `agent-hub.task` protocol version, required/optional envelope fields, and which context fields (`project_root`, `references`) the specialist reads |
+| `input_contract` | no | declares the `agent-hub.task` protocol version, required/optional envelope fields, and which context fields (`project_root`, `references`) the specialist reads (`accepted_context`) or cannot function without (`required_context`) — Hub reads these generically to decide what a dispatch actually sends (see below) |
 | `interaction_contract` | no | declared lifecycle support — `progress`, `clarification`, `approval`, `resume`, `cancellation`. Hub does not branch dispatch behavior on this; the generic `output_contract`/`runtime.progress` mechanism still drives actual behavior |
 | `runtime` | yes | how Hub invokes the agent (subprocess entrypoint, or Agent Factory's in-process `factory_brain` mode) |
 
@@ -109,8 +109,18 @@ Hub dispatches every subprocess specialist through the same universal task
 envelope (`task_envelope.build_task_envelope`): task text, request/run
 identity, source, execution mode, the selected project when known, any
 user-provided or Hub-observed `references` (relayed uninterpreted), and
-resume/approval fields when resuming a paused run. The envelope shape does not
-vary per specialist — a specialist that doesn't use a field simply ignores it.
+resume/approval fields when resuming a paused run. The envelope-building code
+does not vary per specialist.
+
+What context actually reaches a given specialist does vary, generically, by
+its own `input_contract` declaration: `_resolve_dispatch_context` in
+orchestrator.py narrows `project_root`/`references` to whatever the
+specialist's `accepted_context` names (a specialist with no declaration is
+treated as accepting both, preserving the default every specialist had before
+this declaration existed). If `required_context` names something the
+dispatch doesn't have — no project selected via `/project`, most commonly —
+Hub fails the task immediately with a clear message instead of sending an
+incomplete envelope and letting the specialist guess or fail downstream.
 
 ## Persistence
 

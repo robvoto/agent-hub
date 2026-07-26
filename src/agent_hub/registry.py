@@ -36,8 +36,12 @@ class AgentSpec:
 
     `input_contract`/`interaction_contract` are the specialist's declared
     universal-envelope and lifecycle-capability metadata (see Agent Factory's
-    `docs/agent-contract.md`) — discovery data Hub stores but does not branch
-    dispatch behavior on.
+    `docs/agent-contract.md`). Most of it is discovery data Hub stores but
+    does not act on; the exception is `input_contract.accepted_context` /
+    `required_context`, which Hub reads generically to decide what dispatch
+    context (`project_root`, `references`) a specialist actually gets and
+    whether a dispatch has what it needs (see `_resolve_dispatch_context` in
+    orchestrator.py).
 
     Any agent.json field outside the core set above (e.g. a specialist's own
     backlog pointer, a knowledge_db path, or a future custom field) lands in

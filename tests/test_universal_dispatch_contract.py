@@ -28,6 +28,7 @@ from agent_hub.orchestrator import HubOrchestrator, _make_agent_tool
 from agent_hub.registry import load_registry
 from agent_hub.task_runs import (
     TASK_STATE_DISPATCHED,
+    TASK_STATE_FAILED,
     TASK_STATE_IN_PROGRESS,
     TASK_STATE_RECEIVED,
     TASK_STATE_ROUTED,
@@ -42,9 +43,33 @@ from agent_hub.task_runs import (
 FAKE_SPECIALIST_ID = "widget-forge"
 
 
-def _write_fake_specialist_manifest(registry_dir: Path, working_directory: Path) -> None:
+def _write_fake_specialist_manifest(
+    registry_dir: Path,
+    working_directory: Path,
+    *,
+    input_contract_overrides: dict | None = None,
+) -> None:
     agent_dir = registry_dir / FAKE_SPECIALIST_ID
     agent_dir.mkdir(parents=True)
+    input_contract = {
+        "protocol": "agent-hub.task",
+        "protocol_version": 1,
+        "required_fields": ["task"],
+        "optional_fields": [
+            "request_id",
+            "run_id",
+            "source",
+            "execution_mode",
+            "progress_jsonl",
+            "project_root",
+            "references",
+            "human_approved",
+            "approval_token",
+        ],
+        "accepted_context": ["project_root", "references"],
+    }
+    if input_contract_overrides:
+        input_contract.update(input_contract_overrides)
     manifest = {
         "id": FAKE_SPECIALIST_ID,
         "name": "Widget Forge",
@@ -55,23 +80,7 @@ def _write_fake_specialist_manifest(registry_dir: Path, working_directory: Path)
         ),
         "tools": [],
         "version": "0.1.0",
-        "input_contract": {
-            "protocol": "agent-hub.task",
-            "protocol_version": 1,
-            "required_fields": ["task"],
-            "optional_fields": [
-                "request_id",
-                "run_id",
-                "source",
-                "execution_mode",
-                "progress_jsonl",
-                "project_root",
-                "references",
-                "human_approved",
-                "approval_token",
-            ],
-            "accepted_context": ["project_root", "references"],
-        },
+        "input_contract": input_contract,
         "interaction_contract": {
             "progress": False,
             "clarification": True,
@@ -333,6 +342,87 @@ def test_widget_forge_resumes_a_generic_pending_decision_via_decide(
         "text": "Make them square",
         "actor": "human",
     }
+
+
+def test_widget_forge_only_receives_context_its_manifest_accepts(monkeypatch, tmp_path):
+    """A specialist that narrows `input_contract.accepted_context` to just
+    `project_root` never receives `references` in its envelope, even when the
+    caller supplies some — proven with zero widget-forge-specific code in
+    Hub, only the generic accepted_context declaration.
+    """
+    registry_dir = tmp_path / "agents"
+    working_directory = tmp_path / "workdir"
+    working_directory.mkdir()
+    _write_fake_specialist_manifest(
+        registry_dir,
+        working_directory,
+        input_contract_overrides={"accepted_context": ["project_root"]},
+    )
+
+    specs = load_registry(registry_dir)
+    spec = specs[0]
+
+    _ScriptedFakePopen.calls = []
+    _ScriptedFakePopen.responses = [{"status": "success", "summary": "Forged 3 widgets."}]
+    monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _UnusedGraph())
+
+    orchestrator = HubOrchestrator()
+    orchestrator.set_current_project(str(working_directory))
+    run = get_task_run_store().create_run(
+        session_id=orchestrator.session_id, user_message="Forge some widgets"
+    )
+    tool = _make_agent_tool(spec)
+    with active_task_run(run.id):
+        tool.invoke({"task": "Forge some widgets", "references": ["spec://widget-42"]})
+
+    assert _ScriptedFakePopen.calls[0]["project_root"] == str(working_directory)
+    assert "references" not in _ScriptedFakePopen.calls[0]
+
+
+def test_widget_forge_dispatch_fails_clearly_when_required_context_is_missing(
+    monkeypatch, tmp_path
+):
+    """A specialist that declares `project_root` as `required_context` never
+    gets dispatched at all when no project is set — Hub fails the task
+    clearly instead of sending an incomplete envelope and letting the
+    specialist guess.
+    """
+    registry_dir = tmp_path / "agents"
+    working_directory = tmp_path / "workdir"
+    working_directory.mkdir()
+    _write_fake_specialist_manifest(
+        registry_dir,
+        working_directory,
+        input_contract_overrides={"required_context": ["project_root"]},
+    )
+
+    specs = load_registry(registry_dir)
+    spec = specs[0]
+
+    _ScriptedFakePopen.calls = []
+    _ScriptedFakePopen.responses = []
+    monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _UnusedGraph())
+
+    orchestrator = HubOrchestrator()
+    run = get_task_run_store().create_run(
+        session_id=orchestrator.session_id, user_message="Forge some widgets"
+    )
+    tool = _make_agent_tool(spec)
+    with active_task_run(run.id):
+        reply = tool.invoke({"task": "Forge some widgets"})
+
+    assert "requires project_root" in reply
+    assert "/project" in reply
+    assert _ScriptedFakePopen.calls == []
+
+    final = get_task_run_store().get_run(run.id)
+    assert final is not None
+    assert final.state == TASK_STATE_FAILED
+    assert final.error_message and "requires project_root" in final.error_message
 
 
 class _UnusedGraph:

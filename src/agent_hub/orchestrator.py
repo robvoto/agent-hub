@@ -325,6 +325,44 @@ def _consume_graph_stream_event(
     return last_node, None
 
 
+def _resolve_dispatch_context(
+    spec: AgentSpec,
+    *,
+    project_root: str | None,
+    references: list[str] | None,
+) -> tuple[str | None, list[str] | None, list[str]]:
+    """Narrow project_root/references to what this specialist's manifest declares.
+
+    `input_contract.accepted_context` declares which of `project_root`/
+    `references` a specialist reads at all; a specialist that never declares
+    it is treated as accepting both, preserving the universal default every
+    specialist written before this declaration existed already gets.
+    `input_contract.required_context` (a subset of `accepted_context`) names
+    context the specialist cannot function without. Returns the narrowed
+    project_root/references plus the names of any required context this
+    dispatch doesn't actually have — an empty list means the dispatch is valid.
+    """
+    input_contract = spec.input_contract
+    if "accepted_context" in input_contract:
+        accepted = set(input_contract.get("accepted_context") or [])
+    else:
+        accepted = {"project_root", "references"}
+    required = set(input_contract.get("required_context") or [])
+
+    resolved_project_root = project_root if "project_root" in accepted else None
+    resolved_references = references if (references and "references" in accepted) else None
+
+    missing = [
+        name
+        for name, value in (
+            ("project_root", resolved_project_root),
+            ("references", resolved_references),
+        )
+        if name in required and not value
+    ]
+    return resolved_project_root, resolved_references, missing
+
+
 def _dispatch_subprocess(
     spec: AgentSpec,
     task: str,
@@ -360,6 +398,19 @@ def _dispatch_subprocess(
         if project_root_override is not None
         else _current_project_for_task_run(task_run_id)
     )
+    project_root, references, missing_context = _resolve_dispatch_context(
+        spec, project_root=project_root, references=references
+    )
+    if missing_context:
+        detail = (
+            f"{spec.name} requires {' and '.join(missing_context)} to run, but none "
+            "was available for this task."
+        )
+        if "project_root" in missing_context:
+            detail += " Set one with /project <path> and try again."
+        output = {"status": "failed", "summary": detail}
+        _record_agent_status(spec, output, task_run_id)
+        return output
     if task_run_id:
         get_task_run_store().transition(
             task_run_id,
