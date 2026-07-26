@@ -577,6 +577,95 @@ def test_invoke_records_failed_task_run(monkeypatch):
     assert "boom" in (runs[0].error_message or "")
 
 
+def test_invoke_rebuilds_graph_and_registry_when_an_agent_is_added(monkeypatch):
+    build_calls: list[Any] = []
+
+    def _fake_build_graph(self):
+        graph = _FakeGraph("All done")
+        build_calls.append(graph)
+        return graph
+
+    live_specs: list[AgentSpec] = []
+    monkeypatch.setattr(
+        "agent_hub.orchestrator._load_specialists", lambda: list(live_specs)
+    )
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", _fake_build_graph)
+
+    orchestrator = HubOrchestrator()
+    assert len(build_calls) == 1
+    assert orchestrator.registry == []
+
+    live_specs.append(
+        AgentSpec(
+            id="widget-forge",
+            name="Widget Forge",
+            purpose="Builds widgets",
+            runtime={"mode": "subprocess"},
+        )
+    )
+    orchestrator.invoke("Hello")
+
+    assert len(build_calls) == 2
+    assert [spec.id for spec in orchestrator.registry] == ["widget-forge"]
+    assert orchestrator._graph is build_calls[-1]
+
+
+def test_invoke_does_not_rebuild_graph_when_registry_is_unchanged(monkeypatch):
+    build_calls: list[Any] = []
+
+    def _fake_build_graph(self):
+        graph = _FakeGraph("All done")
+        build_calls.append(graph)
+        return graph
+
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", _fake_build_graph)
+
+    orchestrator = HubOrchestrator()
+    orchestrator.invoke("Hello")
+    orchestrator.invoke("Hello again")
+
+    assert len(build_calls) == 1
+
+
+def test_invoke_reconciles_added_changed_and_removed_agents(monkeypatch, caplog):
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _FakeGraph("All done"))
+
+    def _spec(agent_id: str, name: str, purpose: str) -> AgentSpec:
+        return AgentSpec(
+            id=agent_id, name=name, purpose=purpose, runtime={"mode": "subprocess"}
+        )
+
+    kept_spec = _spec("kept-agent", "Kept", "Stays the same")
+    stale_spec = _spec("changed-agent", "Stale", "Old purpose")
+    removed_spec = _spec("removed-agent", "Removed", "Goes away")
+    monkeypatch.setattr(
+        "agent_hub.orchestrator._load_specialists",
+        lambda: [kept_spec, stale_spec, removed_spec],
+    )
+
+    orchestrator = HubOrchestrator()
+
+    fresh_spec = _spec("changed-agent", "Fresh", "New purpose")
+    added_spec = _spec("added-agent", "Added", "Just showed up")
+    monkeypatch.setattr(
+        "agent_hub.orchestrator._load_specialists",
+        lambda: [kept_spec, fresh_spec, added_spec],
+    )
+
+    with caplog.at_level(logging.INFO, logger="agent_hub.human"):
+        orchestrator.invoke("Hello")
+
+    assert [spec.id for spec in orchestrator.registry] == [
+        "kept-agent",
+        "changed-agent",
+        "added-agent",
+    ]
+    assert "added: added-agent" in caplog.text
+    assert "changed: changed-agent" in caplog.text
+    assert "removed: removed-agent" in caplog.text
+
+
 def test_agent_tool_records_routed_dispatched_and_waiting_approval(monkeypatch, tmp_path):
     spec = AgentSpec(
         id="ai-tech-lead",

@@ -1243,9 +1243,48 @@ class HubOrchestrator:
                 )
         return self._finalize_specialist_follow_up(pending.id, spec, output)
 
+    def _reconcile_registry(self) -> None:
+        """Re-read Factory's registry and rebuild the tool graph if it changed.
+
+        Runs before every turn so a specialist that Factory added, edited, or
+        removed from `config/agents/` since Hub started takes effect on the
+        next request — no Hub restart or Hub code change required.
+        """
+        fresh = _load_specialists()
+        if fresh == self._registry:
+            return
+
+        previous_by_id = {spec.id: spec for spec in self._registry}
+        fresh_by_id = {spec.id: spec for spec in fresh}
+        added = sorted(fresh_by_id.keys() - previous_by_id.keys())
+        removed = sorted(previous_by_id.keys() - fresh_by_id.keys())
+        changed = sorted(
+            agent_id
+            for agent_id in fresh_by_id.keys() & previous_by_id.keys()
+            if fresh_by_id[agent_id] != previous_by_id[agent_id]
+        )
+
+        self._registry = fresh
+        self._graph = self._build_graph()
+
+        human_logger.info(
+            "Hub refreshed the agent registry — added: %s, changed: %s, removed: %s.",
+            ", ".join(added) or "none",
+            ", ".join(changed) or "none",
+            ", ".join(removed) or "none",
+        )
+        logger.info(
+            "Registry reconciliation rebuilt tools: added=%s changed=%s removed=%s agents=%s",
+            added,
+            changed,
+            removed,
+            [spec.id for spec in fresh],
+        )
+
     def invoke(self, message: str, *, progress_notify: Any | None = None) -> str:
         logger.info("Received user request: %s", message)
         logger.debug("Invoking graph with session_id=%s", self._session_id)
+        self._reconcile_registry()
         task_store = get_task_run_store()
 
         project_key = _project_key_for_session(self._session_id)
