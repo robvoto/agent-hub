@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import subprocess
 import tempfile
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -45,8 +47,18 @@ from .progress_events import (
     ProgressUpdate,
     SpecialistProgressTailer,
 )
-from .project_context import get_project_context_registry
-from .registry import AgentSpec, load_registry
+from .project_context import (
+    PROJECT_CONTRACT_VERSION,
+    ProjectContext,
+    ProjectContextResolution,
+    get_project_context_registry,
+)
+from .registry import (
+    AgentSpec,
+    RegistryLoadError,
+    load_registry_report,
+    spec_fingerprint,
+)
 from .run_status import format_current_run_status, format_last_run_status
 from .session_state import load_or_create_session_id, persist_session_id
 from .shared_docs import make_shared_docs_tool
@@ -82,8 +94,13 @@ def _truncate(text: str, limit: int = 200) -> str:
     return text if len(text) <= limit else f"{text[:limit]}…"
 
 
+def _utcnow_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
 def _project_key_for_session(session_id: str) -> str:
-    return get_project_context_registry().get(session_id) or DEFAULT_PROJECT_KEY
+    context = get_project_context_registry().get(session_id)
+    return context.project_id if context is not None else DEFAULT_PROJECT_KEY
 
 
 def _friendly_project_label(project_key: str) -> str:
@@ -97,19 +114,47 @@ def _human_task_log(task_run_id: str | None, message: str, *args: Any) -> None:
     human_logger.info(message, *args)
 
 
-def _current_project_for_task_run(task_run_id: str | None) -> str | None:
-    """Look up the operator's /project selection for this task run's session.
+def _resolve_project_context_for_task_run(task_run_id: str | None) -> ProjectContextResolution:
+    """Resolve and revalidate the operator's /project selection for a fresh dispatch.
 
     project_root is passed through as a request, not a grant — the
-    specialist enforces its own allowlist server-side and rejects it
-    with a clear failed status if the path isn't permitted.
+    specialist enforces its own allowlist server-side and rejects it with a
+    clear failed status if the path isn't permitted. This only covers a
+    *fresh* dispatch: a resumed dispatch replays the exact context pinned at
+    the original dispatch instead of re-resolving against whatever
+    /project now points at (see `project_context_override` in
+    `_dispatch_subprocess`).
     """
     if not task_run_id:
-        return None
+        return ProjectContextResolution(context=None, error=None)
     run = get_task_run_store().get_run(task_run_id)
     if run is None:
+        return ProjectContextResolution(context=None, error=None)
+    return get_project_context_registry().resolve_for_dispatch(run.session_id)
+
+
+def _project_context_override_from_pending(pending: TaskRun) -> ProjectContext | None:
+    """Rebuild the `ProjectContext` pinned at a paused task's original dispatch.
+
+    Reconstructed from the flat fields `_dispatch_subprocess` stored in the
+    task's context (`agent_dispatch_project_*`), not by re-resolving
+    `/project` — a resumed dispatch must replay exactly what the original
+    dispatch validated and sent, even if the operator's live selection has
+    since changed or gone stale.
+    """
+    project_id = pending.context.get("agent_dispatch_project_id")
+    if not project_id:
         return None
-    return get_project_context_registry().get(run.session_id)
+    return ProjectContext(
+        project_id=project_id,
+        root=pending.context.get("agent_dispatch_project_root") or "",
+        contract_version=(
+            pending.context.get("agent_dispatch_project_contract_version")
+            or PROJECT_CONTRACT_VERSION
+        ),
+        fingerprint=pending.context.get("agent_dispatch_project_fingerprint") or "",
+        metadata={},
+    )
 
 
 def _emit_progress_update(update: ProgressUpdate) -> None:
@@ -325,6 +370,16 @@ def _consume_graph_stream_event(
     return last_node, None
 
 
+def _accepted_context_keys(spec: AgentSpec) -> set[str]:
+    """`input_contract.accepted_context` this specialist declares (see
+    `_resolve_dispatch_context`); a specialist with no declaration is
+    treated as accepting both universal context keys."""
+    input_contract = spec.input_contract
+    if "accepted_context" in input_contract:
+        return set(input_contract.get("accepted_context") or [])
+    return {"project_root", "references"}
+
+
 def _resolve_dispatch_context(
     spec: AgentSpec,
     *,
@@ -342,12 +397,8 @@ def _resolve_dispatch_context(
     project_root/references plus the names of any required context this
     dispatch doesn't actually have — an empty list means the dispatch is valid.
     """
-    input_contract = spec.input_contract
-    if "accepted_context" in input_contract:
-        accepted = set(input_contract.get("accepted_context") or [])
-    else:
-        accepted = {"project_root", "references"}
-    required = set(input_contract.get("required_context") or [])
+    accepted = _accepted_context_keys(spec)
+    required = set(spec.input_contract.get("required_context") or [])
 
     resolved_project_root = project_root if "project_root" in accepted else None
     resolved_references = references if (references and "references" in accepted) else None
@@ -374,6 +425,7 @@ def _dispatch_subprocess(
     resume: Any | None = None,
     decision: dict[str, Any] | None = None,
     project_root_override: str | None = None,
+    project_context_override: ProjectContext | None = None,
 ) -> dict:
     """Invoke a subprocess specialist and return its structured JSON output.
 
@@ -382,10 +434,10 @@ def _dispatch_subprocess(
     unchanged and never inspects its contents. `decision` answers a
     specialist's generic `pending_decision` pause (see `provide_decision`)
     and is identified by resubmitting the same `request_id`, not `resume`.
-    `project_root_override` replays the exact project the *original*
-    dispatch used, for a resumed call, instead of re-deriving the
-    operator's current `/project` selection (which could have changed
-    while the task was paused).
+    `project_root_override`/`project_context_override` replay the exact
+    project the *original* dispatch used, for a resumed call, instead of
+    re-resolving the operator's current `/project` selection (which could
+    have changed, or gone stale, while the task was paused).
     """
     runtime = spec.runtime
     entrypoint = runtime["entrypoint"]
@@ -393,14 +445,22 @@ def _dispatch_subprocess(
 
     request_id = request_id or str(uuid.uuid4())
     task_run_id = get_current_task_run_id()
-    project_root = (
-        project_root_override
-        if project_root_override is not None
-        else _current_project_for_task_run(task_run_id)
-    )
+    if project_root_override is not None:
+        project_root = project_root_override
+        project_context = project_context_override
+        project_context_error = None
+    else:
+        resolution = _resolve_project_context_for_task_run(task_run_id)
+        project_context = resolution.context
+        project_context_error = resolution.error
+        project_root = project_context.root if project_context is not None else None
     project_root, references, missing_context = _resolve_dispatch_context(
         spec, project_root=project_root, references=references
     )
+    if project_context_error and "project_root" in _accepted_context_keys(spec):
+        output = {"status": "failed", "summary": project_context_error}
+        _record_agent_status(spec, output, task_run_id)
+        return output
     if missing_context:
         detail = (
             f"{spec.name} requires {' and '.join(missing_context)} to run, but none "
@@ -411,6 +471,15 @@ def _dispatch_subprocess(
         output = {"status": "failed", "summary": detail}
         _record_agent_status(spec, output, task_run_id)
         return output
+
+    envelope_project_id = project_context.project_id if (project_root and project_context) else None
+    envelope_project_contract_version = (
+        project_context.contract_version if (project_root and project_context) else None
+    )
+    envelope_project_fingerprint = (
+        project_context.fingerprint if (project_root and project_context) else None
+    )
+
     if task_run_id:
         get_task_run_store().transition(
             task_run_id,
@@ -423,6 +492,12 @@ def _dispatch_subprocess(
                 "runtime_mode": "subprocess",
                 "agent_dispatch_project_root": project_root,
                 "agent_dispatch_references": references,
+                "agent_dispatch_project_id": envelope_project_id,
+                "agent_dispatch_project_contract_version": envelope_project_contract_version,
+                "agent_dispatch_project_fingerprint": envelope_project_fingerprint,
+                "pinned_agent_spec": dataclasses.asdict(spec),
+                "pinned_agent_version": spec.version,
+                "pinned_agent_fingerprint": spec_fingerprint(spec),
             },
             human_log=False,
         )
@@ -466,6 +541,9 @@ def _dispatch_subprocess(
             execution_mode=runtime["default_execution_mode"],
             progress_jsonl=str(progress_file),
             project_root=project_root,
+            project_id=envelope_project_id,
+            project_contract_version=envelope_project_contract_version,
+            project_fingerprint=envelope_project_fingerprint,
             references=references,
             human_approved=human_approved,
             approval_token=approval_token,
@@ -592,6 +670,9 @@ def _dispatch_factory_brain(
             context_updates={
                 "agent_thread_id": resolved_thread_id,
                 "runtime_mode": "factory_brain",
+                "pinned_agent_spec": dataclasses.asdict(spec),
+                "pinned_agent_version": spec.version,
+                "pinned_agent_fingerprint": spec_fingerprint(spec),
             },
             human_log=False,
         )
@@ -949,6 +1030,8 @@ class HubOrchestrator:
     ) -> None:
         self._model = model
         self._registry = _load_specialists()
+        self._registry_errors: list[RegistryLoadError] = _load_registry_errors()
+        self._registry_last_refreshed = _utcnow_iso()
         self._session_id = load_or_create_session_id()
         self._semantic_extractor = semantic_extractor or extract_semantic_candidates
         self._learning_notify: Any = None
@@ -1065,19 +1148,28 @@ class HubOrchestrator:
         return f"Learning mode is {'ON' if enabled else 'OFF'}."
 
     def set_current_project(self, path: str) -> str:
-        """Set the sticky project_root passed to subprocess specialists.
+        """Set the sticky project passed to subprocess specialists.
 
         Hub does not validate this against any specialist's allowlist —
-        that check happens server-side in the specialist. Hub only checks
-        the path itself exists, to fail fast on a typo.
+        that check happens server-side in the specialist. Hub resolves the
+        path to a canonical `ProjectContext` (project_id, contract version,
+        fingerprint) and revalidates that context fresh immediately before
+        every dispatch (see `ProjectContextRegistry.resolve_for_dispatch`),
+        so a selection that later goes stale stops the dispatch instead of
+        silently sending whatever the path used to resolve to.
         """
         try:
-            resolved = get_project_context_registry().set(self._session_id, path)
+            context = get_project_context_registry().set(self._session_id, path)
         except ValueError as exc:
             human_logger.info("Project selection rejected for %r: %s", path, exc)
             return f"Error: {exc}"
-        human_logger.info("Session %s: current project set to %s", self._session_id[:8], resolved)
-        return f"Current project set to {resolved}."
+        human_logger.info(
+            "Session %s: current project set to %s (project_id=%s)",
+            self._session_id[:8],
+            context.root,
+            context.project_id,
+        )
+        return f"Current project set to {context.root} (project_id: {context.project_id})."
 
     def clear_current_project(self) -> str:
         get_project_context_registry().clear(self._session_id)
@@ -1088,7 +1180,10 @@ class HubOrchestrator:
         current = get_project_context_registry().get(self._session_id)
         if current is None:
             return "No project selected — specialists use their own default project."
-        return f"Current project: {current}"
+        return (
+            f"Current project: {current.root} "
+            f"(project_id: {current.project_id}, contract v{current.contract_version})."
+        )
 
     def run_learning_pass(self, session_id: str) -> list[str]:
         """Deferred ('dreaming') pass: decide what from a now-quiet session is
@@ -1224,7 +1319,7 @@ class HubOrchestrator:
         if pending is None or pending.state != TASK_STATE_WAITING_APPROVAL:
             return "No task is currently waiting for approval."
 
-        spec = self._require_spec(pending.selected_agent_id)
+        spec = self._require_spec(pending)
         _human_task_log(pending.id, "Approval received. Resuming %s.", spec.name)
         store = get_task_run_store()
         store.transition(
@@ -1248,6 +1343,9 @@ class HubOrchestrator:
                     human_approved=True,
                     approval_token=pending.approval_token,
                     request_id=pending.context.get("agent_request_id"),
+                    project_root_override=pending.context.get("agent_dispatch_project_root"),
+                    project_context_override=_project_context_override_from_pending(pending),
+                    references=pending.context.get("agent_dispatch_references"),
                 )
         return self._finalize_specialist_follow_up(pending.id, spec, output)
 
@@ -1256,7 +1354,7 @@ class HubOrchestrator:
         if pending is None or pending.state != TASK_STATE_WAITING_APPROVAL:
             return "No task is currently waiting for approval."
 
-        spec = self._require_spec(pending.selected_agent_id)
+        spec = self._require_spec(pending)
         _human_task_log(pending.id, "Approval rejected. Stopping %s: %s", spec.name, reason)
         response_text: str
         raw_result: dict[str, Any]
@@ -1293,7 +1391,7 @@ class HubOrchestrator:
         if pending is None or pending.state != TASK_STATE_WAITING_CLARIFICATION:
             return self.invoke(clarification, progress_notify=progress_notify)
 
-        spec = self._require_spec(pending.selected_agent_id)
+        spec = self._require_spec(pending)
         store = get_task_run_store()
 
         true_resume = spec.runtime["mode"] != "factory_brain" and bool(
@@ -1347,6 +1445,7 @@ class HubOrchestrator:
                     request_id=pending.context.get("agent_request_id"),
                     resume=pending.context.get("specialist_resume_token"),
                     project_root_override=pending.context.get("agent_dispatch_project_root"),
+                    project_context_override=_project_context_override_from_pending(pending),
                     references=pending.context.get("agent_dispatch_references"),
                 )
             else:
@@ -1382,7 +1481,7 @@ class HubOrchestrator:
         if pending is None or pending.state != TASK_STATE_WAITING_DECISION:
             return "No task is currently waiting for a decision."
 
-        spec = self._require_spec(pending.selected_agent_id)
+        spec = self._require_spec(pending)
         pending_decision = pending.context.get("specialist_pending_decision") or {}
         options = pending_decision.get("options") or []
         allowed = {opt["name"] for opt in options if isinstance(opt, dict) and opt.get("name")}
@@ -1408,20 +1507,29 @@ class HubOrchestrator:
                 request_id=pending.context.get("agent_request_id"),
                 decision=decision,
                 project_root_override=pending.context.get("agent_dispatch_project_root"),
+                project_context_override=_project_context_override_from_pending(pending),
                 references=pending.context.get("agent_dispatch_references"),
             )
         return self._finalize_specialist_follow_up(pending.id, spec, output)
 
-    def _reconcile_registry(self) -> None:
+    def _reconcile_registry(self) -> tuple[list[str], list[str], list[str]]:
         """Re-read Factory's registry and rebuild the tool graph if it changed.
 
-        Runs before every turn so a specialist that Factory added, edited, or
-        removed from `config/agents/` since Hub started takes effect on the
-        next request — no Hub restart or Hub code change required.
+        Runs before every turn (see `invoke`) so a specialist that Factory
+        added, edited, or removed from `config/agents/` since Hub started
+        takes effect on the next request — no Hub restart or Hub code
+        change required. Also runs immediately on `/agents-refresh` (see
+        `refresh_registry`) for an operator who doesn't want to wait for
+        the next message. Registry health (invalid manifests) is refreshed
+        on every call regardless of whether the callable agent set itself
+        changed, so `/agents-refresh` and `/status`-adjacent health views
+        stay current even on a no-op turn.
         """
         fresh = _load_specialists()
+        self._registry_errors = _load_registry_errors()
+        self._registry_last_refreshed = _utcnow_iso()
         if fresh == self._registry:
-            return
+            return [], [], []
 
         previous_by_id = {spec.id: spec for spec in self._registry}
         fresh_by_id = {spec.id: spec for spec in fresh}
@@ -1449,6 +1557,59 @@ class HubOrchestrator:
             removed,
             [spec.id for spec in fresh],
         )
+        return added, changed, removed
+
+    def _format_registry_errors(self) -> list[str]:
+        if not self._registry_errors:
+            return ["Invalid manifests: none."]
+        lines = [f"Invalid manifest(s) ({len(self._registry_errors)}):"]
+        lines.extend(f"  - {err.source}: {err.message}" for err in self._registry_errors)
+        return lines
+
+    def refresh_registry(self) -> str:
+        """Explicit, immediate registry refresh — the `/agents-refresh` command.
+
+        `invoke()` already reconciles the registry before every turn
+        (bounded to once per incoming message, per AGENT-HUB-040); this is
+        for an operator who wants that to happen right now — e.g.
+        immediately after staging a new specialist — and it surfaces
+        registry health (invalid manifests skipped on load) that the
+        per-turn reconciliation only logs.
+        """
+        added, changed, removed = self._reconcile_registry()
+        lines = [
+            f"Registry refreshed at {self._registry_last_refreshed} — "
+            f"{len(self._registry)} agent(s) active.",
+            f"Added: {', '.join(added) or 'none'}",
+            f"Changed: {', '.join(changed) or 'none'}",
+            f"Removed: {', '.join(removed) or 'none'}",
+        ]
+        lines.extend(self._format_registry_errors())
+        return "\n".join(lines)
+
+    def agents_status(self) -> str:
+        """Read-only registry health view — the `/agents-status` command.
+
+        Unlike `/agents-refresh`, this never re-reads the registry from
+        disk; it reports state as of the last reconciliation (per-turn or
+        explicit), each agent's pinned-identity fields (version and
+        manifest fingerprint — the same fingerprint a paused task pins
+        against, see `_require_spec`), and any invalid manifest from that
+        last read. Safe to call with no side effects.
+        """
+        lines = [
+            f"Registry last refreshed at {self._registry_last_refreshed} — "
+            f"{len(self._registry)} agent(s) active.",
+        ]
+        if self._registry:
+            lines.extend(
+                f"  - {spec.id} (v{spec.version}, fingerprint {spec_fingerprint(spec)[:8]})"
+                for spec in self._registry
+            )
+        else:
+            lines.append("  (none)")
+        lines.extend(self._format_registry_errors())
+        return "\n".join(lines)
 
     def invoke(self, message: str, *, progress_notify: Any | None = None) -> str:
         logger.info("Received user request: %s", message)
@@ -1630,9 +1791,56 @@ class HubOrchestrator:
             store.update_run(run_id, final_response=reply)
         return reply
 
-    def _require_spec(self, agent_id: str | None) -> AgentSpec:
+    def _require_spec(self, pending: TaskRun) -> AgentSpec:
+        """Return the agent spec a paused task should resume against.
+
+        A dispatch pins the exact spec it used into the task's context (see
+        `pinned_agent_spec` in `_dispatch_subprocess`/`_dispatch_factory_brain`).
+        Resume always prefers that pinned snapshot over the live registry —
+        if Factory changed or removed this agent while the task was paused,
+        resume still uses the manifest version the task was actually
+        dispatched against (AGENT-HUB-040), rather than silently picking up
+        different behavior or failing just because the id moved. Paused
+        tasks from before this pinning existed have no `pinned_agent_spec`
+        and fall back to a live-registry lookup by id, as before.
+        """
+        agent_id = pending.selected_agent_id
         if not agent_id:
             raise RuntimeError("Paused task has no selected agent.")
+
+        pinned_data = pending.context.get("pinned_agent_spec")
+        if isinstance(pinned_data, dict):
+            try:
+                pinned_spec = AgentSpec(**pinned_data)
+            except TypeError:
+                logger.warning(
+                    "Task %s: pinned_agent_spec for '%s' could not be reconstructed; "
+                    "falling back to the live registry.",
+                    pending.id,
+                    agent_id,
+                )
+                pinned_spec = None
+            if pinned_spec is not None:
+                live = next((spec for spec in self._registry if spec.id == agent_id), None)
+                if live is None:
+                    logger.info(
+                        "Task %s: resuming '%s' (version=%s) pinned to its dispatch-time "
+                        "manifest; the live registry no longer has this agent.",
+                        pending.id,
+                        agent_id,
+                        pinned_spec.version,
+                    )
+                elif spec_fingerprint(live) != pending.context.get("pinned_agent_fingerprint"):
+                    logger.info(
+                        "Task %s: resuming '%s' (version=%s) pinned to its dispatch-time "
+                        "manifest; the live registry's manifest for this agent has since "
+                        "changed.",
+                        pending.id,
+                        agent_id,
+                        pinned_spec.version,
+                    )
+                return pinned_spec
+
         for spec in self._registry:
             if spec.id == agent_id:
                 return spec
@@ -1673,11 +1881,22 @@ def cancel_all_active_tasks(reason: str) -> list[str]:
 
 
 def _load_specialists() -> list[AgentSpec]:
-    registry = load_registry()
+    registry = load_registry_report().specs
     factory_spec = build_factory_agent_spec()
     if factory_spec is not None and not any(spec.id == factory_spec.id for spec in registry):
         registry.append(factory_spec)
     return registry
+
+
+def _load_registry_errors() -> list[RegistryLoadError]:
+    """Agent.json files the last real registry read couldn't parse.
+
+    Read independently of `_load_specialists` (which many tests monkeypatch
+    with a fixed fake list) so it always reflects the real
+    `AGENT_REGISTRY_DIR` on disk — used only for `/agents-refresh` health
+    reporting, never for building the callable tool set.
+    """
+    return load_registry_report().errors
 
 
 def _record_orchestrator_llm_run(

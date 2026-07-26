@@ -6,6 +6,8 @@ The registry loads all of them at startup so the orchestrator can route to them.
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
@@ -61,6 +63,33 @@ class AgentSpec:
     extensions: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class RegistryLoadError:
+    """One agent.json Hub could not load, so it can be surfaced instead of
+    silently vanishing from the callable specialist set (see AGENT-HUB-040)."""
+
+    source: str
+    message: str
+
+
+@dataclass(frozen=True)
+class RegistryLoadResult:
+    specs: list[AgentSpec]
+    errors: list[RegistryLoadError]
+
+
+def spec_fingerprint(spec: AgentSpec) -> str:
+    """Stable content hash of an agent spec.
+
+    Used to pin an in-flight (paused) task to the exact manifest version it
+    was dispatched against, and to detect whether the live registry's entry
+    for an agent id still matches what a paused task was pinned to (see
+    `HubOrchestrator._require_spec` in orchestrator.py).
+    """
+    payload = json.dumps(dataclasses.asdict(spec), sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
 def parse_agent_spec(data: dict[str, Any]) -> AgentSpec:
     """Parse one agent.json object into the Hub's bounded runtime view."""
     if not isinstance(data, dict):
@@ -79,18 +108,21 @@ def parse_agent_spec(data: dict[str, Any]) -> AgentSpec:
         extensions={key: value for key, value in data.items() if key not in _CORE_FIELDS},
     )
 
+def load_registry_report(registry_dir: Path | None = None) -> RegistryLoadResult:
+    """Return every enabled agent, plus every agent.json that failed to load.
 
-def load_registry(registry_dir: Path | None = None) -> list[AgentSpec]:
-    """Return all enabled agents from the agent-factory registry.
-
-    Returns an empty list if the registry directory doesn't exist (e.g., in CI).
+    Unlike `load_registry`, an invalid manifest is not just logged and
+    dropped — it comes back as a `RegistryLoadError` so a caller (see
+    `/agents-refresh` in orchestrator.py) can expose *why* a specialist isn't
+    in the callable set instead of it silently going missing.
     """
     base = registry_dir or AGENT_REGISTRY_DIR
     if not base.exists():
         logger.info("Agent registry directory not found at %s — no agents loaded.", base)
-        return []
+        return RegistryLoadResult(specs=[], errors=[])
 
     specs: list[AgentSpec] = []
+    errors: list[RegistryLoadError] = []
     for agent_dir in sorted(base.iterdir()):
         if not agent_dir.is_dir():
             continue
@@ -105,6 +137,18 @@ def load_registry(registry_dir: Path | None = None) -> list[AgentSpec]:
             logger.debug("Loaded agent: %s (%s)", spec.id, spec.version)
         except Exception as exc:
             logger.warning("Could not load agent spec from %s: %s", spec_file, exc)
+            errors.append(RegistryLoadError(source=str(spec_file), message=str(exc)))
 
-    logger.info("Agent registry: %d enabled agent(s) loaded.", len(specs))
-    return specs
+    logger.info(
+        "Agent registry: %d enabled agent(s) loaded, %d invalid.", len(specs), len(errors)
+    )
+    return RegistryLoadResult(specs=specs, errors=errors)
+
+
+def load_registry(registry_dir: Path | None = None) -> list[AgentSpec]:
+    """Return all enabled agents from the agent-factory registry.
+
+    Returns an empty list if the registry directory doesn't exist (e.g., in CI).
+    Invalid manifests are skipped; use `load_registry_report` to see why.
+    """
+    return load_registry_report(registry_dir).specs

@@ -393,6 +393,74 @@ def test_status_command_sends_plain_text_status(monkeypatch):
     ]
 
 
+def test_agents_status_command_sends_plain_text_report(monkeypatch):
+    sent: list[dict] = []
+
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway._send_message",
+        lambda token, chat_id, text, *, parse_mode="Markdown": sent.append(
+            {
+                "token": token,
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": parse_mode,
+            }
+        ),
+    )
+
+    orch = SimpleNamespace(
+        agents_status=lambda: "Registry last refreshed at ... — 1 agent(s) active.",
+        registry=[],
+        set_learning_notifier=lambda callback: None,
+    )
+    gateway = TelegramGateway("token-123", orch)
+
+    gateway._handle_message({"chat": {"id": 42}, "text": "/agents-status"})
+
+    assert sent == [
+        {
+            "token": "token-123",
+            "chat_id": 42,
+            "text": "Registry last refreshed at ... — 1 agent(s) active.",
+            "parse_mode": None,
+        }
+    ]
+
+
+def test_agents_refresh_command_sends_plain_text_report(monkeypatch):
+    sent: list[dict] = []
+
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway._send_message",
+        lambda token, chat_id, text, *, parse_mode="Markdown": sent.append(
+            {
+                "token": token,
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": parse_mode,
+            }
+        ),
+    )
+
+    orch = SimpleNamespace(
+        refresh_registry=lambda: "Registry refreshed — 1 agent(s) active.\nAdded: none",
+        registry=[],
+        set_learning_notifier=lambda callback: None,
+    )
+    gateway = TelegramGateway("token-123", orch)
+
+    gateway._handle_message({"chat": {"id": 42}, "text": "/agents-refresh"})
+
+    assert sent == [
+        {
+            "token": "token-123",
+            "chat_id": 42,
+            "text": "Registry refreshed — 1 agent(s) active.\nAdded: none",
+            "parse_mode": None,
+        }
+    ]
+
+
 def test_last_command_sends_plain_text_summary(monkeypatch):
     sent: list[dict] = []
 

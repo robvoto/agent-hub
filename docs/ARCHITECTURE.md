@@ -122,6 +122,66 @@ dispatch doesn't have — no project selected via `/project`, most commonly —
 Hub fails the task immediately with a clear message instead of sending an
 incomplete envelope and letting the specialist guess or fail downstream.
 
+### Canonical project context (AGENT-HUB-039)
+
+`/project <path>` no longer just remembers a filesystem path. Hub resolves it
+to a canonical `ProjectContext` (`project_context.py`): a `project_id`
+(derived from the project's git remote when one exists, so it stays stable
+across clones and local path layout; falls back to the resolved absolute path
+otherwise — Hub does not maintain a separate project registry, identity is
+derived, not assigned), a `contract_version` for this schema, a `fingerprint`
+hashed over that identity, and light metadata (`name`, `vcs`, `remote`). That
+full context, not a raw path, is what's persisted per session.
+
+Before every *fresh* dispatch that would send a specialist `project_root`,
+`ProjectContextRegistry.resolve_for_dispatch` recomputes the context from the
+persisted root and compares it to what was stored: if the root no longer
+exists, or the recomputed identity/fingerprint no longer matches (the root
+now resolves to a different project than when it was selected), the dispatch
+stops immediately with a clear failed status instead of silently sending a
+stale path — but only for a specialist whose `accepted_context` actually
+includes `project_root`; an unrelated specialist isn't blocked by someone
+else's stale selection. `project_id`, `project_contract_version`, and
+`project_fingerprint` ride alongside `project_root` in the envelope whenever
+it's sent, as additive flat fields a specialist that doesn't recognize them
+simply ignores (see `docs/agent-contract.md`'s "no fallback" note: Agent
+Factory and ai-tech-lead have not adopted this richer vocabulary yet — Hub
+sends it, but "stop on unknown project" is enforced Hub-side, not by
+specialist-side parsing).
+
+A *resumed* dispatch — clarification, decision, or approval resume, all
+three — never re-resolves `/project`. Each replays the exact `ProjectContext`
+pinned at the original dispatch (stored in the task's context as
+`agent_dispatch_project_*` fields, alongside the original `references`), so
+a selection change or staleness introduced while a task was paused can't
+retroactively change what a resume sends.
+
+### Registry reconciliation & manifest pinning (AGENT-HUB-040)
+
+`HubOrchestrator._reconcile_registry` re-reads Factory's registry before
+every turn (bounded to once per incoming message) and rebuilds the callable
+tool set only when something actually changed (added/changed/removed by spec
+equality) — a no-op turn does no extra work. An operator can also force this
+immediately with `/agents-refresh`, which reports what changed plus current
+registry health: `registry.load_registry_report` surfaces any `agent.json`
+that failed to parse as a `RegistryLoadError` (source + message) instead of
+silently dropping it, so an invalid manifest is visible instead of an agent
+just quietly not showing up. `/agents-status` is the read-only counterpart —
+it reports each active agent's id/version/fingerprint and any invalid
+manifest as of the last reconciliation, without itself re-reading anything,
+so it's safe to poll.
+
+Every dispatch pins the exact `AgentSpec` it used — the full manifest plus
+`registry.spec_fingerprint`, a content hash — into the task run's persisted
+context (`pinned_agent_spec`/`pinned_agent_version`/`pinned_agent_fingerprint`).
+`HubOrchestrator._require_spec` prefers that pinned snapshot over the live
+registry when resuming a paused task: if Factory changed or removed the
+agent while the task was paused, resume still runs against the manifest
+version the task was actually dispatched against, rather than silently
+picking up different behavior or failing just because the id moved. Paused
+tasks created before this pinning existed have no pinned snapshot and fall
+back to a live-registry lookup by id, as before.
+
 ## Persistence
 
 | Store | Path | Owner |

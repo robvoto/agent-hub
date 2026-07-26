@@ -396,7 +396,9 @@ def test_restart_resumes_project_and_learn_mode_selection(monkeypatch, tmp_path)
     restarted = HubOrchestrator()
 
     assert restarted.session_id == first.session_id
-    assert get_project_context_registry().get(restarted.session_id) == str(tmp_path.resolve())
+    resumed_context = get_project_context_registry().get(restarted.session_id)
+    assert resumed_context is not None
+    assert resumed_context.root == str(tmp_path.resolve())
     assert get_learning_mode_registry().is_enabled(restarted.session_id) is True
 
 

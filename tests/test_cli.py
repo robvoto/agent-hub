@@ -8,6 +8,11 @@ from agent_hub.task_runs import TASK_STATE_CANCELLED, get_task_run_store
 
 
 def test_help_text_explains_current_thread_controls() -> None:
+    assert (
+        "/agents-refresh - re-read the specialist registry now and show what changed"
+        in _HELP_TEXT
+    )
+    assert "/agents-status - show registry health" in _HELP_TEXT
     assert "Reply normally to continue a clarification pause in the same thread." in _HELP_TEXT
     assert "Use /approve to continue an approval pause in the same thread." in _HELP_TEXT
     assert "/decide <option> [text] - answer a task waiting on a specialist decision" in _HELP_TEXT

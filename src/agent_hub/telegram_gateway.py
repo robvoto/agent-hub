@@ -150,6 +150,9 @@ class TelegramGateway:
             "Send a plain message to dispatch it to a specialist agent "
             "(e.g. AI Tech Lead). Slash commands control the hub itself:\n\n"
             "/agents - list registered specialist agents\n"
+            "/agents-refresh - re-read the specialist registry now and show what changed\n"
+            "/agents-status - show registry health (versions, fingerprints, invalid "
+            "manifests) without refreshing\n"
             "/approve - approve a task waiting on approval\n"
             "/decide <option> [text] - answer a task waiting on a specialist decision\n"
             "/forget <id> - remove a stored learning\n"
@@ -214,6 +217,24 @@ class TelegramGateway:
                 lines = [f"*{s.name}* (`{s.id}`): {s.purpose}" for s in specs]
                 reply = "**Registered agents:**\n" + "\n".join(lines)
             _send_message(self._token, chat_id, reply)
+            return
+
+        if text == "/agents-refresh":
+            _send_message(
+                self._token,
+                chat_id,
+                self._orch.refresh_registry(),
+                parse_mode=None,
+            )
+            return
+
+        if text == "/agents-status":
+            _send_message(
+                self._token,
+                chat_id,
+                self._orch.agents_status(),
+                parse_mode=None,
+            )
             return
 
         if text == "/status":

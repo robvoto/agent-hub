@@ -12,6 +12,9 @@ _HELP_TEXT = (
     "Send a plain message to dispatch it to a specialist agent.\n"
     "Commands:\n"
     "/agents - list registered specialist agents\n"
+    "/agents-refresh - re-read the specialist registry now and show what changed\n"
+    "/agents-status - show registry health (versions, fingerprints, invalid manifests)"
+    " without refreshing\n"
     "/approve - approve a task waiting on approval\n"
     "/decide <option> [text] - answer a task waiting on a specialist decision\n"
     "/forget <id> - remove a stored learning\n"
@@ -114,6 +117,14 @@ def _run_chat(model: str) -> None:
             else:
                 for spec in orch.registry:
                     print(f"  {spec.name} ({spec.id}): {spec.purpose}")
+            continue
+
+        if text == "/agents-refresh":
+            print(f"\nHub: {orch.refresh_registry()}\n")
+            continue
+
+        if text == "/agents-status":
+            print(f"\nHub: {orch.agents_status()}\n")
             continue
 
         if text == "/status":

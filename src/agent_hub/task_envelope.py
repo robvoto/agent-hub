@@ -23,6 +23,9 @@ def build_task_envelope(
     execution_mode: str,
     progress_jsonl: str,
     project_root: str | None = None,
+    project_id: str | None = None,
+    project_contract_version: int | None = None,
+    project_fingerprint: str | None = None,
     references: list[str] | None = None,
     human_approved: bool = False,
     approval_token: str | None = None,
@@ -34,6 +37,13 @@ def build_task_envelope(
     `references` are user-provided or Hub-observed pointers (file paths,
     URLs, ticket IDs, etc.) passed through uninterpreted — Hub does not
     parse or act on their contents, only relays them.
+
+    `project_id`/`project_contract_version`/`project_fingerprint` are the
+    canonical `ProjectContext` Hub resolved and validated for `project_root`
+    (see `project_context.py`) — additive enrichment of the same project
+    selection, only ever sent alongside a non-empty `project_root`. A
+    specialist that doesn't recognize them ignores them like any other
+    field it doesn't declare interest in.
 
     `resume` is an opaque value a specialist previously issued as its own
     `resume_token` when it paused for clarification. Hub relays it back
@@ -57,6 +67,12 @@ def build_task_envelope(
     }
     if project_root:
         envelope["project_root"] = project_root
+        if project_id:
+            envelope["project_id"] = project_id
+        if project_contract_version is not None:
+            envelope["project_contract_version"] = project_contract_version
+        if project_fingerprint:
+            envelope["project_fingerprint"] = project_fingerprint
     if references:
         envelope["references"] = list(references)
     if human_approved:

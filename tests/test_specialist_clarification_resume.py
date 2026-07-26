@@ -175,24 +175,48 @@ def test_true_resume_preserves_identity_and_transports_opaque_token_unchanged(
 
 
 def test_original_universal_context_survives_the_pause(monkeypatch, tmp_path):
-    """Prove the true-resume dispatch replays the project_root captured at the
-    *original* dispatch rather than re-deriving the operator's live /project
-    selection. `_current_project_for_task_run` is stubbed to return a
-    different value on each call — if the resume path called it again
-    (instead of using the captured override), it would see "drifted-project"
-    instead of the original."""
+    """Prove the true-resume dispatch replays the project context captured at
+    the *original* dispatch rather than re-resolving the operator's live
+    /project selection. `_resolve_project_context_for_task_run` is stubbed
+    to return a different project on each call — if the resume path called
+    it again (instead of replaying the captured override), it would see
+    "drifted-project" instead of the original."""
+    from agent_hub.project_context import ProjectContext, ProjectContextResolution
+
     spec = _resume_capable_spec(tmp_path)
 
-    live_lookups = ["original-project", "drifted-project"]
+    live_lookups = [
+        ProjectContextResolution(
+            context=ProjectContext(
+                project_id="original-project",
+                root="original-project",
+                contract_version=1,
+                fingerprint="fp-original",
+                metadata={},
+            ),
+            error=None,
+        ),
+        ProjectContextResolution(
+            context=ProjectContext(
+                project_id="drifted-project",
+                root="drifted-project",
+                contract_version=1,
+                fingerprint="fp-drifted",
+                metadata={},
+            ),
+            error=None,
+        ),
+    ]
     live_lookup_calls: list[str] = []
 
-    def _fake_current_project(task_run_id):
-        value = live_lookups[len(live_lookup_calls)]
-        live_lookup_calls.append(value)
-        return value
+    def _fake_resolve_project_context(task_run_id):
+        resolution = live_lookups[len(live_lookup_calls)]
+        live_lookup_calls.append(resolution.context.project_id)
+        return resolution
 
     monkeypatch.setattr(
-        "agent_hub.orchestrator._current_project_for_task_run", _fake_current_project
+        "agent_hub.orchestrator._resolve_project_context_for_task_run",
+        _fake_resolve_project_context,
     )
     _ScriptedFakePopen.calls = []
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)

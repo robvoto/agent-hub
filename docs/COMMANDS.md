@@ -34,6 +34,12 @@ Equivalent wrapper:
 Interactive chat supports:
 
 - `/agents` to list callable specialists
+- `/agents-refresh` to re-read the specialist registry immediately (instead of waiting
+  for the next turn's automatic reconciliation) and report what was added, changed, or
+  removed, plus any `agent.json` that failed to load
+- `/agents-status` to show registry health as of the last reconciliation — each active
+  agent's id, version, and manifest fingerprint (the same fingerprint a paused task pins
+  against), plus any invalid manifest — without triggering a refresh itself
 - `/approve` to resume a paused approval
 - `/forget <memory id>` to delete a stored hub learning
 - `/help` to show the command list
@@ -55,7 +61,11 @@ Interactive chat supports:
 - `/memory` to list stored hub learnings, showing each record's `type` and `status`
 - `/new` to start a fresh LangGraph thread for future turns without cancelling
   active work in the current conversation
-- `/project [<path>|clear]` to set/show/clear the target project passed to specialists
+- `/project [<path>|clear]` to set/show/clear the target project passed to specialists.
+  Hub resolves the path to a canonical project context (a stable `project_id`, contract
+  version, and fingerprint — see `docs/ARCHITECTURE.md`) and revalidates it fresh before
+  every dispatch that would use it, so a project that moved or was deleted stops the
+  dispatch with a clear error instead of silently sending a stale path.
 - `/reject optional reason` to reject a paused approval
 - `/reset` to cancel the current active or paused task and its running specialist
   process tree for this conversation, then immediately start a fresh LangGraph thread
