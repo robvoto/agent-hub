@@ -39,6 +39,16 @@ Reusable defaults:
 - `human-mcp-access`: discover and use the repo-configured Human MCP server for Google Sheets/Docs
 - `backlog-management`: creating/updating/grooming rows in the live backlog Google Sheet; load `human-mcp-access` first
 
+## Governed self-improvement
+
+- The agent may improve its own reusable skills or `AGENTS.md` without separate approval when evidence from completed work shows a repeatable problem, recurring correction, avoidable rework, or stable procedure.
+- Keep every improvement bounded to the demonstrated problem. Do not broaden Hub ownership, specialist ownership, permissions, memory access, tool access, runtime authority, or repository scope.
+- Before editing, record the evidence, target file, expected reusable benefit, risk, and validation method in the task trace or final report.
+- Reusable skills must remain concise and procedural, be registered in the relevant `.skills/` index, and be validated with the smallest relevant test or deterministic check.
+- Do not duplicate policy across skills and `AGENTS.md`. Put universal behavioural rules in `AGENTS.md`; put task-specific procedures in skills.
+- Code or runtime self-modification still requires the normal approved bounded coding workflow and relevant validation.
+- Stop without changing anything when the evidence, target, ownership, or validation method is unclear.
+
 ## Runtime boundaries
 
 - Agent registry definitions are owned by Agent Factory.
@@ -52,7 +62,7 @@ Reusable defaults:
 - Never guess or invent.
 - Keep context bounded. Load the smallest file set that can answer the task.
 - Keep work bounded and small. Touch only files required for the task.
-- Do not add hidden autonomous behaviour, broad discovery loops, or silent self-improvement.
+- Do not add hidden autonomous behaviour, broad discovery loops, or uncontrolled self-improvement.
 - Do not add compatibility shims, duplicate implementations, unused code, dead code, or legacy code unless explicitly requested.
 - Do not hardcode hidden choices. If a prototype hardcode is explicitly approved, state why, where it lives, and what would make it configurable later.
 - Do not add fallback/default behaviour that changes the outcome unless explicitly approved.
@@ -74,5 +84,6 @@ Report only what matters when the agent finishes a task:
 
 - Files changed
 - Behaviour changed
+- Self-improvement evidence and validation, when applicable
 - Validation command/result, or why not run
 - Remaining risk or follow-up
