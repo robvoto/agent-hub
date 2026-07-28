@@ -414,6 +414,57 @@ def _resolve_dispatch_context(
     return resolved_project_root, resolved_references, missing
 
 
+HUB_SUPPORTED_PROJECT_CONTEXT_SCHEMA_VERSIONS = {1}
+"""schema_version values Hub itself knows how to build a `project_context`
+envelope for. Not a specialist's declaration — Hub's own side of the
+negotiation in `_resolve_project_context_schema_version`."""
+
+
+class ProjectContextVersionError(ValueError):
+    """A specialist declared `project_context_contract` but Hub shares no
+    schema_version with it — dispatch must stop rather than guess one."""
+
+
+def _resolve_project_context_schema_version(spec: AgentSpec) -> int | None:
+    """Negotiate the project_context.schema_version to send this specialist.
+
+    Reads the specialist's own declared `input_contract.project_context_contract
+    .supported_schema_versions` — already loaded onto `spec` by the registry —
+    and picks the highest version both Hub and the specialist support. Hub
+    never hardcodes or guesses a version for a specialist it hasn't verified
+    support from.
+
+    Returns `None` when the specialist hasn't declared this contract at all:
+    a legacy specialist Hub still dispatches, using only the flat
+    `project_root`/`references` fields exactly as before. Raises
+    `ProjectContextVersionError` when the specialist *has* declared the
+    contract but Hub shares no compatible version with it — that dispatch
+    must be refused, not sent with a guessed version.
+    """
+    contract = spec.input_contract.get("project_context_contract")
+    if not isinstance(contract, dict) or not contract:
+        return None
+
+    supported = contract.get("supported_schema_versions")
+    if not isinstance(supported, list) or not supported:
+        return None
+
+    compatible = sorted(
+        version
+        for version in supported
+        if isinstance(version, int)
+        and version in HUB_SUPPORTED_PROJECT_CONTEXT_SCHEMA_VERSIONS
+    )
+    if not compatible:
+        raise ProjectContextVersionError(
+            f"{spec.name} declares project_context_contract.supported_schema_versions="
+            f"{supported!r}, but Hub only supports "
+            f"{sorted(HUB_SUPPORTED_PROJECT_CONTEXT_SCHEMA_VERSIONS)!r}. Refusing to "
+            "dispatch with a version this specialist hasn't confirmed it understands."
+        )
+    return compatible[-1]
+
+
 def _dispatch_subprocess(
     spec: AgentSpec,
     task: str,
@@ -471,6 +522,23 @@ def _dispatch_subprocess(
         output = {"status": "failed", "summary": detail}
         _record_agent_status(spec, output, task_run_id)
         return output
+
+    try:
+        project_context_schema_version = _resolve_project_context_schema_version(spec)
+    except ProjectContextVersionError as exc:
+        output = {"status": "failed", "summary": str(exc)}
+        _record_agent_status(spec, output, task_run_id)
+        return output
+
+    envelope_project_context = (
+        {
+            "schema_version": project_context_schema_version,
+            "project_root": project_root,
+            "references": references or [],
+        }
+        if project_context_schema_version is not None
+        else None
+    )
 
     envelope_project_id = project_context.project_id if (project_root and project_context) else None
     envelope_project_contract_version = (
@@ -544,6 +612,7 @@ def _dispatch_subprocess(
             project_id=envelope_project_id,
             project_contract_version=envelope_project_contract_version,
             project_fingerprint=envelope_project_fingerprint,
+            project_context=envelope_project_context,
             references=references,
             human_approved=human_approved,
             approval_token=approval_token,

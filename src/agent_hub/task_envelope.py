@@ -26,6 +26,7 @@ def build_task_envelope(
     project_id: str | None = None,
     project_contract_version: int | None = None,
     project_fingerprint: str | None = None,
+    project_context: dict[str, Any] | None = None,
     references: list[str] | None = None,
     human_approved: bool = False,
     approval_token: str | None = None,
@@ -44,6 +45,14 @@ def build_task_envelope(
     selection, only ever sent alongside a non-empty `project_root`. A
     specialist that doesn't recognize them ignores them like any other
     field it doesn't declare interest in.
+
+    `project_context` is the versioned `{schema_version, project_root,
+    references}` envelope (see `_resolve_project_context_schema_version` in
+    orchestrator.py) — only ever built and passed in when the specialist's
+    own manifest declared a `project_context_contract` and Hub found a
+    schema_version they both support. It travels alongside the flat
+    `project_root`/`references` fields, not instead of them, so specialists
+    that haven't adopted it yet keep working unchanged.
 
     `resume` is an opaque value a specialist previously issued as its own
     `resume_token` when it paused for clarification. Hub relays it back
@@ -75,6 +84,8 @@ def build_task_envelope(
             envelope["project_fingerprint"] = project_fingerprint
     if references:
         envelope["references"] = list(references)
+    if project_context is not None:
+        envelope["project_context"] = project_context
     if human_approved:
         envelope["human_approved"] = True
         if approval_token:

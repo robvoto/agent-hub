@@ -425,6 +425,197 @@ def test_widget_forge_dispatch_fails_clearly_when_required_context_is_missing(
     assert final.error_message and "requires project_root" in final.error_message
 
 
+def test_widget_forge_receives_versioned_project_context_when_compatible(
+    monkeypatch, tmp_path
+):
+    """A specialist that declares project_context_contract.supported_schema_versions
+    including a version Hub also supports gets a versioned project_context envelope,
+    alongside (not instead of) the legacy flat project_root/references fields."""
+    registry_dir = tmp_path / "agents"
+    working_directory = tmp_path / "workdir"
+    working_directory.mkdir()
+    _write_fake_specialist_manifest(
+        registry_dir,
+        working_directory,
+        input_contract_overrides={
+            "project_context_contract": {"supported_schema_versions": [1]},
+        },
+    )
+
+    specs = load_registry(registry_dir)
+    spec = specs[0]
+
+    _ScriptedFakePopen.calls = []
+    _ScriptedFakePopen.responses = [{"status": "success", "summary": "Forged 3 widgets."}]
+    monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _UnusedGraph())
+
+    orchestrator = HubOrchestrator()
+    orchestrator.set_current_project(str(working_directory))
+    run = get_task_run_store().create_run(
+        session_id=orchestrator.session_id, user_message="Forge some widgets"
+    )
+    tool = _make_agent_tool(spec)
+    with active_task_run(run.id):
+        tool.invoke({"task": "Forge some widgets", "references": ["spec://widget-42"]})
+
+    call = _ScriptedFakePopen.calls[0]
+    assert call["project_root"] == str(working_directory)
+    assert call["references"] == ["spec://widget-42"]
+    assert call["project_context"] == {
+        "schema_version": 1,
+        "project_root": str(working_directory),
+        "references": ["spec://widget-42"],
+    }
+
+
+def test_widget_forge_dispatch_fails_clearly_on_incompatible_schema_version(
+    monkeypatch, tmp_path
+):
+    """A specialist that declares project_context_contract but shares no
+    schema_version with Hub is refused outright — Hub never guesses or falls
+    back to a version the specialist hasn't confirmed it understands."""
+    registry_dir = tmp_path / "agents"
+    working_directory = tmp_path / "workdir"
+    working_directory.mkdir()
+    _write_fake_specialist_manifest(
+        registry_dir,
+        working_directory,
+        input_contract_overrides={
+            "project_context_contract": {"supported_schema_versions": [99]},
+        },
+    )
+
+    specs = load_registry(registry_dir)
+    spec = specs[0]
+
+    _ScriptedFakePopen.calls = []
+    _ScriptedFakePopen.responses = []
+    monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _UnusedGraph())
+
+    orchestrator = HubOrchestrator()
+    run = get_task_run_store().create_run(
+        session_id=orchestrator.session_id, user_message="Forge some widgets"
+    )
+    tool = _make_agent_tool(spec)
+    with active_task_run(run.id):
+        reply = tool.invoke({"task": "Forge some widgets"})
+
+    assert "supported_schema_versions" in reply
+    assert _ScriptedFakePopen.calls == []
+
+    final = get_task_run_store().get_run(run.id)
+    assert final is not None
+    assert final.state == TASK_STATE_FAILED
+
+
+def test_widget_forge_dispatch_omits_project_context_when_contract_not_declared(
+    monkeypatch, tmp_path
+):
+    """A specialist with no project_context_contract at all (the current, default
+    fixture shape) gets no project_context envelope — only the legacy flat fields,
+    unchanged from before this feature existed."""
+    registry_dir = tmp_path / "agents"
+    working_directory = tmp_path / "workdir"
+    working_directory.mkdir()
+    _write_fake_specialist_manifest(registry_dir, working_directory)
+
+    specs = load_registry(registry_dir)
+    spec = specs[0]
+    assert "project_context_contract" not in spec.input_contract
+
+    _ScriptedFakePopen.calls = []
+    _ScriptedFakePopen.responses = [{"status": "success", "summary": "Forged 3 widgets."}]
+    monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _UnusedGraph())
+
+    orchestrator = HubOrchestrator()
+    orchestrator.set_current_project(str(working_directory))
+    run = get_task_run_store().create_run(
+        session_id=orchestrator.session_id, user_message="Forge some widgets"
+    )
+    tool = _make_agent_tool(spec)
+    with active_task_run(run.id):
+        tool.invoke({"task": "Forge some widgets"})
+
+    call = _ScriptedFakePopen.calls[0]
+    assert call["project_root"] == str(working_directory)
+    assert "project_context" not in call
+
+
+def test_legacy_specialist_without_any_context_declarations_still_dispatches(
+    monkeypatch, tmp_path
+):
+    """A specialist manifest from before accepted_context/required_context or
+    project_context_contract existed — no context declarations at all — still
+    dispatches normally: no project_context envelope, flat fields sent by the
+    original default (accepts both project_root and references)."""
+    registry_dir = tmp_path / "agents"
+    working_directory = tmp_path / "workdir"
+    working_directory.mkdir()
+    agent_dir = registry_dir / FAKE_SPECIALIST_ID
+    agent_dir.mkdir(parents=True)
+    manifest = {
+        "id": FAKE_SPECIALIST_ID,
+        "name": "Widget Forge",
+        "purpose": "Primary responsibility: Forge widgets.\nSelect for: Anything.\nDo not select for: Nothing.",
+        "tools": [],
+        "version": "0.1.0",
+        "input_contract": {
+            "protocol": "agent-hub.task",
+            "protocol_version": 1,
+            "required_fields": ["task"],
+            "optional_fields": ["project_root", "references"],
+        },
+        "interaction_contract": {
+            "progress": False,
+            "clarification": True,
+            "approval": True,
+            "resume": False,
+            "cancellation": True,
+        },
+        "runtime": {
+            "mode": "subprocess",
+            "entrypoint": "fake-widget-forge",
+            "working_directory": str(working_directory),
+            "input_arg": "--input-json",
+            "output_arg": "--output-json",
+            "default_execution_mode": "execute",
+        },
+        "output_contract": {"status_values": ["success", "needs_clarification", "approval_required", "failed"]},
+    }
+    (agent_dir / "agent.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    specs = load_registry(registry_dir)
+    spec = specs[0]
+    assert "accepted_context" not in spec.input_contract
+    assert "project_context_contract" not in spec.input_contract
+
+    _ScriptedFakePopen.calls = []
+    _ScriptedFakePopen.responses = [{"status": "success", "summary": "Forged 3 widgets."}]
+    monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _UnusedGraph())
+
+    orchestrator = HubOrchestrator()
+    orchestrator.set_current_project(str(working_directory))
+    run = get_task_run_store().create_run(
+        session_id=orchestrator.session_id, user_message="Forge some widgets"
+    )
+    tool = _make_agent_tool(spec)
+    with active_task_run(run.id):
+        tool.invoke({"task": "Forge some widgets", "references": ["spec://widget-42"]})
+
+    call = _ScriptedFakePopen.calls[0]
+    assert call["project_root"] == str(working_directory)
+    assert call["references"] == ["spec://widget-42"]
+    assert "project_context" not in call
+
+
 class _UnusedGraph:
     """Stand-in graph — the resume paths under test never call it."""
 
