@@ -1,14 +1,12 @@
-# Hub Routing — Explicit Learning Command
+# Explicit learning
 
-This path shows the explicit `/learn` command. It bypasses the orchestrator LLM
-and writes directly to Hub memory.
+`/learn` stores the operator lesson immediately, retrieves bounded relevant
+context, runs one structured analysis, and only then applies reclassification
+or a governed runtime-skill action. Documentation, backlog, code and
+new-specialist outcomes remain proposals.
 
 ![Hub explicit learning path](05D-HUB-EXPLICIT-LEARNING.svg)
 
-Source: [05D-HUB-EXPLICIT-LEARNING.mmd](05D-HUB-EXPLICIT-LEARNING.mmd) | Rendered asset: [05D-HUB-EXPLICIT-LEARNING.svg](05D-HUB-EXPLICIT-LEARNING.svg)
+Source: [`05D-HUB-EXPLICIT-LEARNING.mmd`](05D-HUB-EXPLICIT-LEARNING.mmd) · Rendered: [`05D-HUB-EXPLICIT-LEARNING.svg`](05D-HUB-EXPLICIT-LEARNING.svg)
 
-Automatic background learning is separate. `/learn-mode` is off by default and,
-when enabled, runs later after a completed task and a quiet period.
-
-Implementation reference: this command ends up in `HubOrchestrator.learn()` and
-then `HubMemoryManager.learn()`.
+Automatic `/learn-mode` extraction is a separate, opt-in background workflow.

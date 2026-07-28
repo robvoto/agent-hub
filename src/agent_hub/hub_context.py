@@ -7,8 +7,9 @@ allowlist; there is no code path that accepts an arbitrary filesystem path, so
 this module cannot be used to read outside its approved set, and it never writes
 anything.
 
-Nothing in the production Hub calls this module yet. AGENT-HUB-020 is responsible
-for deciding when /learn's analysis should consult it.
+HubOrchestrator.learn() uses this service as bounded evidence for explicit
+/learn analysis. It remains intentionally small and read-only; it is not a
+general repository reader.
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ _APPROVED_DOCS: tuple[str, ...] = (
     "docs/INDEX.md",
     "docs/ARCHITECTURE.md",
     "docs/COMMANDS.md",
-    "docs/TELEGRAM_MVP_VALIDATION.md",
+    "docs/VALIDATION.md",
 )
 
 _MAX_DOC_CHARS = 20_000

@@ -21,7 +21,7 @@ def test_list_documentation_sources_is_the_fixed_approved_set(tmp_path):
         "docs/INDEX.md",
         "docs/ARCHITECTURE.md",
         "docs/COMMANDS.md",
-        "docs/TELEGRAM_MVP_VALIDATION.md",
+        "docs/VALIDATION.md",
     )
 
 

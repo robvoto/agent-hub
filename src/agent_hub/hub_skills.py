@@ -7,9 +7,9 @@ hub_memory.py already writes learnings into), so this module never touches the
 filesystem and can never reach the repository's `.skills/` coding-agent
 instructions.
 
-Nothing in the production Hub calls this module yet. AGENT-HUB-020 is responsible
-for deciding when /learn should propose a skill and for surfacing find_relevant_skills
-into the Hub's own reasoning.
+HubOrchestrator.learn() uses this store both to retrieve relevant existing
+skills for bounded analysis and to create or version a governed runtime skill
+when analysis returns a valid skill proposal.
 """
 
 from __future__ import annotations

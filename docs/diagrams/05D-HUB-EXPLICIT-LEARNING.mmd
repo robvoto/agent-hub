@@ -1,13 +1,34 @@
 sequenceDiagram
     actor You
-    participant Bot as Telegram or CLI entry
-    participant Orch as Hub command handler
-    participant Mem as Hub memory store
+    participant Entry as Telegram or CLI
+    participant Hub as HubOrchestrator.learn
+    participant Mem as Long-term memory
+    participant Ctx as Skills and approved docs
+    participant LLM as Structured learning analysis
+    participant Skill as HubSkillStore
 
-    You->>Bot: /learn "Prefer Telegram for operator control"
-    Bot->>Orch: explicit learning command
-    Orch->>Mem: create active operator semantic memory
-    Note over Orch,Mem: Bypasses the routing LLM path<br/>No approval gate<br/>Later auto-learning cannot override this operator record
-    Mem-->>Orch: learning id + stored value
-    Orch-->>Bot: confirmation text
-    Bot-->>You: stored learning confirmation
+    You->>Entry: /learn lesson
+    Entry->>Hub: explicit learning command
+    Hub->>Mem: store authoritative operator memory
+    Mem-->>Hub: memory id
+    Hub->>Ctx: retrieve bounded relevant context
+    Ctx-->>Hub: runtime skills and approved docs
+    Hub->>LLM: classify memory type and action
+    alt analysis fails
+        LLM-->>Hub: error
+        Hub-->>Entry: memory stored, analysis failed plainly
+    else analysis succeeds
+        LLM-->>Hub: memory type and recommended action
+        alt procedural reclassification needed
+            Hub->>Mem: reclassify stored memory type
+            Mem-->>Hub: same memory id, updated type
+        end
+        alt valid runtime skill action
+            Hub->>Skill: validate and create or version skill
+            Skill-->>Hub: accepted or rejected with reason
+            Hub-->>Entry: stored memory plus skill result
+        else memory or proposal outcome
+            Hub-->>Entry: stored memory plus recommendation
+        end
+    end
+    Entry-->>You: concise learning confirmation

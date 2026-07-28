@@ -784,6 +784,30 @@ def test_learn_gathers_relevant_skills_and_docs_before_analysis(monkeypatch, tmp
     assert [d.identifier for d in relevant_docs] == ["AGENTS.md"]
 
 
+def test_learn_stores_memory_before_running_analysis(monkeypatch, tmp_path):
+    observed: list[str] = []
+
+    def fake_analyzer(value, existing_operator, relevant_skills, relevant_docs):
+        records = HubMemoryManager().list_learnings()
+        matching = [r for r in records if r.value == value]
+        assert len(matching) == 1
+        observed.append(matching[0].identifier)
+        return LearningAnalysis(
+            restated_lesson=value,
+            memory_type="semantic",
+            action_kind="memory_only",
+            suggestion="Nothing else to do.",
+            code_change_needed=False,
+        )
+
+    orchestrator = _make_learn_orchestrator(monkeypatch, tmp_path, learning_analyzer=fake_analyzer)
+
+    reply = orchestrator.learn("Store this before analysis.", source="cli")
+
+    assert observed
+    assert observed[0] in reply
+
+
 def test_learn_memory_only_stores_semantic_by_default(monkeypatch, tmp_path):
     def fake_analyzer(value, existing_operator, relevant_skills, relevant_docs):
         return LearningAnalysis(

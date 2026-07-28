@@ -9,10 +9,12 @@ from types import SimpleNamespace
 
 import pytest
 
+import agent_hub.singleton_lock as singleton_lock
 from agent_hub.progress_events import ProgressUpdate
+from agent_hub.singleton_lock import SingletonLockBusyError
 from agent_hub.task_control import get_task_control_registry
 from agent_hub.task_runs import TASK_STATE_CANCELLED, get_task_run_store
-from agent_hub.telegram_gateway import TelegramGateway, _raise_keyboard_interrupt
+from agent_hub.telegram_gateway import TelegramGateway, _raise_keyboard_interrupt, run_telegram
 
 
 def test_help_text_explains_current_thread_controls() -> None:
@@ -1195,3 +1197,41 @@ def test_concurrent_runs_keep_separate_live_message_ids(monkeypatch):
             "text": "AI Tech Lead is working\n\nApplying change B.\n\nElapsed: under 1 minute",
         },
     ]
+
+
+def test_run_telegram_refuses_a_second_instance(monkeypatch, tmp_path):
+    """Two Telegram gateway processes on the same bot token both poll and both
+    reply to every message — this is the exact bug that motivated the lock.
+    A second run_telegram() call while one is "running" must be refused."""
+    monkeypatch.setattr(singleton_lock, "SINGLETON_LOCKS_DIR", tmp_path / "runtime_locks")
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
+
+    first_lock = singleton_lock.acquire_singleton_lock("telegram-gateway")
+    try:
+        with pytest.raises(SingletonLockBusyError, match="telegram-gateway"):
+            run_telegram()
+    finally:
+        first_lock.release()
+
+
+def test_run_telegram_releases_the_lock_after_it_exits(monkeypatch, tmp_path):
+    monkeypatch.setattr(singleton_lock, "SINGLETON_LOCKS_DIR", tmp_path / "runtime_locks")
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "agent_hub.startup_health.ensure_healthy_startup", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway.HubOrchestrator", lambda: SimpleNamespace()
+    )
+    monkeypatch.setattr(TelegramGateway, "__init__", lambda self, token, orch: None)
+    monkeypatch.setattr(TelegramGateway, "run", lambda self: None)
+    monkeypatch.setenv("HUB_BOT_TOKEN", "token-123")
+
+    run_telegram()
+
+    lock_path = tmp_path / "runtime_locks" / "telegram-gateway.lock.json"
+    assert not lock_path.exists()
+
+    # And a fresh instance can start immediately afterward.
+    second = singleton_lock.acquire_singleton_lock("telegram-gateway")
+    second.release()

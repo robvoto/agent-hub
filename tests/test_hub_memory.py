@@ -53,6 +53,21 @@ def test_learn_procedural_creates_procedural_record(tmp_path):
     assert record.status == "active"
 
 
+def test_reclassify_moves_record_between_typed_namespaces_without_changing_id(tmp_path):
+    manager = HubMemoryManager(SqliteStore(tmp_path / "knowledge.sqlite3"))
+
+    record = manager.learn("Always check evidence first.", source="cli")
+    updated = manager.reclassify(record.identifier, memory_type="procedural")
+
+    assert updated is not None
+    assert updated.identifier == record.identifier
+    assert updated.type == "procedural"
+    records = manager.list_learnings()
+    assert len(records) == 1
+    assert records[0].identifier == record.identifier
+    assert records[0].type == "procedural"
+
+
 def test_format_learning_confirmation_for_memory_only(tmp_path):
     manager = HubMemoryManager(SqliteStore(tmp_path / "knowledge.sqlite3"))
     record = manager.learn("Prefer tabs over spaces.", source="cli")

@@ -1,162 +1,103 @@
-# Agent Hub Commands
+# Agent Hub operations and commands
 
-Operational commands for Agent Hub.
-
-Run all commands from WSL:
+Run from WSL:
 
 ```bash
 cd ~/projects/agent-hub
-```
-
-## Setup
-
-```bash
 uv sync
 ```
 
-Run this again after pulling changes that affect the project name or console scripts so the generated venv entrypoints stay in sync.
-
-## CLI
+## Start
 
 ```bash
-uv run agent-hub --help
 uv run agent-hub chat
-uv run agent-hub --debug chat
-```
-
-Equivalent wrapper:
-
-```bash
-./run.sh chat
-./run.sh chat --debug
-```
-
-Interactive chat supports:
-
-- `/agents` to list callable specialists
-- `/agents-refresh` to re-read the specialist registry immediately (instead of waiting
-  for the next turn's automatic reconciliation) and report what was added, changed, or
-  removed, plus any `agent.json` that failed to load
-- `/agents-status` to show registry health as of the last reconciliation — each active
-  agent's id, version, and manifest fingerprint (the same fingerprint a paused task pins
-  against), plus any invalid manifest — without triggering a refresh itself
-- `/approve` to resume a paused approval
-- `/forget <memory id>` to delete a stored hub learning
-- `/help` to show the command list
-- `/last` to show the most recently completed or failed task
-- `/learn <instruction or fact>` to store an explicit, immediately-authoritative hub
-  learning (typed as `semantic`/`operator`/`active` internally — see below). Active
-  learnings are folded into the orchestrator's system prompt on every turn (most
-  recent first, bounded to keep prompts from growing unbounded). Operator-authored
-  `/learn` records are never deleted by compaction; only future automatically
-  extracted memory is subject to the 25-record compaction threshold (oldest overflow
-  beyond the 15 most recent merged into one `hub-compaction` summary via an LLM call).
-- `/learn-mode [on|off]` to toggle automatic background learning (**off by default**).
-  When on, after a session goes quiet (5 minutes since the last completed task) Hub
-  reviews that session once and may store a high-confidence fact/preference/correction
-  as a `scope=auto` semantic memory — never routing, permissions, budgets, or prompts.
-  You get a passive one-line Telegram FYI (`\U0001f9e0 Learned: ...`) when it stores
-  something; nothing is ever silently applied without that notice. A hub restart loses
-  the on/off flag and any pending timer — by design, not a bug.
-- `/memory` to list stored hub learnings, showing each record's `type` and `status`
-- `/new` to start a fresh LangGraph thread for future turns without cancelling
-  active work in the current conversation
-- `/project [<path>|clear]` to set/show/clear the target project passed to specialists.
-  Hub resolves the path to a canonical project context (a stable `project_id`, contract
-  version, and fingerprint — see `docs/ARCHITECTURE.md`) and revalidates it fresh before
-  every dispatch that would use it, so a project that moved or was deleted stops the
-  dispatch with a clear error instead of silently sending a stale path.
-- `/reject optional reason` to reject a paused approval
-- `/reset` to cancel the current active or paused task and its running specialist
-  process tree for this conversation, then immediately start a fresh LangGraph thread
-- `/status` to show the current active or paused task, including current phase,
-  latest progress summary, last specialist activity, and live-progress state
-- `/stop` to cancel the current active or paused task and its running specialist
-  process tree while keeping the same conversation/session
-
-### Thread Control Model
-
-- normal messages continue the current LangGraph thread for the active session/project
-- if a task is waiting for clarification, the next normal message resumes that same paused run
-- `/approve` resumes the same paused run when Hub is waiting on approval
-- `/new` starts a fresh empty LangGraph thread; it does not branch the current one
-- `/stop` and `/reset` cancel active work; cancelled runs are not resumable
-- `/fork` and a generic `/resume` command are not implemented yet; they are tracked as planned work in `AGENT-HUB-030`
-
-### Memory model
-
-Hub memory (`src/agent_hub/hub_memory.py`) is stored in typed namespaces:
-
-- **type**: `semantic` (facts/instructions), `episodic` (past-run lessons), or `procedural`
-  (behavior/routing rules) — only `semantic` is populated today; the other two are reserved
-  for future automatic extraction.
-- **scope**: `operator` (came from your `/learn`) or `auto` (system-derived, e.g. a
-  compaction summary). Only `auto` records are ever compacted.
-- **status**: `active`, `pending`, `rejected`, or `disabled`. Only `active` records are
-  ever injected into the orchestrator's prompt. Everything `/learn` creates is `active`
-  immediately — no approval gate.
-- if a task is waiting for clarification, the next normal message is treated as the clarification reply
-
-## Telegram gateway
-
-```bash
 uv run agent-hub telegram
 ```
 
-Equivalent wrapper:
+Debug mode:
 
 ```bash
-./run.sh telegram
-```
-
-Run Telegram with debug logging:
-
-```bash
+uv run agent-hub --debug chat
 uv run agent-hub --debug telegram
-./run.sh telegram --debug
 ```
 
-Telegram task runs now expect streamed specialist progress. For a routed
-specialist task, Hub should send an immediate acknowledgement, meaningful phase
-updates while work is active, quiet heartbeats only after a silent interval, and
-the final result without duplicate progress spam.
+The `./run.sh` wrapper accepts the same `chat`, `telegram` and `--debug` choices.
+
+## Operator commands
+
+| Command | Behaviour |
+|---|---|
+| `/help` | Show current command help |
+| `/agents` | List callable specialists |
+| `/agents-refresh` | Reread the staged registry and report changes/errors |
+| `/agents-status` | Show last reconciled registry state without rereading |
+| `/hub-status` | Show Hub session/project/learning/agent summary without starting a new thread |
+| `/project [<path>|clear]` | Show, set or clear canonical project context |
+| `/status` | Show current active or paused task and latest progress |
+| `/last` | Show the most recent terminal task |
+| `/new` | Start a fresh thread; do not cancel active work |
+| `/stop` | Cancel current work and keep the same conversation |
+| `/reset` | Cancel current work and start a fresh conversation |
+| `/approve` | Resume an approval pause |
+| `/reject [reason]` | Reject and close an approval pause |
+| `/decide <option> [text]` | Resume a decision pause |
+| `/learn <lesson>` | Store authoritative memory, analyse it and apply only governed skill actions |
+| `/memory` | List stored Hub learnings |
+| `/forget <memory-id>` | Remove one stored learning |
+| `/learn-mode [on|off]` | Show or change automatic background semantic learning for this session |
+
+A normal message resumes a clarification pause when one is active.
+
+Not implemented: `/fork`, generic `/resume`, `/model`, `/med`, `/high`.
+
+## Memory behaviour
+
+- `/new` clears future conversational context by rotating to a new LangGraph thread.
+- `/new` does not delete long-term memory or runtime skills.
+- `/learn` stores first, then analyses. Analysis failure never discards the stored lesson.
+- A valid skill classification may create or version a runtime skill in the knowledge store.
+- Documentation, backlog, code and new-agent classifications are recommendations only.
+- `/learn-mode` automatic learning is independent of explicit `/learn`.
 
 ## Tests
 
 ```bash
-uv run pytest
+uv run pytest -q
 ```
 
-## Diagram generation
+Run the real transport checklist after changes that affect commands, sessions, memory, routing, progress or pause/resume behaviour:
 
-Regenerate the live Agent Hub LangGraph diagram from the current registry:
+```text
+docs/VALIDATION.md
+```
+
+## Diagrams
 
 ```bash
 python3 scripts/generate_hub_langgraph_diagram.py
+./scripts/render_hub_mermaid_diagrams.sh
 ```
+
+Generated Mermaid source and SVG output live under `docs/diagrams/`.
 
 ## Logs
 
-Logs are written to:
-
 ```text
 logs/agent-hub.log
-logs/agent-hub-debug.log
 data/llm_usage.json
 ```
 
-- `logs/agent-hub.log`: human-readable workflow log
-- `logs/agent-hub-debug.log`: full technical debug trace
+Debug mode additionally writes:
 
-Override the log directory with:
-
-```bash
-export HUB_LOG_DIR=/path/to/logs
+```text
+logs/agent-hub-debug.log
 ```
+
+Override log location with `HUB_LOG_DIR`.
 
 ## Environment
 
-Copy `.env.example` to `.env` and set the required values.
+Copy `.env.example` to `.env`. Core values:
 
 ```text
 OPENAI_API_KEY=...
@@ -165,12 +106,4 @@ HUB_ALLOWED_CHAT_IDS=...
 HUB_MODEL=gpt-4.1-mini
 ```
 
-`HUB_ALLOWED_CHAT_IDS` is a comma-separated list of Telegram chat IDs.
-
-Optional integration variables:
-
-```text
-AGENT_FACTORY_ROOT=...
-AGENT_FACTORY_KNOWLEDGE_DB=...
-HUB_LLM_COST_CATALOG=...
-```
+`HUB_ALLOWED_CHAT_IDS` is comma-separated. Optional integration settings are documented in `.env.example`; treat that file and `src/agent_hub/config.py` as current truth rather than duplicating every variable here.

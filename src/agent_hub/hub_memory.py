@@ -1,15 +1,15 @@
 """Typed Hub memory: semantic, episodic, and procedural namespaces.
 
-/learn remains Rob's immediate, authoritative command — it always writes an
-active, operator-scoped memory record (semantic or procedural) with no approval
-gate. HubOrchestrator.learn() additionally runs analyze_learning() as a bounded
-LLM call (AGENT-HUB-020) to decide the memory type and whether anything beyond
-remembering it should also happen. Only one action_kind — "skill" — actually
-executes anything, and only through AGENT-HUB-044's governed HubSkillStore
-(hub_skills.py); nothing in this module ever creates a skill, edits docs, files a
-backlog item, dispatches code work, or proposes an agent on its own.
-documentation/backlog/code_change/new_agent stay text-only proposals until their
-own governed action path exists (AGENT-HUB-046).
+/learn remains Rob's immediate, authoritative command — it stores an active,
+operator-scoped memory record with no approval gate on the same request path.
+HubOrchestrator.learn() may then run analyze_learning() as a bounded LLM call
+(AGENT-HUB-020) to refine the stored memory type and decide whether anything
+beyond remembering it should also happen. Only one action_kind — "skill" —
+actually executes anything, and only through AGENT-HUB-044's governed
+HubSkillStore (hub_skills.py); nothing in this module ever creates a skill,
+edits docs, files a backlog item, dispatches code work, or proposes an agent
+on its own. documentation/backlog/code_change/new_agent stay text-only
+proposals until their own governed action path exists (AGENT-HUB-046).
 
 Automatic semantic extraction (AGENT-HUB-017, see learning_mode.py and
 HubOrchestrator.run_learning_pass) writes scope="auto" semantic records
@@ -105,6 +105,40 @@ class HubMemoryManager:
         )
         self._compact_if_needed()
         return record
+
+    def reclassify(
+        self,
+        identifier: str,
+        *,
+        memory_type: MemoryType,
+    ) -> LearningRecord | None:
+        """Move a stored record to a different typed namespace without changing its id.
+
+        Used when `/learn` stores first, then analysis refines the record from
+        its default semantic type to procedural. Returns the updated record, or
+        None if the identifier no longer exists.
+        """
+        key = identifier.strip()
+        if not key:
+            return None
+        located = self._locate(key)
+        if located is None:
+            return None
+        current_type, item = located
+        if current_type == memory_type:
+            return _item_to_record(item)
+
+        payload = dict(item.value or {})
+        payload["type"] = memory_type
+        payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+        self._store.batch(
+            [
+                PutOp(namespace=_namespace_for(current_type), key=key, value=None),
+                PutOp(namespace=_namespace_for(memory_type), key=key, value=payload),
+            ]
+        )
+        updated = self._store.batch([GetOp(namespace=_namespace_for(memory_type), key=key)])[0]
+        return _item_to_record(updated) if updated is not None else None
 
     def record_auto_semantic(
         self, value: str, *, source: str, evidence: Iterable[str] = ()

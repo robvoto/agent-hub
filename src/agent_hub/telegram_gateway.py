@@ -649,14 +649,19 @@ class TelegramGateway:
 def run_telegram(token: str | None = None) -> None:
     from dotenv import load_dotenv
 
+    from .singleton_lock import acquire_singleton_lock
     from .startup_health import ensure_healthy_startup
 
     load_dotenv()
-    ensure_healthy_startup("telegram", telegram_token=token)
-    tok = token or os.getenv("HUB_BOT_TOKEN")
-    if not tok:
-        raise RuntimeError("HUB_BOT_TOKEN is not set.")
+    lock = acquire_singleton_lock("telegram-gateway")
+    try:
+        ensure_healthy_startup("telegram", telegram_token=token)
+        tok = token or os.getenv("HUB_BOT_TOKEN")
+        if not tok:
+            raise RuntimeError("HUB_BOT_TOKEN is not set.")
 
-    orch = HubOrchestrator()
-    gateway = TelegramGateway(tok, orch)
-    gateway.run()
+        orch = HubOrchestrator()
+        gateway = TelegramGateway(tok, orch)
+        gateway.run()
+    finally:
+        lock.release()

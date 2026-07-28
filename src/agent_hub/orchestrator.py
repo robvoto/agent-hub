@@ -1237,6 +1237,7 @@ class HubOrchestrator:
         existing_operator = [
             r for r in manager.list_learnings() if r.scope == "operator" and r.status == "active"
         ]
+        record = manager.learn(value, source=source, category=category)
         relevant_skills = self._skill_store.find_relevant_skills(value)
         relevant_docs = self._context_service.find_relevant_documentation(value)
 
@@ -1246,13 +1247,11 @@ class HubOrchestrator:
             )
         except Exception as exc:
             logger.warning("Learning analysis failed for %r: %s", value, exc)
-            record = manager.learn(value, source=source, category=category)
             return format_learning_confirmation(record, analysis_error=str(exc))
 
-        if decision.memory_type == "procedural":
-            record = manager.learn_procedural(value, source=source, category=category)
-        else:
-            record = manager.learn(value, source=source, category=category)
+        updated_record = manager.reclassify(record.identifier, memory_type=decision.memory_type)
+        if updated_record is not None:
+            record = updated_record
 
         skill_result = None
         if decision.action_kind == "skill":

@@ -1,38 +1,33 @@
-# Documentation Index
+# Agent Hub documentation
 
-Start here for Agent Hub documentation.
+This documentation is primarily operational context for coding agents and the Hub runtime. Read only the smallest document needed.
 
-Read only the smallest document needed for the task.
+| Need | Read |
+|---|---|
+| Understand ownership, runtime flow, persistence or memory | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
+| Run the Hub or use commands | [`COMMANDS.md`](COMMANDS.md) |
+| Prove a change works through real CLI/Telegram | [`VALIDATION.md`](VALIDATION.md) |
+| Inspect workflow diagrams | [`diagrams/INDEX.md`](diagrams/INDEX.md) |
+| Repository-wide agent rules | [`../AGENTS.md`](../AGENTS.md) |
 
-## Core
+## Current code map
 
-- `../README.md` - short project landing page only
-- `ARCHITECTURE.md` - runtime/control-plane architecture and repo responsibility split
-- `COMMANDS.md` - setup, CLI, Telegram, tests, logs, and environment commands
-- `TELEGRAM_MVP_VALIDATION.md` - real Telegram MVP proof runbook and evidence checklist
+- `src/agent_hub/orchestrator.py` — LangGraph orchestration and command services
+- `src/agent_hub/telegram_gateway.py` — Telegram transport
+- `src/agent_hub/cli.py` — CLI transport
+- `src/agent_hub/registry.py` — specialist registry loading and reconciliation
+- `src/agent_hub/task_runs.py` — persisted task lifecycle
+- `src/agent_hub/checkpointer.py` — short-term thread persistence
+- `src/agent_hub/hub_memory.py` — long-term learning records and `/learn` analysis
+- `src/agent_hub/hub_skills.py` — governed versioned runtime skills
+- `src/agent_hub/hub_context.py` — bounded authoritative documentation context
+- `src/agent_hub/project_context.py` — canonical selected-project identity
 
-## Diagrams
+## Source-of-truth rules
 
-- `diagrams/INDEX.md` - diagram index
-- `diagrams/05-HUB-ROUTING.md` - hub routing flow
-- `diagrams/07-HUB-LANGGRAPH-TOOLS.md` - generated LangGraph/tool wiring
+- Runtime behaviour: current code and tests
+- Specialist definitions: Agent Factory staged registry
+- Delivery work: live Google Sheet backlog linked from `README.md`
+- Documentation: this index and its linked files
 
-## Runtime code map
-
-- `../src/agent_hub/orchestrator.py` - LangGraph orchestrator
-- `../src/agent_hub/registry.py` - reads staged agent registry from Agent Factory
-- `../src/agent_hub/telegram_gateway.py` - Telegram polling gateway
-- `../src/agent_hub/cli.py` - CLI entry point
-- `../src/agent_hub/knowledge_store.py` - runtime knowledge store
-- `../src/agent_hub/checkpointer.py` - runtime checkpoint persistence
-- `../src/agent_hub/log_config.py` - logging configuration
-
-## Tests
-
-- `../tests/` - test suite
-
-## Backlog
-
-The live backlog source of truth is the Google Sheet linked from `../README.md`.
-
-Do not create local backlog files unless explicitly requested.
+Delete or replace stale documentation; do not preserve duplicate historical instructions in the active documentation tree.
