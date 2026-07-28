@@ -1275,6 +1275,21 @@ class HubOrchestrator:
                     ),
                 )
 
+        logger.info(
+            "Learning %s analysed: type=%s action=%s code_change_needed=%s skills=%s docs=%s skill_result=%s",
+            record.identifier,
+            decision.memory_type,
+            decision.action_kind,
+            decision.code_change_needed,
+            [skill.slug for skill in relevant_skills],
+            [doc.identifier for doc in relevant_docs],
+            None if skill_result is None else {
+                "accepted": skill_result.accepted,
+                "reason": skill_result.reason,
+                "skill_id": None if skill_result.skill is None else skill_result.skill.identifier,
+            },
+        )
+
         return format_learning_confirmation(
             record,
             analysis=decision,

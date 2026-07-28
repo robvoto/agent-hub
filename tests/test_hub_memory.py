@@ -37,10 +37,7 @@ def test_format_learning_confirmation_without_analysis_is_unchanged(tmp_path):
     manager = HubMemoryManager(SqliteStore(tmp_path / "knowledge.sqlite3"))
     record = manager.learn("Prefer tabs over spaces.", source="cli")
 
-    assert (
-        format_learning_confirmation(record)
-        == f"Stored learning {record.identifier} from cli: Prefer tabs over spaces."
-    )
+    assert format_learning_confirmation(record) == "Learned: Prefer tabs over spaces."
 
 
 def test_learn_procedural_creates_procedural_record(tmp_path):
@@ -81,14 +78,7 @@ def test_format_learning_confirmation_for_memory_only(tmp_path):
 
     result = format_learning_confirmation(record, analysis=analysis)
 
-    assert result == (
-        "Learned: Rob prefers tabs over spaces.\n"
-        f"Stored: {record.identifier} (semantic) from cli: Prefer tabs over spaces.\n"
-        "Evidence checked: skills=[none] docs=[none]\n"
-        "Destination/action: Memory only\n"
-        "Validation: N/A\n"
-        "Approval required: No"
-    )
+    assert result == "Learned: Rob prefers tabs over spaces."
 
 
 def test_format_learning_confirmation_for_created_skill(tmp_path):
@@ -131,12 +121,7 @@ def test_format_learning_confirmation_for_created_skill(tmp_path):
 
     assert result == (
         "Learned: Hub should check evidence before claiming it is unavailable.\n"
-        f"Stored: {record.identifier} (procedural) from cli: "
-        "Always check evidence before claiming it is unavailable.\n"
-        "Evidence checked: skills=[evidence-checking] docs=[AGENTS.md]\n"
-        "Destination/action: Skill — Created new skill.\n"
-        "Validation: Passed — active (version 1)\n"
-        "Approval required: No"
+        "Reusable skill updated: Evidence checking procedure (version 1)."
     )
 
 
@@ -159,12 +144,10 @@ def test_format_learning_confirmation_for_rejected_skill(tmp_path):
 
     result = format_learning_confirmation(record, analysis=analysis, skill_result=skill_result)
 
-    assert (
-        "Destination/action: Skill — proposal rejected: "
-        "Title matches already-active skill 'other-skill'." in result
+    assert result == (
+        "Learned: Some lesson.\n"
+        "The learning was saved; no reusable skill was changed."
     )
-    assert "Validation: Rejected: Title matches already-active skill 'other-skill'." in result
-    assert "Approval required: No" in result
 
 
 def test_format_learning_confirmation_for_proposal_only_action(tmp_path):
@@ -180,14 +163,7 @@ def test_format_learning_confirmation_for_proposal_only_action(tmp_path):
 
     result = format_learning_confirmation(record, analysis=analysis)
 
-    assert result == (
-        "Learned: This looks like a bug.\n"
-        f"Stored: {record.identifier} (semantic) from cli: This looks like a bug.\n"
-        "Evidence checked: skills=[none] docs=[none]\n"
-        "Destination/action: Backlog item proposed: File a backlog item about this.\n"
-        "Validation: N/A — proposal only, not executed\n"
-        "Approval required: Yes"
-    )
+    assert result == "Learned: This looks like a bug."
 
 
 def test_format_learning_confirmation_reports_analysis_failure_plainly(tmp_path):
@@ -197,12 +173,8 @@ def test_format_learning_confirmation_reports_analysis_failure_plainly(tmp_path)
     result = format_learning_confirmation(record, analysis_error="LLM request timed out")
 
     assert result == (
-        "Learned: (analysis unavailable)\n"
-        f"Stored: {record.identifier} (semantic, default) from cli: Prefer tabs over spaces.\n"
-        "Evidence checked: not performed — analysis failed: LLM request timed out\n"
-        "Destination/action: Memory only (fallback)\n"
-        "Validation: N/A\n"
-        "Approval required: No"
+        "Learned: Prefer tabs over spaces.\n"
+        "Note: follow-up analysis was unavailable, but the learning was saved."
     )
 
 

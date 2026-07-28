@@ -786,53 +786,33 @@ def format_learning_confirmation(
     relevant_docs: list = (),
     skill_result: object | None = None,
 ) -> str:
-    if analysis_error is not None:
-        return (
-            "Learned: (analysis unavailable)\n"
-            f"Stored: {record.identifier} (semantic, default) from {record.source}: "
-            f"{record.value}\n"
-            f"Evidence checked: not performed — analysis failed: {analysis_error}\n"
-            "Destination/action: Memory only (fallback)\n"
-            "Validation: N/A\n"
-            "Approval required: No"
-        )
+    """Return a concise operator-facing confirmation.
 
-    if analysis is None:
-        return f"Stored learning {record.identifier} from {record.source}: {record.value}"
-
-    skills_ids = ", ".join(s.slug for s in relevant_skills) or "none"
-    docs_ids = ", ".join(d.identifier for d in relevant_docs) or "none"
-    evidence_line = f"Evidence checked: skills=[{skills_ids}] docs=[{docs_ids}]"
-
-    if analysis.action_kind == "skill":
-        if skill_result is not None and skill_result.accepted:
-            destination = f"Skill — {skill_result.reason}"
-            validation = f"Passed — active (version {skill_result.skill.version})"
-        elif skill_result is not None:
-            destination = f"Skill — proposal rejected: {skill_result.reason}"
-            validation = f"Rejected: {skill_result.reason}"
-        else:
-            destination = "Skill — no proposal executed"
-            validation = "N/A"
-        approval_required = "No"
-    elif analysis.action_kind in _PROPOSAL_ONLY_ACTIONS:
-        destination = f"{_LEARNING_ACTION_LABELS[analysis.action_kind]}: {analysis.suggestion}"
-        validation = "N/A — proposal only, not executed"
-        approval_required = "Yes"
+    Storage identifiers, retrieved evidence, proposal classifications, validation
+    state, and approval policy are internal diagnostics and belong in logs, not
+    the normal Telegram/CLI response.
+    """
+    if analysis is not None and analysis.restated_lesson.strip():
+        lesson = analysis.restated_lesson.strip()
     else:
-        destination = _LEARNING_ACTION_LABELS[analysis.action_kind]
-        validation = "N/A"
-        approval_required = "No"
+        lesson = record.value.strip()
 
-    return (
-        f"Learned: {analysis.restated_lesson}\n"
-        f"Stored: {record.identifier} ({analysis.memory_type}) from {record.source}: "
-        f"{record.value}\n"
-        f"{evidence_line}\n"
-        f"Destination/action: {destination}\n"
-        f"Validation: {validation}\n"
-        f"Approval required: {approval_required}"
-    )
+    lines = [f"Learned: {lesson}"]
+
+    if analysis_error is not None:
+        lines.append("Note: follow-up analysis was unavailable, but the learning was saved.")
+        return "\n".join(lines)
+
+    if analysis is not None and analysis.action_kind == "skill" and skill_result is not None:
+        if skill_result.accepted and skill_result.skill is not None:
+            lines.append(
+                f"Reusable skill updated: {skill_result.skill.title} "
+                f"(version {skill_result.skill.version})."
+            )
+        elif not skill_result.accepted:
+            lines.append("The learning was saved; no reusable skill was changed.")
+
+    return "\n".join(lines)
 
 
 def format_forget_confirmation(identifier: str) -> str:

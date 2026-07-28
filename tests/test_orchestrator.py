@@ -805,7 +805,7 @@ def test_learn_stores_memory_before_running_analysis(monkeypatch, tmp_path):
     reply = orchestrator.learn("Store this before analysis.", source="cli")
 
     assert observed
-    assert observed[0] in reply
+    assert reply == "Learned: Store this before analysis."
 
 
 def test_learn_memory_only_stores_semantic_by_default(monkeypatch, tmp_path):
@@ -826,8 +826,7 @@ def test_learn_memory_only_stores_semantic_by_default(monkeypatch, tmp_path):
     stored = [r for r in records if r.value == "Prefer tabs over spaces."]
     assert len(stored) == 1
     assert stored[0].type == "semantic"
-    assert "Destination/action: Memory only" in reply
-    assert "Approval required: No" in reply
+    assert reply == "Learned: Rob prefers tabs over spaces."
 
 
 def test_learn_stores_procedural_memory_when_classified_procedural(monkeypatch, tmp_path):
@@ -873,9 +872,10 @@ def test_learn_creates_new_skill_via_governed_skill_store(monkeypatch, tmp_path)
     skill = skill_store.get_active_skill("evidence-checking")
     assert skill is not None
     assert skill.version == 1
-    assert "Destination/action: Skill — Created new skill." in reply
-    assert "Validation: Passed — active (version 1)" in reply
-    assert "Approval required: No" in reply
+    assert reply == (
+        "Learned: Hub should check evidence before claiming it is unavailable.\n"
+        "Reusable skill updated: Evidence checking procedure (version 1)."
+    )
 
     stored_memory = next(
         r
@@ -915,7 +915,10 @@ def test_learn_updates_existing_skill_reusing_relevant_skill_slug(monkeypatch, t
 
     skill = skill_store.get_active_skill("evidence-checking")
     assert skill.version == 2
-    assert "Destination/action: Skill — Updated skill to version 2." in reply
+    assert reply == (
+        "Learned: Hub should check evidence first, then ask if inconclusive.\n"
+        "Reusable skill updated: Evidence checking procedure (version 2)."
+    )
 
     stored_memory = next(
         r
@@ -950,8 +953,10 @@ def test_learn_reports_skill_proposal_rejection_without_claiming_success(monkeyp
     reply = orchestrator.learn("A near-duplicate lesson.", source="cli")
 
     assert skill_store.get_active_skill("check-evidence-first") is None
-    assert "proposal rejected" in reply
-    assert "Approval required: No" in reply
+    assert reply == (
+        "Learned: A near-duplicate lesson.\n"
+        "The learning was saved; no reusable skill was changed."
+    )
 
 
 @pytest.mark.parametrize("action_kind", ["documentation", "backlog", "code_change", "new_agent"])
@@ -972,8 +977,7 @@ def test_learn_unsupported_actions_remain_proposals_only(monkeypatch, tmp_path, 
 
     reply = orchestrator.learn("This looks like a gap.", source="cli")
 
-    assert "Approval required: Yes" in reply
-    assert "N/A — proposal only, not executed" in reply
+    assert reply == "Learned: This looks like a gap."
     assert skill_store.list_active_skills() == []
 
 
@@ -1017,12 +1021,8 @@ def test_learn_still_stores_memory_when_analysis_fails(monkeypatch, caplog, tmp_
     assert stored[0].type == "semantic"
 
     assert reply == (
-        "Learned: (analysis unavailable)\n"
-        f"Stored: {stored[0].identifier} (semantic, default) from cli: Prefer tabs over spaces.\n"
-        "Evidence checked: not performed — analysis failed: LLM request timed out\n"
-        "Destination/action: Memory only (fallback)\n"
-        "Validation: N/A\n"
-        "Approval required: No"
+        "Learned: Prefer tabs over spaces.\n"
+        "Note: follow-up analysis was unavailable, but the learning was saved."
     )
     assert "Learning analysis failed" in caplog.text
 
