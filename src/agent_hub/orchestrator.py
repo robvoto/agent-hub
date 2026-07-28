@@ -836,12 +836,14 @@ def _describe_decision_option(option: dict[str, Any]) -> str:
 
 def _format_pending_decision(spec: AgentSpec, pending_decision: dict[str, Any]) -> str:
     prompt = str(pending_decision.get("prompt", "")).strip() or "A decision is required."
-    options_text = ", ".join(
-        _describe_decision_option(option) for option in pending_decision["options"]
+    options_text = "\n".join(
+        f"{index}. {_describe_decision_option(option)}"
+        for index, option in enumerate(pending_decision["options"], start=1)
     )
     return (
         f"[{spec.name}] Decision needed: {prompt}\n"
-        f"Reply with /decide <option> [text] — allowed options: {options_text}."
+        f"{options_text}\n"
+        "Reply with the option number or name. Add guidance after it if needed."
     )
 
 
@@ -1608,6 +1610,42 @@ class HubOrchestrator:
                     request_id=pending.context.get("agent_request_id"),
                 )
         return self._finalize_specialist_follow_up(pending.id, spec, output)
+
+    def provide_decision_reply(
+        self,
+        reply: str,
+        *,
+        actor: str = "human",
+        progress_notify: Any | None = None,
+    ) -> str:
+        """Resume a decision pause from a normal user reply."""
+        pending = self.pending_run()
+        if pending is None or pending.state != TASK_STATE_WAITING_DECISION:
+            return "No task is currently waiting for a decision."
+
+        choice, _, decision_text = reply.strip().partition(" ")
+        if not choice:
+            return "Reply with the option number or name."
+
+        pending_decision = pending.context.get("specialist_pending_decision") or {}
+        options = [
+            opt for opt in (pending_decision.get("options") or [])
+            if isinstance(opt, dict) and str(opt.get("name", "")).strip()
+        ]
+        option = choice
+        if choice.isdigit():
+            index = int(choice) - 1
+            if index < 0 or index >= len(options):
+                valid = ", ".join(str(i) for i in range(1, len(options) + 1)) or "none"
+                return f"'{choice}' is not a valid option number. Valid numbers: {valid}."
+            option = str(options[index]["name"])
+
+        return self.provide_decision(
+            option,
+            decision_text.strip(),
+            actor=actor,
+            progress_notify=progress_notify,
+        )
 
     def provide_decision(
         self,

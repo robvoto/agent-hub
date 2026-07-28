@@ -72,7 +72,7 @@ def configure_logging(level: str | int | None = None, log_file: str | None = Non
     )
     human_formatter = logging.Formatter(
         fmt="%(asctime)s %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
+        datefmt="%H:%M:%S",
     )
 
     debug_file_handler = logging.handlers.RotatingFileHandler(

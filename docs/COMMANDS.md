@@ -40,13 +40,12 @@ The `./run.sh` wrapper accepts the same `chat`, `telegram` and `--debug` choices
 | `/reset` | Cancel current work and start a fresh conversation |
 | `/approve` | Resume an approval pause |
 | `/reject [reason]` | Reject and close an approval pause |
-| `/decide <option> [text]` | Resume a decision pause |
 | `/learn <lesson>` | Store authoritative memory, analyse it and apply only governed skill actions |
 | `/memory` | List stored Hub learnings |
 | `/forget <memory-id>` | Remove one stored learning |
 | `/learn-mode [on|off]` | Show or change automatic background semantic learning for this session |
 
-A normal message resumes a clarification pause when one is active.
+A normal message resumes an active clarification or decision pause. For decisions, reply with the option number or name.
 
 Not implemented: `/fork`, generic `/resume`, `/model`, `/med`, `/high`.
 

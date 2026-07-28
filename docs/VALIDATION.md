@@ -32,7 +32,7 @@ Exercise only paths supported by the selected specialist:
 - clarification: reply normally and confirm the same run resumes;
 - approval: `/approve` resumes the same run;
 - rejection: `/reject <reason>` closes it safely;
-- decision: `/decide <option> [text]` resumes the same run;
+- decision: a normal reply with the option number or name resumes the same run;
 - cancellation: `/stop` marks active work cancelled;
 - reset: `/reset` cancels active work and rotates to a fresh thread.
 

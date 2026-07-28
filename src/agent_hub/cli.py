@@ -16,7 +16,6 @@ _HELP_TEXT = (
     "/agents-status - show registry health (versions, fingerprints, invalid manifests)"
     " without refreshing\n"
     "/approve - approve a task waiting on approval\n"
-    "/decide <option> [text] - answer a task waiting on a specialist decision\n"
     "/forget <id> - remove a stored learning\n"
     "/help - show this\n"
     "/hub-status - show the hub startup summary without starting a new session\n"
@@ -36,7 +35,7 @@ _HELP_TEXT = (
     "Thread model:\n"
     "Reply normally to continue a clarification pause in the same thread.\n"
     "Use /approve to continue an approval pause in the same thread.\n"
-    "Use /decide <option> [text] to continue a decision pause; /status shows\n"
+    "Reply with the option number or name to continue a decision pause; /status shows\n"
     "the options a paused specialist last reported.\n"
     "/new starts a fresh empty thread; it is not a fork.\n"
     "Cancelled work from /stop or /reset is not resumable.\n"
@@ -205,14 +204,10 @@ def _run_chat(model: str) -> None:
                 print(f"Error: {exc}", file=sys.stderr)
             continue
 
-        if text.startswith("/decide"):
-            argument = text[len("/decide"):].strip()
-            option, _, decision_text = argument.partition(" ")
-            if not option:
-                print("\nHub: Usage: /decide <option> [text]\n")
-                continue
+        pending = orch.pending_run()
+        if pending is not None and pending.state == "waiting_decision":
             try:
-                reply = orch.provide_decision(option, decision_text.strip())
+                reply = orch.provide_decision_reply(text)
                 print(f"\nHub: {reply}\n")
             except KeyboardInterrupt:
                 _handle_cli_shutdown_interrupt()
@@ -221,7 +216,6 @@ def _run_chat(model: str) -> None:
                 print(f"Error: {exc}", file=sys.stderr)
             continue
 
-        pending = orch.pending_run()
         if pending is not None and pending.state == "waiting_clarification":
             try:
                 reply = orch.provide_clarification(text)

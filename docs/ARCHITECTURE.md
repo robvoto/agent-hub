@@ -51,7 +51,7 @@ Supported pause/resume paths include:
 
 - clarification: the next normal operator message resumes the same task;
 - approval: `/approve` or `/reject`;
-- decision: `/decide <option> [text]`.
+- decision: reply normally with the option number or name.
 
 `/stop` cancels the current task while retaining the conversation. `/reset` cancels it and starts a new conversation. Cancelled work is not resumable.
 

@@ -113,7 +113,10 @@ def _edit_message(
         payload["parse_mode"] = parse_mode
     try:
         _api(token, "editMessageText", **payload)
-        human_logger.info(
+        # debug only, not human_logger: this is the same live-progress message
+        # being refreshed in place (elapsed time, phase) — the human already
+        # sees it live in Telegram, so repeating it in the human log is noise.
+        logger.debug(
             "Telegram status edit in chat %d (message %d): %s",
             chat_id,
             message_id,
@@ -207,7 +210,6 @@ class TelegramGateway:
             "/agents-status - show registry health (versions, fingerprints, invalid "
             "manifests) without refreshing\n"
             "/approve - approve a task waiting on approval\n"
-            "/decide <option> [text] - answer a task waiting on a specialist decision\n"
             "/forget <id> - remove a stored learning\n"
             "/help - show this\n"
             "/hub-status - show the hub startup summary without starting a new "
@@ -228,7 +230,7 @@ class TelegramGateway:
             "Thread model:\n"
             "Reply normally to continue a clarification pause in the same thread.\n"
             "Use /approve to continue an approval pause in the same thread.\n"
-            "Use /decide <option> [text] to continue a decision pause; /status shows\n"
+            "Reply with the option number or name to continue a decision pause; /status shows\n"
             "the options a paused specialist last reported.\n"
             "/new starts a fresh empty thread; it is not a fork.\n"
             "Cancelled work from /stop or /reset is not resumable.\n"
@@ -388,24 +390,6 @@ class TelegramGateway:
             _send_message(self._token, chat_id, reply)
             return
 
-        if text.startswith("/decide"):
-            argument = text[len("/decide"):].strip()
-            option, _, decision_text = argument.partition(" ")
-            if not option:
-                _send_message(self._token, chat_id, "Usage: /decide <option> [text]", parse_mode=None)
-                return
-            try:
-                reply = self._orch.provide_decision(
-                    option,
-                    decision_text.strip(),
-                    progress_notify=lambda update: self._notify_progress(chat_id, update),
-                )
-            except Exception as exc:
-                logger.exception("Decision resume error")
-                reply = f"Error: {exc}"
-            _send_message(self._token, chat_id, reply)
-            return
-
         if not text or text.startswith("/"):
             return
 
@@ -461,7 +445,12 @@ class TelegramGateway:
     def _process_user_message(self, chat_id: int, text: str) -> None:
         try:
             pending = self._orch.pending_run()
-            if pending is not None and pending.state == "waiting_clarification":
+            if pending is not None and pending.state == "waiting_decision":
+                reply = self._orch.provide_decision_reply(
+                    text,
+                    progress_notify=lambda update: self._notify_progress(chat_id, update),
+                )
+            elif pending is not None and pending.state == "waiting_clarification":
                 reply = self._orch.provide_clarification(
                     text,
                     progress_notify=lambda update: self._notify_progress(chat_id, update),

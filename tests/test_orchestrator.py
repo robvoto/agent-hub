@@ -1027,6 +1027,51 @@ def test_learn_still_stores_memory_when_analysis_fails(monkeypatch, caplog, tmp_
     assert "Learning analysis failed" in caplog.text
 
 
+def test_provide_decision_reply_maps_number_to_specialist_option(monkeypatch):
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _FakeGraph("unused"))
+    orchestrator = HubOrchestrator(model="test")
+    pending = SimpleNamespace(
+        state="waiting_decision",
+        context={
+            "specialist_pending_decision": {
+                "options": [
+                    {"name": "approve"},
+                    {"name": "request_changes", "needs_text": True},
+                ]
+            }
+        },
+    )
+    monkeypatch.setattr(orchestrator, "pending_run", lambda: pending)
+    captured = {}
+
+    def _provide(option, text="", *, actor="human", progress_notify=None):
+        captured.update(option=option, text=text, actor=actor)
+        return "resumed"
+
+    monkeypatch.setattr(orchestrator, "provide_decision", _provide)
+
+    assert orchestrator.provide_decision_reply("2 Make them square") == "resumed"
+    assert captured == {
+        "option": "request_changes",
+        "text": "Make them square",
+        "actor": "human",
+    }
+
+
+def test_provide_decision_reply_rejects_invalid_number(monkeypatch):
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _FakeGraph("unused"))
+    orchestrator = HubOrchestrator(model="test")
+    pending = SimpleNamespace(
+        state="waiting_decision",
+        context={"specialist_pending_decision": {"options": [{"name": "approve"}]}},
+    )
+    monkeypatch.setattr(orchestrator, "pending_run", lambda: pending)
+
+    assert orchestrator.provide_decision_reply("2") == (
+        "'2' is not a valid option number. Valid numbers: 1."
+    )
+
+
 def test_provide_decision_with_nothing_pending_returns_friendly_message(monkeypatch):
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
     monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _FakeGraph("unused"))
