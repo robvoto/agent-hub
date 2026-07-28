@@ -513,12 +513,19 @@ _LEARNING_ANALYSIS_SYSTEM_PROMPT = (
     "- memory_only: nothing else to do\n"
     "- skill: a reusable Hub procedure should be created or updated. This is the "
     "only action_kind that actually executes — through a governed skill store, "
-    "never by editing any file. You are shown Hub's existing relevant skills; if "
-    "one of them is really what's being corrected or extended, reuse its exact "
-    "slug (this updates it to a new version) instead of inventing a new one. Only "
-    "propose a new skill when none of the shown ones fit. When you choose skill, "
-    "also give skill_slug (short, lowercase, hyphenated, stable), skill_title "
-    "(human label), and skill_body (the actual procedure text Hub should follow).\n"
+    "never by editing any file. Always propose your own canonical skill_slug "
+    "(short, lowercase, hyphenated, stable) for the procedure being taught, based "
+    "on what it actually is. You are shown Hub's existing relevant skills for "
+    "context, so you don't contradict or duplicate one by accident — but "
+    "similarity alone is never grounds to reuse a slug. Reuse an existing skill's "
+    "exact slug ONLY when this lesson is unmistakably a correction or refinement "
+    "of that exact same procedure, not a related or adjacent one. If you are not "
+    "fully confident it is the same procedure, propose a new slug instead: the "
+    "store versions an existing skill only when your slug exactly matches one "
+    "that's already active, and otherwise creates a brand new skill, so guessing "
+    "at reuse risks silently overwriting an unrelated procedure. When you choose "
+    "skill, also give skill_title (human label) and skill_body (the actual "
+    "procedure text Hub should follow).\n"
     "- documentation: project docs should be updated to reflect this\n"
     "- backlog: this describes a bug or gap that belongs on the backlog\n"
     "- code_change: this requires a runtime code change\n"
@@ -578,6 +585,13 @@ def analyze_learning(
     relevant_skills and relevant_docs are hub_skills.HubSkill / hub_context.
     ContextSource instances (bounded retrieval already applied by the caller) —
     typed loosely here to avoid a hard import dependency in this module.
+
+    relevant_skills is shown to the model only as context to avoid duplicating or
+    contradicting a known skill. Whether a proposed skill becomes a new version of
+    an existing one is decided purely by exact skill_slug equality in
+    HubSkillStore.propose_skill — never by how similar it looked in this list —
+    so a topically-related-but-distinct skill can never get silently merged into
+    another one just because retrieval surfaced it as relevant.
     """
     from langchain_core.callbacks import UsageMetadataCallbackHandler
     from langchain_core.messages import HumanMessage, SystemMessage

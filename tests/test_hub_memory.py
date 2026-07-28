@@ -8,6 +8,7 @@ from langgraph.store.base import PutOp
 
 from agent_hub.hub_context import ContextSource
 from agent_hub.hub_memory import (
+    _LEARNING_ANALYSIS_SYSTEM_PROMPT,
     _LEGACY_LEARNINGS_NS,
     HubMemoryManager,
     LearningAnalysis,
@@ -428,3 +429,16 @@ def test_format_learning_list_shows_type_and_status(tmp_path):
 
     assert "type=semantic" in text
     assert "status=active" in text
+
+
+def test_learning_analysis_prompt_requires_exact_slug_match_for_skill_updates():
+    """Regression guard: reusing an existing skill's slug must require confident
+    identity with the exact same procedure, never mere topical similarity — a
+    weaker prompt here previously risked the model reusing a "related enough"
+    skill's slug and silently overwriting a distinct procedure."""
+    prompt = _LEARNING_ANALYSIS_SYSTEM_PROMPT
+
+    assert "similarity alone is never grounds to reuse a slug" in prompt
+    assert "unmistakably a correction or refinement of that exact same procedure" in prompt
+    assert "not a related or adjacent one" in prompt
+    assert "propose your own canonical skill_slug" in prompt
