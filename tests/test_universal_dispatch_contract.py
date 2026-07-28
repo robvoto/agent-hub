@@ -48,6 +48,7 @@ def _write_fake_specialist_manifest(
     working_directory: Path,
     *,
     input_contract_overrides: dict | None = None,
+    project_context_contract_overrides: dict | None = None,
 ) -> None:
     agent_dir = registry_dir / FAKE_SPECIALIST_ID
     agent_dir.mkdir(parents=True)
@@ -111,6 +112,8 @@ def _write_fake_specialist_manifest(
         # not a special case written for this test.
         "webhook_url": "https://example.invalid/hook",
     }
+    if project_context_contract_overrides is not None:
+        manifest["project_context_contract"] = project_context_contract_overrides
     (agent_dir / "agent.json").write_text(json.dumps(manifest), encoding="utf-8")
 
 
@@ -437,9 +440,7 @@ def test_widget_forge_receives_versioned_project_context_when_compatible(
     _write_fake_specialist_manifest(
         registry_dir,
         working_directory,
-        input_contract_overrides={
-            "project_context_contract": {"supported_schema_versions": [1]},
-        },
+        project_context_contract_overrides={"supported_schema_versions": [1]},
     )
 
     specs = load_registry(registry_dir)
@@ -482,9 +483,7 @@ def test_widget_forge_dispatch_fails_clearly_on_incompatible_schema_version(
     _write_fake_specialist_manifest(
         registry_dir,
         working_directory,
-        input_contract_overrides={
-            "project_context_contract": {"supported_schema_versions": [99]},
-        },
+        project_context_contract_overrides={"supported_schema_versions": [99]},
     )
 
     specs = load_registry(registry_dir)
@@ -525,7 +524,7 @@ def test_widget_forge_dispatch_omits_project_context_when_contract_not_declared(
 
     specs = load_registry(registry_dir)
     spec = specs[0]
-    assert "project_context_contract" not in spec.input_contract
+    assert spec.project_context_contract == {}
 
     _ScriptedFakePopen.calls = []
     _ScriptedFakePopen.responses = [{"status": "success", "summary": "Forged 3 widgets."}]
@@ -593,7 +592,7 @@ def test_legacy_specialist_without_any_context_declarations_still_dispatches(
     specs = load_registry(registry_dir)
     spec = specs[0]
     assert "accepted_context" not in spec.input_contract
-    assert "project_context_contract" not in spec.input_contract
+    assert spec.project_context_contract == {}
 
     _ScriptedFakePopen.calls = []
     _ScriptedFakePopen.responses = [{"status": "success", "summary": "Forged 3 widgets."}]

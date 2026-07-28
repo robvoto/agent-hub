@@ -31,6 +31,9 @@ def test_load_registry_parses_fields(sample_registry_dir):
     assert reviewer.tools == ["read_file"]
     assert reviewer.version == "1.0.0"
     assert reviewer.runtime["mode"] == "subprocess"
+    assert reviewer.project_context_contract == {}
+    assert reviewer.task_contract == {}
+    assert reviewer.target_project_access == {}
     assert reviewer.hub_integration == {
         "protocol": "subprocess",
         "supports_clarification": True,
@@ -54,6 +57,8 @@ def test_load_registry_captures_unknown_fields_as_extensions(tmp_path):
         ' "runtime": {"mode": "subprocess", "entrypoint": "fake-forge",'
         ' "working_directory": "/tmp", "input_arg": "--input-json",'
         ' "output_arg": "--output-json", "default_execution_mode": "instruction_only"},'
+        ' "project_context_contract": {"supported_schema_versions": [1]},'
+        ' "task_contract": {"task_kinds": ["coding_task"]},'
         ' "webhook_url": "https://example.invalid/hook",'
         ' "backlog_sheet_id": "some-sheet-id"}',
         encoding="utf-8",
@@ -61,6 +66,8 @@ def test_load_registry_captures_unknown_fields_as_extensions(tmp_path):
     specs = load_registry(registry)
     assert len(specs) == 1
     spec = specs[0]
+    assert spec.project_context_contract == {"supported_schema_versions": [1]}
+    assert spec.task_contract == {"task_kinds": ["coding_task"]}
     assert spec.extensions == {
         "webhook_url": "https://example.invalid/hook",
         "backlog_sheet_id": "some-sheet-id",

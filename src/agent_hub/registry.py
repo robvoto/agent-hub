@@ -28,6 +28,9 @@ _CORE_FIELDS = {
     "runtime",
     "input_contract",
     "interaction_contract",
+    "task_contract",
+    "project_context_contract",
+    "target_project_access",
     "hub_integration",
 }
 
@@ -58,6 +61,9 @@ class AgentSpec:
     version: str = "1.0.0"
     input_contract: dict[str, Any] = field(default_factory=dict)
     interaction_contract: dict[str, Any] = field(default_factory=dict)
+    task_contract: dict[str, Any] = field(default_factory=dict)
+    project_context_contract: dict[str, Any] = field(default_factory=dict)
+    target_project_access: dict[str, Any] = field(default_factory=dict)
     runtime: dict[str, Any] = field(default_factory=dict)
     hub_integration: dict[str, Any] = field(default_factory=dict)
     extensions: dict[str, Any] = field(default_factory=dict)
@@ -103,6 +109,9 @@ def parse_agent_spec(data: dict[str, Any]) -> AgentSpec:
         version=data.get("version", "1.0.0"),
         input_contract=dict(data.get("input_contract", {})),
         interaction_contract=dict(data.get("interaction_contract", {})),
+        task_contract=dict(data.get("task_contract", {})),
+        project_context_contract=dict(data.get("project_context_contract", {})),
+        target_project_access=dict(data.get("target_project_access", {})),
         runtime=dict(data.get("runtime", {})),
         hub_integration=dict(data.get("hub_integration", {})),
         extensions={key: value for key, value in data.items() if key not in _CORE_FIELDS},
