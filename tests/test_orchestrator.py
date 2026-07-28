@@ -12,7 +12,9 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from agent_hub.hub_context import HubContextService
 from agent_hub.hub_memory import ExtractionCandidate, HubMemoryManager, LearningAnalysis
+from agent_hub.hub_skills import HubSkillStore
 from agent_hub.knowledge_store import SqliteStore
 from agent_hub.orchestrator import (
     _SYSTEM_PROMPT,
@@ -733,65 +735,255 @@ def test_invoke_reconciles_added_changed_and_removed_agents(monkeypatch, caplog)
     assert "removed: removed-agent" in caplog.text
 
 
-def test_learn_stores_memory_and_returns_recommended_action(monkeypatch):
+def _make_learn_orchestrator(monkeypatch, tmp_path, *, learning_analyzer, skill_store=None):
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
     monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _FakeGraph("unused"))
-
-    calls: list[tuple] = []
-
-    def fake_analyzer(value, existing_operator):
-        calls.append((value, tuple(r.value for r in existing_operator)))
-        return LearningAnalysis(
-            restated_lesson="Hub should check evidence before claiming it is unavailable.",
-            action_kind="skill",
-            suggestion="Update the evidence-checking procedure.",
-            code_change_needed=False,
-        )
-
-    orchestrator = HubOrchestrator(learning_analyzer=fake_analyzer)
-    HubMemoryManager().learn("Prefer tabs over spaces.", source="cli")
-
-    reply = orchestrator.learn("Check evidence before claiming it is unavailable.", source="cli")
-
-    assert len(calls) == 1
-    lesson, existing_operator_values = calls[0]
-    assert lesson == "Check evidence before claiming it is unavailable."
-    assert existing_operator_values == ("Prefer tabs over spaces.",)
-
-    records = HubMemoryManager().list_learnings(types=["semantic"])
-    stored = [r for r in records if r.value == "Check evidence before claiming it is unavailable."]
-    assert len(stored) == 1
-    assert stored[0].scope == "operator"
-
-    assert reply == (
-        f"Stored learning {stored[0].identifier} from cli: "
-        "Check evidence before claiming it is unavailable.\n\n"
-        "Learned: Hub should check evidence before claiming it is unavailable.\n"
-        "Action: A reusable skill should be created or updated.\n"
-        "Suggestion: Update the evidence-checking procedure.\n"
-        "Code change: No"
+    return HubOrchestrator(
+        learning_analyzer=learning_analyzer,
+        skill_store=skill_store or HubSkillStore(),
+        context_service=HubContextService(
+            project_root=tmp_path, registry_dir=tmp_path / "no-such-agents-dir"
+        ),
     )
 
 
-def test_learn_still_stores_memory_when_analysis_fails(monkeypatch, caplog):
+def test_learn_gathers_relevant_skills_and_docs_before_analysis(monkeypatch, tmp_path):
+    (tmp_path / "AGENTS.md").write_text("widget forge notes", encoding="utf-8")
+    skill_store = HubSkillStore()
+    skill_store.propose_skill(
+        "widget-forge", "Widget forge procedure", "Forge widgets carefully.", source="cli"
+    )
+
+    calls: list[tuple] = []
+
+    def fake_analyzer(value, existing_operator, relevant_skills, relevant_docs):
+        calls.append((value, relevant_skills, relevant_docs))
+        return LearningAnalysis(
+            restated_lesson=value,
+            memory_type="semantic",
+            action_kind="memory_only",
+            suggestion="Nothing else to do.",
+            code_change_needed=False,
+        )
+
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
     monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _FakeGraph("unused"))
+    orchestrator = HubOrchestrator(
+        learning_analyzer=fake_analyzer,
+        skill_store=skill_store,
+        context_service=HubContextService(
+            project_root=tmp_path, registry_dir=tmp_path / "no-such-agents-dir"
+        ),
+    )
 
-    def rogue_analyzer(value, existing_operator):
+    orchestrator.learn("widget forge tips", source="cli")
+
+    assert len(calls) == 1
+    _, relevant_skills, relevant_docs = calls[0]
+    assert [s.slug for s in relevant_skills] == ["widget-forge"]
+    assert [d.identifier for d in relevant_docs] == ["AGENTS.md"]
+
+
+def test_learn_memory_only_stores_semantic_by_default(monkeypatch, tmp_path):
+    def fake_analyzer(value, existing_operator, relevant_skills, relevant_docs):
+        return LearningAnalysis(
+            restated_lesson="Rob prefers tabs over spaces.",
+            memory_type="semantic",
+            action_kind="memory_only",
+            suggestion="Nothing else to do.",
+            code_change_needed=False,
+        )
+
+    orchestrator = _make_learn_orchestrator(monkeypatch, tmp_path, learning_analyzer=fake_analyzer)
+
+    reply = orchestrator.learn("Prefer tabs over spaces.", source="cli")
+
+    records = HubMemoryManager().list_learnings()
+    stored = [r for r in records if r.value == "Prefer tabs over spaces."]
+    assert len(stored) == 1
+    assert stored[0].type == "semantic"
+    assert "Destination/action: Memory only" in reply
+    assert "Approval required: No" in reply
+
+
+def test_learn_stores_procedural_memory_when_classified_procedural(monkeypatch, tmp_path):
+    def fake_analyzer(value, existing_operator, relevant_skills, relevant_docs):
+        return LearningAnalysis(
+            restated_lesson="Hub should always check evidence first.",
+            memory_type="procedural",
+            action_kind="memory_only",
+            suggestion="Nothing else to do.",
+            code_change_needed=False,
+        )
+
+    orchestrator = _make_learn_orchestrator(monkeypatch, tmp_path, learning_analyzer=fake_analyzer)
+
+    orchestrator.learn("Always check evidence first.", source="cli")
+
+    records = HubMemoryManager().list_learnings()
+    stored = [r for r in records if r.value == "Always check evidence first."]
+    assert len(stored) == 1
+    assert stored[0].type == "procedural"
+
+
+def test_learn_creates_new_skill_via_governed_skill_store(monkeypatch, tmp_path):
+    def fake_analyzer(value, existing_operator, relevant_skills, relevant_docs):
+        return LearningAnalysis(
+            restated_lesson="Hub should check evidence before claiming it is unavailable.",
+            memory_type="procedural",
+            action_kind="skill",
+            suggestion="unused",
+            code_change_needed=False,
+            skill_slug="evidence-checking",
+            skill_title="Evidence checking procedure",
+            skill_body="Always check available evidence before claiming it is unavailable.",
+        )
+
+    skill_store = HubSkillStore()
+    orchestrator = _make_learn_orchestrator(
+        monkeypatch, tmp_path, learning_analyzer=fake_analyzer, skill_store=skill_store
+    )
+
+    reply = orchestrator.learn("Check evidence before claiming it is unavailable.", source="cli")
+
+    skill = skill_store.get_active_skill("evidence-checking")
+    assert skill is not None
+    assert skill.version == 1
+    assert "Destination/action: Skill — Created new skill." in reply
+    assert "Validation: Passed — active (version 1)" in reply
+    assert "Approval required: No" in reply
+
+
+def test_learn_updates_existing_skill_reusing_relevant_skill_slug(monkeypatch, tmp_path):
+    skill_store = HubSkillStore()
+    skill_store.propose_skill(
+        "evidence-checking", "Evidence checking procedure", "Check evidence first.", source="cli"
+    )
+
+    def fake_analyzer(value, existing_operator, relevant_skills, relevant_docs):
+        assert [s.slug for s in relevant_skills] == ["evidence-checking"]
+        return LearningAnalysis(
+            restated_lesson="Hub should check evidence first, then ask if inconclusive.",
+            memory_type="procedural",
+            action_kind="skill",
+            suggestion="unused",
+            code_change_needed=False,
+            skill_slug="evidence-checking",
+            skill_title="Evidence checking procedure",
+            skill_body="Check evidence first, then ask for more if inconclusive.",
+        )
+
+    orchestrator = _make_learn_orchestrator(
+        monkeypatch, tmp_path, learning_analyzer=fake_analyzer, skill_store=skill_store
+    )
+
+    reply = orchestrator.learn(
+        "Check evidence first, then ask for more if inconclusive.", source="cli"
+    )
+
+    skill = skill_store.get_active_skill("evidence-checking")
+    assert skill.version == 2
+    assert "Destination/action: Skill — Updated skill to version 2." in reply
+
+
+def test_learn_reports_skill_proposal_rejection_without_claiming_success(monkeypatch, tmp_path):
+    skill_store = HubSkillStore()
+    skill_store.propose_skill(
+        "evidence-checking", "Evidence checking procedure", "Check evidence first.", source="cli"
+    )
+
+    def fake_analyzer(value, existing_operator, relevant_skills, relevant_docs):
+        return LearningAnalysis(
+            restated_lesson="A near-duplicate lesson.",
+            memory_type="semantic",
+            action_kind="skill",
+            suggestion="unused",
+            code_change_needed=False,
+            skill_slug="check-evidence-first",
+            skill_title="Evidence checking procedure",
+            skill_body="A near-duplicate of the existing skill.",
+        )
+
+    orchestrator = _make_learn_orchestrator(
+        monkeypatch, tmp_path, learning_analyzer=fake_analyzer, skill_store=skill_store
+    )
+
+    reply = orchestrator.learn("A near-duplicate lesson.", source="cli")
+
+    assert skill_store.get_active_skill("check-evidence-first") is None
+    assert "proposal rejected" in reply
+    assert "Approval required: No" in reply
+
+
+@pytest.mark.parametrize("action_kind", ["documentation", "backlog", "code_change", "new_agent"])
+def test_learn_unsupported_actions_remain_proposals_only(monkeypatch, tmp_path, action_kind):
+    def fake_analyzer(value, existing_operator, relevant_skills, relevant_docs):
+        return LearningAnalysis(
+            restated_lesson="This looks like a gap.",
+            memory_type="semantic",
+            action_kind=action_kind,
+            suggestion="A concrete suggestion.",
+            code_change_needed=True,
+        )
+
+    skill_store = HubSkillStore()
+    orchestrator = _make_learn_orchestrator(
+        monkeypatch, tmp_path, learning_analyzer=fake_analyzer, skill_store=skill_store
+    )
+
+    reply = orchestrator.learn("This looks like a gap.", source="cli")
+
+    assert "Approval required: Yes" in reply
+    assert "N/A — proposal only, not executed" in reply
+    assert skill_store.list_active_skills() == []
+
+
+def test_learn_skill_action_makes_no_filesystem_change(monkeypatch, tmp_path):
+    watched_dir = tmp_path / "repo-skills"
+    watched_dir.mkdir()
+    before = sorted(watched_dir.rglob("*"))
+
+    def fake_analyzer(value, existing_operator, relevant_skills, relevant_docs):
+        return LearningAnalysis(
+            restated_lesson="Hub should check evidence first.",
+            memory_type="procedural",
+            action_kind="skill",
+            suggestion="unused",
+            code_change_needed=False,
+            skill_slug="evidence-checking",
+            skill_title="Evidence checking procedure",
+            skill_body="Always check evidence first.",
+        )
+
+    orchestrator = _make_learn_orchestrator(monkeypatch, tmp_path, learning_analyzer=fake_analyzer)
+
+    orchestrator.learn("Always check evidence first.", source="cli")
+
+    after = sorted(watched_dir.rglob("*"))
+    assert before == after == []
+
+
+def test_learn_still_stores_memory_when_analysis_fails(monkeypatch, caplog, tmp_path):
+    def rogue_analyzer(value, existing_operator, relevant_skills, relevant_docs):
         raise RuntimeError("LLM request timed out")
 
-    orchestrator = HubOrchestrator(learning_analyzer=rogue_analyzer)
+    orchestrator = _make_learn_orchestrator(monkeypatch, tmp_path, learning_analyzer=rogue_analyzer)
 
     with caplog.at_level(logging.WARNING):
         reply = orchestrator.learn("Prefer tabs over spaces.", source="cli")
 
-    records = HubMemoryManager().list_learnings(types=["semantic"])
+    records = HubMemoryManager().list_learnings()
     stored = [r for r in records if r.value == "Prefer tabs over spaces."]
     assert len(stored) == 1
+    assert stored[0].type == "semantic"
 
     assert reply == (
-        f"Stored learning {stored[0].identifier} from cli: Prefer tabs over spaces.\n\n"
-        "(Could not analyze this lesson for a recommended action: LLM request timed out)"
+        "Learned: (analysis unavailable)\n"
+        f"Stored: {stored[0].identifier} (semantic, default) from cli: Prefer tabs over spaces.\n"
+        "Evidence checked: not performed — analysis failed: LLM request timed out\n"
+        "Destination/action: Memory only (fallback)\n"
+        "Validation: N/A\n"
+        "Approval required: No"
     )
     assert "Learning analysis failed" in caplog.text
 

@@ -1,17 +1,20 @@
 """Typed Hub memory: semantic, episodic, and procedural namespaces.
 
 /learn remains Rob's immediate, authoritative command — it always writes an
-active, operator-scoped semantic record with no approval gate. HubOrchestrator.
-learn() additionally runs analyze_learning() as a bounded LLM call to recommend
-what else (if anything) should follow — a skill, doc, backlog, or code change —
-but that analysis never gates or alters the memory write, and it only
-recommends; nothing here creates a skill, edits docs, files a backlog item, or
-changes code on its own.
+active, operator-scoped memory record (semantic or procedural) with no approval
+gate. HubOrchestrator.learn() additionally runs analyze_learning() as a bounded
+LLM call (AGENT-HUB-020) to decide the memory type and whether anything beyond
+remembering it should also happen. Only one action_kind — "skill" — actually
+executes anything, and only through AGENT-HUB-044's governed HubSkillStore
+(hub_skills.py); nothing in this module ever creates a skill, edits docs, files a
+backlog item, dispatches code work, or proposes an agent on its own.
+documentation/backlog/code_change/new_agent stay text-only proposals until their
+own governed action path exists (AGENT-HUB-046).
 
 Automatic semantic extraction (AGENT-HUB-017, see learning_mode.py and
 HubOrchestrator.run_learning_pass) writes scope="auto" semantic records
-through the same typed storage. Episodic curation and procedural proposals
-(AGENT-HUB-018/005) are still future work.
+through the same typed storage. Episodic memory (AGENT-HUB-018) is still future
+work.
 """
 
 from __future__ import annotations
@@ -87,6 +90,18 @@ class HubMemoryManager:
         """Rob's explicit, immediately-authoritative instruction. Never gated."""
         record = self._store_record(
             value, source=source, category=category, type="semantic", scope="operator"
+        )
+        self._compact_if_needed()
+        return record
+
+    def learn_procedural(
+        self, value: str, *, source: str, category: str | None = None
+    ) -> LearningRecord:
+        """Same guarantee as learn(), stored as a repeatable rule/habit instead of
+        a fact/preference. Still Rob's explicit, immediately-authoritative
+        instruction — never gated."""
+        record = self._store_record(
+            value, source=source, category=category, type="procedural", scope="operator"
         )
         self._compact_if_needed()
         return record
@@ -463,62 +478,106 @@ def extract_semantic_candidates(
     ]
 
 
-LearningActionKind = Literal["memory_only", "skill", "documentation", "backlog", "code_change"]
+LearningMemoryType = Literal["semantic", "procedural"]
+LearningActionKind = Literal[
+    "memory_only", "skill", "documentation", "backlog", "code_change", "new_agent"
+]
 
 _LEARNING_ACTION_LABELS: dict[LearningActionKind, str] = {
-    "memory_only": "No further action — remembering this is enough.",
-    "skill": "A reusable skill should be created or updated.",
-    "documentation": "Project documentation should be updated.",
-    "backlog": "This is a bug or gap worth a backlog item.",
-    "code_change": "This likely needs a runtime code change.",
+    "memory_only": "Memory only",
+    "skill": "Skill",
+    "documentation": "Documentation change proposed",
+    "backlog": "Backlog item proposed",
+    "code_change": "Code change proposed",
+    "new_agent": "New specialist agent proposed",
 }
+
+# action_kind values that only ever produce a text recommendation in this ticket
+# (AGENT-HUB-020) — their governed execution path is AGENT-HUB-046, not this one.
+_PROPOSAL_ONLY_ACTIONS: frozenset[LearningActionKind] = frozenset(
+    {"documentation", "backlog", "code_change", "new_agent"}
+)
 
 _LEARNING_ANALYSIS_SYSTEM_PROMPT = (
     "An operator just gave Agent Hub an explicit instruction or lesson via /learn. "
-    "It has already been stored as an authoritative long-term memory unconditionally — "
-    "nothing you decide here changes that. Your only job is to say what, if anything, "
-    "should happen next.\n\n"
+    "It will be stored as an authoritative long-term memory unconditionally, no "
+    "matter what you decide here — that part is never gated. Your job is: (1) pick "
+    "how it should be remembered, and (2) decide whether anything beyond "
+    "remembering it should also happen.\n\n"
     "Restate the lesson in one crisp sentence.\n\n"
-    "Then classify the best next action:\n"
-    "- memory_only: remembering it is enough, nothing else to do\n"
-    "- skill: a reusable skill/procedure should be created or updated to reflect this\n"
+    "Pick the memory_type:\n"
+    "- semantic: a fact or preference\n"
+    "- procedural: a repeatable rule or habit Hub should follow going forward\n\n"
+    "Then classify the action_kind — what, if anything, should happen in addition "
+    "to remembering it:\n"
+    "- memory_only: nothing else to do\n"
+    "- skill: a reusable Hub procedure should be created or updated. This is the "
+    "only action_kind that actually executes — through a governed skill store, "
+    "never by editing any file. You are shown Hub's existing relevant skills; if "
+    "one of them is really what's being corrected or extended, reuse its exact "
+    "slug (this updates it to a new version) instead of inventing a new one. Only "
+    "propose a new skill when none of the shown ones fit. When you choose skill, "
+    "also give skill_slug (short, lowercase, hyphenated, stable), skill_title "
+    "(human label), and skill_body (the actual procedure text Hub should follow).\n"
     "- documentation: project docs should be updated to reflect this\n"
     "- backlog: this describes a bug or gap that belongs on the backlog\n"
-    "- code_change: this requires a runtime code change\n\n"
-    "Give a one-sentence, concrete suggestion for that action. Never take the action "
-    "yourself — only recommend it; a human decides and executes separately. State "
-    "whether a code change is needed regardless of the chosen category, since a "
-    "documentation, skill, or backlog suggestion can still imply one.\n\n"
-    "You are shown existing operator-established facts so you don't recommend "
-    "something already known and stored."
+    "- code_change: this requires a runtime code change\n"
+    "- new_agent: this needs a new specialist agent that doesn't exist yet\n\n"
+    "documentation, backlog, code_change, and new_agent are proposals only — Hub "
+    "cannot and must not perform them itself here. Give a one-sentence, concrete "
+    "suggestion for whichever action_kind you chose (skill_body covers that role "
+    "when action_kind is skill). State whether a code change is needed regardless "
+    "of the chosen category, since a documentation, skill, or backlog suggestion "
+    "can still imply one.\n\n"
+    "You are shown existing operator-established facts, Hub's existing relevant "
+    "skills, and relevant authoritative documentation, so you don't recommend or "
+    "duplicate something already known, already a skill, or already documented."
 )
 
 
 class _LearningAnalysisModel(BaseModel):
     restated_lesson: str
+    memory_type: LearningMemoryType
     action_kind: LearningActionKind
     suggestion: str
     code_change_needed: bool
+    skill_slug: str | None = None
+    skill_title: str | None = None
+    skill_body: str | None = None
 
 
 @dataclass(frozen=True)
 class LearningAnalysis:
     restated_lesson: str
+    memory_type: LearningMemoryType
     action_kind: LearningActionKind
     suggestion: str
     code_change_needed: bool
+    skill_slug: str | None = None
+    skill_title: str | None = None
+    skill_body: str | None = None
 
 
 def analyze_learning(
-    value: str, existing_operator: list[LearningRecord] = ()
+    value: str,
+    existing_operator: list[LearningRecord] = (),
+    relevant_skills: list = (),
+    relevant_docs: list = (),
 ) -> LearningAnalysis:
-    """One bounded LLM call: given an operator's /learn text, recommend what (if
-    anything) beyond storing it in memory should happen next.
+    """One bounded LLM call: given an operator's /learn text, decide how to
+    remember it (memory_type) and whether anything beyond remembering it should
+    also happen (action_kind).
 
-    Runs synchronously as part of every explicit /learn call — this is analysis,
-    not gated automation. It never creates a skill, edits docs, files a backlog
-    item, or changes code; it only recommends, matching Hub's no-automatic-code-
-    change and human-approves-code-changes rules.
+    Runs synchronously as part of every explicit /learn call. Only action_kind
+    "skill" executes anything (via AGENT-HUB-044's governed skill store, called
+    by HubOrchestrator.learn() — this function never writes anything itself).
+    documentation/backlog/code_change/new_agent are always proposals only here,
+    matching Hub's no-automatic-code-change and human-approves rules; their
+    governed execution path is AGENT-HUB-046.
+
+    relevant_skills and relevant_docs are hub_skills.HubSkill / hub_context.
+    ContextSource instances (bounded retrieval already applied by the caller) —
+    typed loosely here to avoid a hard import dependency in this module.
     """
     from langchain_core.callbacks import UsageMetadataCallbackHandler
     from langchain_core.messages import HumanMessage, SystemMessage
@@ -527,11 +586,18 @@ def analyze_learning(
     from .config import DEFAULT_MODEL
     from .cost_log import extract_usage_metadata, record_llm_run
 
-    operator_block = (
-        "\n".join(f"- {r.value}" for r in existing_operator) or "(none)"
+    operator_block = "\n".join(f"- {r.value}" for r in existing_operator) or "(none)"
+    skills_block = (
+        "\n".join(f"- {s.slug}: {s.title} — {s.body}" for s in relevant_skills) or "(none)"
+    )
+    docs_block = (
+        "\n".join(f"- {d.identifier}: {d.content}" for d in relevant_docs) or "(none)"
     )
     human_content = (
-        f"Existing operator-established facts:\n{operator_block}\n\nNew lesson:\n{value}"
+        f"Existing operator-established facts:\n{operator_block}\n\n"
+        f"Hub's existing relevant skills:\n{skills_block}\n\n"
+        f"Relevant authoritative documentation:\n{docs_block}\n\n"
+        f"New lesson:\n{value}"
     )
 
     llm = ChatOpenAI(model=DEFAULT_MODEL, temperature=0)
@@ -571,9 +637,13 @@ def analyze_learning(
 
     return LearningAnalysis(
         restated_lesson=response.restated_lesson.strip(),
+        memory_type=response.memory_type,
         action_kind=response.action_kind,
         suggestion=response.suggestion.strip(),
         code_change_needed=response.code_change_needed,
+        skill_slug=(response.skill_slug or "").strip() or None,
+        skill_title=(response.skill_title or "").strip() or None,
+        skill_body=(response.skill_body or "").strip() or None,
     )
 
 
@@ -664,19 +734,57 @@ def format_learning_confirmation(
     *,
     analysis: LearningAnalysis | None = None,
     analysis_error: str | None = None,
+    relevant_skills: list = (),
+    relevant_docs: list = (),
+    skill_result: object | None = None,
 ) -> str:
-    stored = f"Stored learning {record.identifier} from {record.source}: {record.value}"
-    if analysis is not None:
-        return (
-            f"{stored}\n\n"
-            f"Learned: {analysis.restated_lesson}\n"
-            f"Action: {_LEARNING_ACTION_LABELS[analysis.action_kind]}\n"
-            f"Suggestion: {analysis.suggestion}\n"
-            f"Code change: {'Yes' if analysis.code_change_needed else 'No'}"
-        )
     if analysis_error is not None:
-        return f"{stored}\n\n(Could not analyze this lesson for a recommended action: {analysis_error})"
-    return stored
+        return (
+            "Learned: (analysis unavailable)\n"
+            f"Stored: {record.identifier} (semantic, default) from {record.source}: "
+            f"{record.value}\n"
+            f"Evidence checked: not performed — analysis failed: {analysis_error}\n"
+            "Destination/action: Memory only (fallback)\n"
+            "Validation: N/A\n"
+            "Approval required: No"
+        )
+
+    if analysis is None:
+        return f"Stored learning {record.identifier} from {record.source}: {record.value}"
+
+    skills_ids = ", ".join(s.slug for s in relevant_skills) or "none"
+    docs_ids = ", ".join(d.identifier for d in relevant_docs) or "none"
+    evidence_line = f"Evidence checked: skills=[{skills_ids}] docs=[{docs_ids}]"
+
+    if analysis.action_kind == "skill":
+        if skill_result is not None and skill_result.accepted:
+            destination = f"Skill — {skill_result.reason}"
+            validation = f"Passed — active (version {skill_result.skill.version})"
+        elif skill_result is not None:
+            destination = f"Skill — proposal rejected: {skill_result.reason}"
+            validation = f"Rejected: {skill_result.reason}"
+        else:
+            destination = "Skill — no proposal executed"
+            validation = "N/A"
+        approval_required = "No"
+    elif analysis.action_kind in _PROPOSAL_ONLY_ACTIONS:
+        destination = f"{_LEARNING_ACTION_LABELS[analysis.action_kind]}: {analysis.suggestion}"
+        validation = "N/A — proposal only, not executed"
+        approval_required = "Yes"
+    else:
+        destination = _LEARNING_ACTION_LABELS[analysis.action_kind]
+        validation = "N/A"
+        approval_required = "No"
+
+    return (
+        f"Learned: {analysis.restated_lesson}\n"
+        f"Stored: {record.identifier} ({analysis.memory_type}) from {record.source}: "
+        f"{record.value}\n"
+        f"{evidence_line}\n"
+        f"Destination/action: {destination}\n"
+        f"Validation: {validation}\n"
+        f"Approval required: {approval_required}"
+    )
 
 
 def format_forget_confirmation(identifier: str) -> str:

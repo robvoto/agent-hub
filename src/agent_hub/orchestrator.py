@@ -29,6 +29,7 @@ from .factory_bridge import (
     reject_factory_request,
     resume_factory_request,
 )
+from .hub_context import HubContextService
 from .hub_memory import (
     ExtractionCandidate,
     HubMemoryManager,
@@ -39,6 +40,7 @@ from .hub_memory import (
     format_learning_list,
     format_learnings_for_prompt,
 )
+from .hub_skills import HubSkillStore, SkillProposalResult
 from .knowledge_store import get_knowledge_store
 from .learning_mode import get_learning_mode_registry
 from .log_config import get_human_logger
@@ -63,8 +65,8 @@ from .registry import (
 from .run_status import format_current_run_status, format_last_run_status
 from .session_state import load_or_create_session_id, persist_session_id
 from .shared_docs import make_shared_docs_tool
-from .task_envelope import build_task_envelope
 from .task_control import TaskCancelled, get_task_control_registry, subprocess_popen_kwargs
+from .task_envelope import build_task_envelope
 from .task_runs import (
     DEFAULT_PROJECT_KEY,
     TASK_STATE_CANCELLED,
@@ -1100,6 +1102,8 @@ class HubOrchestrator:
         *,
         semantic_extractor: Any = None,
         learning_analyzer: Any = None,
+        skill_store: Any = None,
+        context_service: Any = None,
     ) -> None:
         self._model = model
         self._registry = _load_specialists()
@@ -1108,6 +1112,8 @@ class HubOrchestrator:
         self._session_id = load_or_create_session_id()
         self._semantic_extractor = semantic_extractor or extract_semantic_candidates
         self._learning_analyzer = learning_analyzer or analyze_learning
+        self._skill_store = skill_store or HubSkillStore()
+        self._context_service = context_service or HubContextService()
         self._learning_notify: Any = None
         self._learning_watermark: dict[str, Any] = {}
         logger.info(
@@ -1228,18 +1234,52 @@ class HubOrchestrator:
 
     def learn(self, value: str, *, source: str, category: str | None = None) -> str:
         manager = HubMemoryManager()
-        record = manager.learn(value, source=source, category=category)
         existing_operator = [
-            r
-            for r in manager.list_learnings(types=["semantic"])
-            if r.scope == "operator" and r.status == "active" and r.identifier != record.identifier
+            r for r in manager.list_learnings() if r.scope == "operator" and r.status == "active"
         ]
+        relevant_skills = self._skill_store.find_relevant_skills(value)
+        relevant_docs = self._context_service.find_relevant_documentation(value)
+
         try:
-            analysis = self._learning_analyzer(value, existing_operator)
+            decision = self._learning_analyzer(
+                value, existing_operator, relevant_skills, relevant_docs
+            )
         except Exception as exc:
-            logger.warning("Learning analysis failed for %s: %s", record.identifier, exc)
+            logger.warning("Learning analysis failed for %r: %s", value, exc)
+            record = manager.learn(value, source=source, category=category)
             return format_learning_confirmation(record, analysis_error=str(exc))
-        return format_learning_confirmation(record, analysis=analysis)
+
+        if decision.memory_type == "procedural":
+            record = manager.learn_procedural(value, source=source, category=category)
+        else:
+            record = manager.learn(value, source=source, category=category)
+
+        skill_result = None
+        if decision.action_kind == "skill":
+            if decision.skill_slug and decision.skill_title and decision.skill_body:
+                skill_result = self._skill_store.propose_skill(
+                    decision.skill_slug,
+                    decision.skill_title,
+                    decision.skill_body,
+                    source=f"learn:{record.identifier}",
+                )
+            else:
+                skill_result = SkillProposalResult(
+                    accepted=False,
+                    skill=None,
+                    reason=(
+                        "Analysis chose 'skill' but did not provide a complete "
+                        "slug/title/body."
+                    ),
+                )
+
+        return format_learning_confirmation(
+            record,
+            analysis=decision,
+            relevant_skills=relevant_skills,
+            relevant_docs=relevant_docs,
+            skill_result=skill_result,
+        )
 
     def memory(self) -> str:
         return format_learning_list(HubMemoryManager().list_learnings())

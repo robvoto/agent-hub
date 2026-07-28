@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from langgraph.store.base import PutOp
 
+from agent_hub.hub_context import ContextSource
 from agent_hub.hub_memory import (
     _LEGACY_LEARNINGS_NS,
     HubMemoryManager,
@@ -12,6 +15,7 @@ from agent_hub.hub_memory import (
     format_learning_list,
     format_learnings_for_prompt,
 )
+from agent_hub.hub_skills import HubSkill, SkillProposalResult
 from agent_hub.knowledge_store import SqliteStore
 
 
@@ -38,25 +42,134 @@ def test_format_learning_confirmation_without_analysis_is_unchanged(tmp_path):
     )
 
 
-def test_format_learning_confirmation_includes_recommended_action(tmp_path):
+def test_learn_procedural_creates_procedural_record(tmp_path):
     manager = HubMemoryManager(SqliteStore(tmp_path / "knowledge.sqlite3"))
-    record = manager.learn("Check evidence before claiming it is unavailable.", source="cli")
+
+    record = manager.learn_procedural("Always check evidence first.", source="cli")
+
+    assert record.type == "procedural"
+    assert record.scope == "operator"
+    assert record.status == "active"
+
+
+def test_format_learning_confirmation_for_memory_only(tmp_path):
+    manager = HubMemoryManager(SqliteStore(tmp_path / "knowledge.sqlite3"))
+    record = manager.learn("Prefer tabs over spaces.", source="cli")
     analysis = LearningAnalysis(
-        restated_lesson="Hub should check available evidence before claiming it is unavailable.",
-        action_kind="skill",
-        suggestion="Update the evidence-checking procedure.",
+        restated_lesson="Rob prefers tabs over spaces.",
+        memory_type="semantic",
+        action_kind="memory_only",
+        suggestion="Nothing else to do.",
         code_change_needed=False,
     )
 
     result = format_learning_confirmation(record, analysis=analysis)
 
     assert result == (
-        f"Stored learning {record.identifier} from cli: "
-        "Check evidence before claiming it is unavailable.\n\n"
-        "Learned: Hub should check available evidence before claiming it is unavailable.\n"
-        "Action: A reusable skill should be created or updated.\n"
-        "Suggestion: Update the evidence-checking procedure.\n"
-        "Code change: No"
+        "Learned: Rob prefers tabs over spaces.\n"
+        f"Stored: {record.identifier} (semantic) from cli: Prefer tabs over spaces.\n"
+        "Evidence checked: skills=[none] docs=[none]\n"
+        "Destination/action: Memory only\n"
+        "Validation: N/A\n"
+        "Approval required: No"
+    )
+
+
+def test_format_learning_confirmation_for_created_skill(tmp_path):
+    manager = HubMemoryManager(SqliteStore(tmp_path / "knowledge.sqlite3"))
+    record = manager.learn_procedural(
+        "Always check evidence before claiming it is unavailable.", source="cli"
+    )
+    analysis = LearningAnalysis(
+        restated_lesson="Hub should check evidence before claiming it is unavailable.",
+        memory_type="procedural",
+        action_kind="skill",
+        suggestion="unused",
+        code_change_needed=False,
+        skill_slug="evidence-checking",
+        skill_title="Evidence checking procedure",
+        skill_body="Always check available evidence before claiming it is unavailable.",
+    )
+    skill = HubSkill(
+        identifier="skill-abc123",
+        slug="evidence-checking",
+        title="Evidence checking procedure",
+        body="Always check available evidence before claiming it is unavailable.",
+        version=1,
+        status="active",
+        source=f"learn:{record.identifier}",
+        created_at=datetime.now(timezone.utc),
+    )
+    skill_result = SkillProposalResult(accepted=True, skill=skill, reason="Created new skill.")
+
+    result = format_learning_confirmation(
+        record,
+        analysis=analysis,
+        relevant_skills=[skill],
+        relevant_docs=[
+            ContextSource(identifier="AGENTS.md", kind="documentation", content="", freshness="")
+        ],
+        skill_result=skill_result,
+    )
+
+    assert result == (
+        "Learned: Hub should check evidence before claiming it is unavailable.\n"
+        f"Stored: {record.identifier} (procedural) from cli: "
+        "Always check evidence before claiming it is unavailable.\n"
+        "Evidence checked: skills=[evidence-checking] docs=[AGENTS.md]\n"
+        "Destination/action: Skill — Created new skill.\n"
+        "Validation: Passed — active (version 1)\n"
+        "Approval required: No"
+    )
+
+
+def test_format_learning_confirmation_for_rejected_skill(tmp_path):
+    manager = HubMemoryManager(SqliteStore(tmp_path / "knowledge.sqlite3"))
+    record = manager.learn("Some lesson.", source="cli")
+    analysis = LearningAnalysis(
+        restated_lesson="Some lesson.",
+        memory_type="semantic",
+        action_kind="skill",
+        suggestion="unused",
+        code_change_needed=False,
+        skill_slug="some-skill",
+        skill_title="Some skill",
+        skill_body="Body.",
+    )
+    skill_result = SkillProposalResult(
+        accepted=False, skill=None, reason="Title matches already-active skill 'other-skill'."
+    )
+
+    result = format_learning_confirmation(record, analysis=analysis, skill_result=skill_result)
+
+    assert (
+        "Destination/action: Skill — proposal rejected: "
+        "Title matches already-active skill 'other-skill'." in result
+    )
+    assert "Validation: Rejected: Title matches already-active skill 'other-skill'." in result
+    assert "Approval required: No" in result
+
+
+def test_format_learning_confirmation_for_proposal_only_action(tmp_path):
+    manager = HubMemoryManager(SqliteStore(tmp_path / "knowledge.sqlite3"))
+    record = manager.learn("This looks like a bug.", source="cli")
+    analysis = LearningAnalysis(
+        restated_lesson="This looks like a bug.",
+        memory_type="semantic",
+        action_kind="backlog",
+        suggestion="File a backlog item about this.",
+        code_change_needed=True,
+    )
+
+    result = format_learning_confirmation(record, analysis=analysis)
+
+    assert result == (
+        "Learned: This looks like a bug.\n"
+        f"Stored: {record.identifier} (semantic) from cli: This looks like a bug.\n"
+        "Evidence checked: skills=[none] docs=[none]\n"
+        "Destination/action: Backlog item proposed: File a backlog item about this.\n"
+        "Validation: N/A — proposal only, not executed\n"
+        "Approval required: Yes"
     )
 
 
@@ -67,8 +180,12 @@ def test_format_learning_confirmation_reports_analysis_failure_plainly(tmp_path)
     result = format_learning_confirmation(record, analysis_error="LLM request timed out")
 
     assert result == (
-        f"Stored learning {record.identifier} from cli: Prefer tabs over spaces.\n\n"
-        "(Could not analyze this lesson for a recommended action: LLM request timed out)"
+        "Learned: (analysis unavailable)\n"
+        f"Stored: {record.identifier} (semantic, default) from cli: Prefer tabs over spaces.\n"
+        "Evidence checked: not performed — analysis failed: LLM request timed out\n"
+        "Destination/action: Memory only (fallback)\n"
+        "Validation: N/A\n"
+        "Approval required: No"
     )
 
 
