@@ -1,8 +1,8 @@
 """Per-session canonical project context for cross-project specialist dispatch.
 
 Hub does not decide which projects a subprocess specialist is allowed to
-touch — that allowlist is enforced server-side by the specialist itself
-(e.g. ai-tech-lead's own allowed_project_roots). Hub remembers which project
+touch — that authorization is enforced server-side by the specialist itself
+(e.g. ai-tech-lead's own target-project registry). Hub remembers which project
 the operator picked with /project, resolves it to a canonical
 `ProjectContext` (a stable `project_id`, a contract version, a fingerprint
 over that identity, and light metadata), and revalidates that context

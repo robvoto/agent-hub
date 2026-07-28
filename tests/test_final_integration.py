@@ -186,9 +186,11 @@ def _ai_tech_lead_shaped_manifest(working_directory: Path) -> dict:
         "id": "ai-tech-lead",
         "name": "AI Tech Lead",
         "purpose": (
-            "Primary responsibility: Lead and execute changes to existing software.\n"
-            "Select for: Implementing backlog items or modifying code in an existing "
-            "repository.\n"
+            "Primary responsibility: Lead and execute work on new or existing technical "
+            "solutions.\n"
+            "Select for: Implementing backlog items, building new technical solutions, "
+            "or changing code in a new or existing technical solution, subject only to "
+            "available authorised access.\n"
             "Do not select for: Designing a new specialist agent package."
         ),
         "tools": ["run_agent_task"],
