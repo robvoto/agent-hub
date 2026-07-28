@@ -210,6 +210,8 @@ class TelegramGateway:
             "/decide <option> [text] - answer a task waiting on a specialist decision\n"
             "/forget <id> - remove a stored learning\n"
             "/help - show this\n"
+            "/hub-status - show the hub startup summary without starting a new "
+            "conversation\n"
             "/last - show the most recently finished task\n"
             "/learn <fact> - store an explicit learning\n"
             "/learn-mode [on|off] - toggle automatic background learning "
@@ -249,10 +251,14 @@ class TelegramGateway:
             return
 
         if text == "/new":
-            self._orch.new_session()
+            summary = self._orch.new_session()
             with self._progress_lock:
                 self._live_progress_messages.clear()
-            _send_message(self._token, chat_id, "Started a fresh conversation.")
+            _send_message(self._token, chat_id, summary, parse_mode=None)
+            return
+
+        if text == "/hub-status":
+            _send_message(self._token, chat_id, self._orch.hub_status(), parse_mode=None)
             return
 
         if text == "/reset":

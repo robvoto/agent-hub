@@ -84,6 +84,9 @@ loader (`registry.parse_agent_spec`) reads a small, fixed core:
 | `version` | no | the specialist's own version, defaults to "1.0.0" |
 | `input_contract` | no | declares the `agent-hub.task` protocol version, required/optional envelope fields, and which context fields (`project_root`, `references`) the specialist reads (`accepted_context`) or cannot function without (`required_context`) — Hub reads these generically to decide what a dispatch actually sends (see below) |
 | `interaction_contract` | no | declared lifecycle support — `progress`, `clarification`, `approval`, `resume`, `cancellation`. Hub does not branch dispatch behavior on this; the generic `output_contract`/`runtime.progress` mechanism still drives actual behavior |
+| `task_contract` | no | bounded task kinds the specialist declares it accepts, plus an optional default task kind |
+| `project_context_contract` | no | the specialist's declared project-context schema participation, which Hub reads generically for version negotiation |
+| `target_project_access` | no | explicit-target authorization metadata for `project_root`-oriented specialists |
 | `runtime` | yes | how Hub invokes the agent (subprocess entrypoint, or Agent Factory's in-process `factory_brain` mode) |
 
 Every other top-level `agent.json` field — `backlog_sheet_id`, `knowledge_db`,

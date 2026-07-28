@@ -25,6 +25,40 @@ def test_help_text_explains_current_thread_controls() -> None:
     assert "/new starts a fresh empty thread; it is not a fork." in help_text
     assert "Cancelled work from /stop or /reset is not resumable." in help_text
     assert "There is no /fork or generic /resume command yet." in help_text
+    assert "/hub-status - show the hub startup summary" in help_text
+
+
+def test_hub_status_command_reports_summary_without_starting_new_session(monkeypatch):
+    sent: list[dict] = []
+
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway._send_message",
+        lambda token, chat_id, text, *, parse_mode="Markdown": sent.append(
+            {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
+        ),
+    )
+
+    calls: list[str] = []
+    orch = SimpleNamespace(
+        hub_status=lambda: calls.append("hub_status")
+        or "Agent Hub status\n\nLearning: ON\nProject: agent-hub\n"
+        "Agents available: 2\nActive task: none\nMemory records: 14",
+        registry=[],
+        set_learning_notifier=lambda callback: None,
+    )
+    gateway = TelegramGateway("token-123", orch)
+
+    gateway._handle_message({"chat": {"id": 42}, "text": "/hub-status"})
+
+    assert calls == ["hub_status"]
+    assert sent == [
+        {
+            "chat_id": 42,
+            "text": "Agent Hub status\n\nLearning: ON\nProject: agent-hub\n"
+            "Agents available: 2\nActive task: none\nMemory records: 14",
+            "parse_mode": None,
+        }
+    ]
 
 
 def test_decide_command_forwards_option_and_text_to_orchestrator(monkeypatch):
@@ -94,7 +128,9 @@ def test_new_command_resets_session_once_and_sends_one_reply(monkeypatch):
 
     calls: list[str] = []
     orch = SimpleNamespace(
-        new_session=lambda: calls.append("new_session"),
+        new_session=lambda: calls.append("new_session")
+        or "New Agent Hub session\n\nLearning: OFF\nProject: none\n"
+        "Agents available: 0\nActive task: none\nMemory records: 0",
         registry=[],
         set_learning_notifier=lambda callback: None,
     )
@@ -107,8 +143,9 @@ def test_new_command_resets_session_once_and_sends_one_reply(monkeypatch):
         {
             "token": "token-123",
             "chat_id": 42,
-            "text": "Started a fresh conversation.",
-            "parse_mode": "Markdown",
+            "text": "New Agent Hub session\n\nLearning: OFF\nProject: none\n"
+            "Agents available: 0\nActive task: none\nMemory records: 0",
+            "parse_mode": None,
         }
     ]
 
@@ -237,7 +274,7 @@ def test_duplicate_telegram_message_is_ignored(monkeypatch):
 
     calls: list[str] = []
     orch = SimpleNamespace(
-        new_session=lambda: calls.append("new_session"),
+        new_session=lambda: calls.append("new_session") or "New Agent Hub session",
         reset_session=lambda: "unused",
         registry=[],
         set_learning_notifier=lambda callback: None,
@@ -252,7 +289,7 @@ def test_duplicate_telegram_message_is_ignored(monkeypatch):
     )
 
     assert calls == ["new_session"]
-    assert sent == ["Started a fresh conversation."]
+    assert sent == ["New Agent Hub session"]
 
 
 def test_run_logs_api_base_url_in_human_log(monkeypatch, caplog):

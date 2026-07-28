@@ -20,6 +20,7 @@ def test_help_text_explains_current_thread_controls() -> None:
     assert "/new starts a fresh empty thread; it is not a fork." in _HELP_TEXT
     assert "Cancelled work from /stop or /reset is not resumable." in _HELP_TEXT
     assert "There is no /fork or generic /resume command yet." in _HELP_TEXT
+    assert "/hub-status - show the hub startup summary" in _HELP_TEXT
 
 
 def test_handle_cli_shutdown_interrupt_cancels_active_tasks_and_reports_count(capsys):

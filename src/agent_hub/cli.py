@@ -19,6 +19,7 @@ _HELP_TEXT = (
     "/decide <option> [text] - answer a task waiting on a specialist decision\n"
     "/forget <id> - remove a stored learning\n"
     "/help - show this\n"
+    "/hub-status - show the hub startup summary without starting a new session\n"
     "/last - show the most recently finished task\n"
     "/learn <fact> - store an explicit learning\n"
     "/learn-mode [on|off] - toggle automatic background learning\n"
@@ -103,8 +104,11 @@ def _run_chat(model: str) -> None:
             continue
 
         if text == "/new":
-            orch.new_session()
-            print("New session started.")
+            print(f"\n{orch.new_session()}\n")
+            continue
+
+        if text == "/hub-status":
+            print(f"\n{orch.hub_status()}\n")
             continue
 
         if text == "/reset":

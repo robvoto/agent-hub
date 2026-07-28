@@ -278,6 +278,71 @@ def test_new_session_explains_reset_effect_in_human_log(monkeypatch, caplog):
     assert "clean session-scoped controls" in caplog.text
 
 
+def test_new_session_returns_startup_summary_with_defaults(monkeypatch):
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _FakeGraph("unused"))
+
+    orchestrator = HubOrchestrator()
+
+    summary = orchestrator.new_session()
+
+    assert summary == (
+        "New Agent Hub session\n\n"
+        "Learning: OFF\n"
+        "Project: none\n"
+        "Agents available: 0\n"
+        "Active task: none\n"
+        "Memory records: 0"
+    )
+
+
+def test_hub_status_reports_state_without_rotating_session(monkeypatch, tmp_path):
+    spec = AgentSpec(
+        id="ai-tech-lead",
+        name="AI Tech Lead",
+        purpose="Implements code changes",
+        runtime={
+            "mode": "subprocess",
+            "entrypoint": "fake-agent",
+            "working_directory": str(tmp_path),
+            "input_arg": "--input-json",
+            "output_arg": "--output-json",
+            "default_execution_mode": "execute",
+        },
+    )
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _FakeGraph("unused"))
+
+    orchestrator = HubOrchestrator()
+    original_session_id = orchestrator.session_id
+    orchestrator.set_learning_mode(True)
+    orchestrator.set_current_project(str(tmp_path))
+    HubMemoryManager().learn("Widgets ship on Fridays", source="cli")
+    run = get_task_run_store().create_run(
+        session_id=orchestrator.session_id,
+        user_message="Clean this up",
+    )
+    get_task_run_store().transition(
+        run.id,
+        TASK_STATE_WAITING_APPROVAL,
+        selected_agent_id=spec.id,
+        dispatched_task="Delete the generated files",
+        approval_token="approve-123",
+    )
+
+    status = orchestrator.hub_status()
+
+    assert orchestrator.session_id == original_session_id
+    assert status == (
+        "Agent Hub status\n\n"
+        "Learning: ON\n"
+        f"Project: {tmp_path.name}\n"
+        "Agents available: 1\n"
+        f"Active task: {TASK_STATE_WAITING_APPROVAL}\n"
+        "Memory records: 1"
+    )
+
+
 def test_reset_session_stops_active_task_and_rotates_session(monkeypatch, caplog, tmp_path):
     spec = AgentSpec(
         id="ai-tech-lead",

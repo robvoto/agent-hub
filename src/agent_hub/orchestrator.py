@@ -428,7 +428,7 @@ class ProjectContextVersionError(ValueError):
 def _resolve_project_context_schema_version(spec: AgentSpec) -> int | None:
     """Negotiate the project_context.schema_version to send this specialist.
 
-    Reads the specialist's own declared `input_contract.project_context_contract
+    Reads the specialist's own declared `project_context_contract
     .supported_schema_versions` — already loaded onto `spec` by the registry —
     and picks the highest version both Hub and the specialist support. Hub
     never hardcodes or guesses a version for a specialist it hasn't verified
@@ -441,7 +441,9 @@ def _resolve_project_context_schema_version(spec: AgentSpec) -> int | None:
     contract but Hub shares no compatible version with it — that dispatch
     must be refused, not sent with a guessed version.
     """
-    contract = spec.input_contract.get("project_context_contract")
+    contract = spec.project_context_contract
+    if not isinstance(contract, dict) or not contract:
+        contract = spec.input_contract.get("project_context_contract")
     if not isinstance(contract, dict) or not contract:
         return None
 
@@ -1172,8 +1174,9 @@ class HubOrchestrator:
             carry_active_work,
         )
 
-    def new_session(self) -> None:
+    def new_session(self) -> str:
         self._rotate_session(carry_active_work=True)
+        return self._hub_summary("New Agent Hub session")
 
     def reset_session(self) -> str:
         stop_reply = self.stop_current_task(reason="Reset by user")
@@ -1182,6 +1185,29 @@ class HubOrchestrator:
         if stopped_active_task:
             return "Reset complete. Stopped the active task and started a fresh conversation."
         return "Reset complete. Started a fresh conversation."
+
+    def hub_status(self) -> str:
+        """Report the same startup metadata as /new without rotating the session."""
+        return self._hub_summary("Agent Hub status")
+
+    def _hub_summary(self, heading: str) -> str:
+        learning_enabled = get_learning_mode_registry().is_enabled(self._session_id)
+        project = get_project_context_registry().get(self._session_id)
+        project_label = project.metadata.get("name", project.root) if project else "none"
+        active_run = get_task_run_store().get_latest_active_or_paused_run(self._session_id)
+        active_label = "none" if active_run is None else active_run.state
+        memory_count = len(HubMemoryManager().list_learnings())
+        return "\n".join(
+            [
+                heading,
+                "",
+                f"Learning: {'ON' if learning_enabled else 'OFF'}",
+                f"Project: {project_label}",
+                f"Agents available: {len(self._registry)}",
+                f"Active task: {active_label}",
+                f"Memory records: {memory_count}",
+            ]
+        )
 
     def pending_run(self) -> TaskRun | None:
         project_key = _project_key_for_session(self._session_id)
