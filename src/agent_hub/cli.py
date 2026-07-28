@@ -21,7 +21,7 @@ _HELP_TEXT = (
     "/help - show this\n"
     "/hub-status - show the hub startup summary without starting a new session\n"
     "/last - show the most recently finished task\n"
-    "/learn <fact> - store an explicit learning\n"
+    "/learn <fact> - store an explicit learning and get a recommended next action\n"
     "/learn-mode [on|off] - toggle automatic background learning\n"
     "/memory - list stored learnings\n"
     "/new - start a fresh conversation; keep active work running\n"

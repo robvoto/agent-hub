@@ -1,7 +1,12 @@
 """Typed Hub memory: semantic, episodic, and procedural namespaces.
 
 /learn remains Rob's immediate, authoritative command — it always writes an
-active, operator-scoped semantic record with no approval gate.
+active, operator-scoped semantic record with no approval gate. HubOrchestrator.
+learn() additionally runs analyze_learning() as a bounded LLM call to recommend
+what else (if anything) should follow — a skill, doc, backlog, or code change —
+but that analysis never gates or alters the memory write, and it only
+recommends; nothing here creates a skill, edits docs, files a backlog item, or
+changes code on its own.
 
 Automatic semantic extraction (AGENT-HUB-017, see learning_mode.py and
 HubOrchestrator.run_learning_pass) writes scope="auto" semantic records
@@ -458,6 +463,120 @@ def extract_semantic_candidates(
     ]
 
 
+LearningActionKind = Literal["memory_only", "skill", "documentation", "backlog", "code_change"]
+
+_LEARNING_ACTION_LABELS: dict[LearningActionKind, str] = {
+    "memory_only": "No further action — remembering this is enough.",
+    "skill": "A reusable skill should be created or updated.",
+    "documentation": "Project documentation should be updated.",
+    "backlog": "This is a bug or gap worth a backlog item.",
+    "code_change": "This likely needs a runtime code change.",
+}
+
+_LEARNING_ANALYSIS_SYSTEM_PROMPT = (
+    "An operator just gave Agent Hub an explicit instruction or lesson via /learn. "
+    "It has already been stored as an authoritative long-term memory unconditionally — "
+    "nothing you decide here changes that. Your only job is to say what, if anything, "
+    "should happen next.\n\n"
+    "Restate the lesson in one crisp sentence.\n\n"
+    "Then classify the best next action:\n"
+    "- memory_only: remembering it is enough, nothing else to do\n"
+    "- skill: a reusable skill/procedure should be created or updated to reflect this\n"
+    "- documentation: project docs should be updated to reflect this\n"
+    "- backlog: this describes a bug or gap that belongs on the backlog\n"
+    "- code_change: this requires a runtime code change\n\n"
+    "Give a one-sentence, concrete suggestion for that action. Never take the action "
+    "yourself — only recommend it; a human decides and executes separately. State "
+    "whether a code change is needed regardless of the chosen category, since a "
+    "documentation, skill, or backlog suggestion can still imply one.\n\n"
+    "You are shown existing operator-established facts so you don't recommend "
+    "something already known and stored."
+)
+
+
+class _LearningAnalysisModel(BaseModel):
+    restated_lesson: str
+    action_kind: LearningActionKind
+    suggestion: str
+    code_change_needed: bool
+
+
+@dataclass(frozen=True)
+class LearningAnalysis:
+    restated_lesson: str
+    action_kind: LearningActionKind
+    suggestion: str
+    code_change_needed: bool
+
+
+def analyze_learning(
+    value: str, existing_operator: list[LearningRecord] = ()
+) -> LearningAnalysis:
+    """One bounded LLM call: given an operator's /learn text, recommend what (if
+    anything) beyond storing it in memory should happen next.
+
+    Runs synchronously as part of every explicit /learn call — this is analysis,
+    not gated automation. It never creates a skill, edits docs, files a backlog
+    item, or changes code; it only recommends, matching Hub's no-automatic-code-
+    change and human-approves-code-changes rules.
+    """
+    from langchain_core.callbacks import UsageMetadataCallbackHandler
+    from langchain_core.messages import HumanMessage, SystemMessage
+    from langchain_openai import ChatOpenAI
+
+    from .config import DEFAULT_MODEL
+    from .cost_log import extract_usage_metadata, record_llm_run
+
+    operator_block = (
+        "\n".join(f"- {r.value}" for r in existing_operator) or "(none)"
+    )
+    human_content = (
+        f"Existing operator-established facts:\n{operator_block}\n\nNew lesson:\n{value}"
+    )
+
+    llm = ChatOpenAI(model=DEFAULT_MODEL, temperature=0)
+    structured_llm = llm.with_structured_output(_LearningAnalysisModel)
+    usage_cb = UsageMetadataCallbackHandler()
+    started = time.perf_counter()
+    try:
+        response = structured_llm.invoke(
+            [
+                SystemMessage(content=_LEARNING_ANALYSIS_SYSTEM_PROMPT),
+                HumanMessage(content=human_content),
+            ],
+            config={"callbacks": [usage_cb]},
+        )
+        record_llm_run(
+            operation="hub_memory_learning_analysis",
+            request_kind="learning_analysis",
+            requested_model=DEFAULT_MODEL,
+            effective_model=DEFAULT_MODEL,
+            status="ok",
+            duration_seconds=time.perf_counter() - started,
+            usage_by_model=extract_usage_metadata(usage_cb),
+            result_preview=str(response)[:200],
+        )
+    except Exception as exc:
+        record_llm_run(
+            operation="hub_memory_learning_analysis",
+            request_kind="learning_analysis",
+            requested_model=DEFAULT_MODEL,
+            effective_model=DEFAULT_MODEL,
+            status="error",
+            duration_seconds=time.perf_counter() - started,
+            usage_by_model=extract_usage_metadata(usage_cb),
+            error=str(exc),
+        )
+        raise
+
+    return LearningAnalysis(
+        restated_lesson=response.restated_lesson.strip(),
+        action_kind=response.action_kind,
+        suggestion=response.suggestion.strip(),
+        code_change_needed=response.code_change_needed,
+    )
+
+
 def format_learning_list(records: list[LearningRecord]) -> str:
     if not records:
         return "No hub learnings have been stored yet."
@@ -540,8 +659,24 @@ def format_learnings_for_prompt(
     return text
 
 
-def format_learning_confirmation(record: LearningRecord) -> str:
-    return f"Stored learning {record.identifier} from {record.source}: {record.value}"
+def format_learning_confirmation(
+    record: LearningRecord,
+    *,
+    analysis: LearningAnalysis | None = None,
+    analysis_error: str | None = None,
+) -> str:
+    stored = f"Stored learning {record.identifier} from {record.source}: {record.value}"
+    if analysis is not None:
+        return (
+            f"{stored}\n\n"
+            f"Learned: {analysis.restated_lesson}\n"
+            f"Action: {_LEARNING_ACTION_LABELS[analysis.action_kind]}\n"
+            f"Suggestion: {analysis.suggestion}\n"
+            f"Code change: {'Yes' if analysis.code_change_needed else 'No'}"
+        )
+    if analysis_error is not None:
+        return f"{stored}\n\n(Could not analyze this lesson for a recommended action: {analysis_error})"
+    return stored
 
 
 def format_forget_confirmation(identifier: str) -> str:

@@ -5,8 +5,10 @@ from __future__ import annotations
 from langgraph.store.base import PutOp
 
 from agent_hub.hub_memory import (
-    HubMemoryManager,
     _LEGACY_LEARNINGS_NS,
+    HubMemoryManager,
+    LearningAnalysis,
+    format_learning_confirmation,
     format_learning_list,
     format_learnings_for_prompt,
 )
@@ -24,6 +26,50 @@ def test_learn_creates_explicit_learning_record(tmp_path):
     assert record.type == "semantic"
     assert record.scope == "operator"
     assert record.status == "active"
+
+
+def test_format_learning_confirmation_without_analysis_is_unchanged(tmp_path):
+    manager = HubMemoryManager(SqliteStore(tmp_path / "knowledge.sqlite3"))
+    record = manager.learn("Prefer tabs over spaces.", source="cli")
+
+    assert (
+        format_learning_confirmation(record)
+        == f"Stored learning {record.identifier} from cli: Prefer tabs over spaces."
+    )
+
+
+def test_format_learning_confirmation_includes_recommended_action(tmp_path):
+    manager = HubMemoryManager(SqliteStore(tmp_path / "knowledge.sqlite3"))
+    record = manager.learn("Check evidence before claiming it is unavailable.", source="cli")
+    analysis = LearningAnalysis(
+        restated_lesson="Hub should check available evidence before claiming it is unavailable.",
+        action_kind="skill",
+        suggestion="Update the evidence-checking procedure.",
+        code_change_needed=False,
+    )
+
+    result = format_learning_confirmation(record, analysis=analysis)
+
+    assert result == (
+        f"Stored learning {record.identifier} from cli: "
+        "Check evidence before claiming it is unavailable.\n\n"
+        "Learned: Hub should check available evidence before claiming it is unavailable.\n"
+        "Action: A reusable skill should be created or updated.\n"
+        "Suggestion: Update the evidence-checking procedure.\n"
+        "Code change: No"
+    )
+
+
+def test_format_learning_confirmation_reports_analysis_failure_plainly(tmp_path):
+    manager = HubMemoryManager(SqliteStore(tmp_path / "knowledge.sqlite3"))
+    record = manager.learn("Prefer tabs over spaces.", source="cli")
+
+    result = format_learning_confirmation(record, analysis_error="LLM request timed out")
+
+    assert result == (
+        f"Stored learning {record.identifier} from cli: Prefer tabs over spaces.\n\n"
+        "(Could not analyze this lesson for a recommended action: LLM request timed out)"
+    )
 
 
 def test_memory_lists_stored_learnings(tmp_path):

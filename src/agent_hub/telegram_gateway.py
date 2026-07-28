@@ -213,7 +213,7 @@ class TelegramGateway:
             "/hub-status - show the hub startup summary without starting a new "
             "conversation\n"
             "/last - show the most recently finished task\n"
-            "/learn <fact> - store an explicit learning\n"
+            "/learn <fact> - store an explicit learning and get a recommended next action\n"
             "/learn-mode [on|off] - toggle automatic background learning "
             "(off by default; shows status with no argument)\n"
             "/memory - list stored learnings\n"

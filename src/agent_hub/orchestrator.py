@@ -32,6 +32,7 @@ from .factory_bridge import (
 from .hub_memory import (
     ExtractionCandidate,
     HubMemoryManager,
+    analyze_learning,
     extract_semantic_candidates,
     format_forget_confirmation,
     format_learning_confirmation,
@@ -1098,6 +1099,7 @@ class HubOrchestrator:
         model: str = DEFAULT_MODEL,
         *,
         semantic_extractor: Any = None,
+        learning_analyzer: Any = None,
     ) -> None:
         self._model = model
         self._registry = _load_specialists()
@@ -1105,6 +1107,7 @@ class HubOrchestrator:
         self._registry_last_refreshed = _utcnow_iso()
         self._session_id = load_or_create_session_id()
         self._semantic_extractor = semantic_extractor or extract_semantic_candidates
+        self._learning_analyzer = learning_analyzer or analyze_learning
         self._learning_notify: Any = None
         self._learning_watermark: dict[str, Any] = {}
         logger.info(
@@ -1224,8 +1227,19 @@ class HubOrchestrator:
         return format_last_run_status(run)
 
     def learn(self, value: str, *, source: str, category: str | None = None) -> str:
-        record = HubMemoryManager().learn(value, source=source, category=category)
-        return format_learning_confirmation(record)
+        manager = HubMemoryManager()
+        record = manager.learn(value, source=source, category=category)
+        existing_operator = [
+            r
+            for r in manager.list_learnings(types=["semantic"])
+            if r.scope == "operator" and r.status == "active" and r.identifier != record.identifier
+        ]
+        try:
+            analysis = self._learning_analyzer(value, existing_operator)
+        except Exception as exc:
+            logger.warning("Learning analysis failed for %s: %s", record.identifier, exc)
+            return format_learning_confirmation(record, analysis_error=str(exc))
+        return format_learning_confirmation(record, analysis=analysis)
 
     def memory(self) -> str:
         return format_learning_list(HubMemoryManager().list_learnings())

@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from agent_hub.hub_memory import ExtractionCandidate, HubMemoryManager
+from agent_hub.hub_memory import ExtractionCandidate, HubMemoryManager, LearningAnalysis
 from agent_hub.knowledge_store import SqliteStore
 from agent_hub.orchestrator import (
     _SYSTEM_PROMPT,
@@ -731,6 +731,69 @@ def test_invoke_reconciles_added_changed_and_removed_agents(monkeypatch, caplog)
     assert "added: added-agent" in caplog.text
     assert "changed: changed-agent" in caplog.text
     assert "removed: removed-agent" in caplog.text
+
+
+def test_learn_stores_memory_and_returns_recommended_action(monkeypatch):
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _FakeGraph("unused"))
+
+    calls: list[tuple] = []
+
+    def fake_analyzer(value, existing_operator):
+        calls.append((value, tuple(r.value for r in existing_operator)))
+        return LearningAnalysis(
+            restated_lesson="Hub should check evidence before claiming it is unavailable.",
+            action_kind="skill",
+            suggestion="Update the evidence-checking procedure.",
+            code_change_needed=False,
+        )
+
+    orchestrator = HubOrchestrator(learning_analyzer=fake_analyzer)
+    HubMemoryManager().learn("Prefer tabs over spaces.", source="cli")
+
+    reply = orchestrator.learn("Check evidence before claiming it is unavailable.", source="cli")
+
+    assert len(calls) == 1
+    lesson, existing_operator_values = calls[0]
+    assert lesson == "Check evidence before claiming it is unavailable."
+    assert existing_operator_values == ("Prefer tabs over spaces.",)
+
+    records = HubMemoryManager().list_learnings(types=["semantic"])
+    stored = [r for r in records if r.value == "Check evidence before claiming it is unavailable."]
+    assert len(stored) == 1
+    assert stored[0].scope == "operator"
+
+    assert reply == (
+        f"Stored learning {stored[0].identifier} from cli: "
+        "Check evidence before claiming it is unavailable.\n\n"
+        "Learned: Hub should check evidence before claiming it is unavailable.\n"
+        "Action: A reusable skill should be created or updated.\n"
+        "Suggestion: Update the evidence-checking procedure.\n"
+        "Code change: No"
+    )
+
+
+def test_learn_still_stores_memory_when_analysis_fails(monkeypatch, caplog):
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _FakeGraph("unused"))
+
+    def rogue_analyzer(value, existing_operator):
+        raise RuntimeError("LLM request timed out")
+
+    orchestrator = HubOrchestrator(learning_analyzer=rogue_analyzer)
+
+    with caplog.at_level(logging.WARNING):
+        reply = orchestrator.learn("Prefer tabs over spaces.", source="cli")
+
+    records = HubMemoryManager().list_learnings(types=["semantic"])
+    stored = [r for r in records if r.value == "Prefer tabs over spaces."]
+    assert len(stored) == 1
+
+    assert reply == (
+        f"Stored learning {stored[0].identifier} from cli: Prefer tabs over spaces.\n\n"
+        "(Could not analyze this lesson for a recommended action: LLM request timed out)"
+    )
+    assert "Learning analysis failed" in caplog.text
 
 
 def test_provide_decision_with_nothing_pending_returns_friendly_message(monkeypatch):
