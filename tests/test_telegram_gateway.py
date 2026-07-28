@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -754,46 +754,407 @@ def test_learning_notifier_sends_to_last_seen_chat(monkeypatch):
     assert sent[-1] == {"chat_id": 42, "text": "\U0001f9e0 Learned: prefers tabs"}
 
 
-def test_progress_notifier_deduplicates_repeated_non_heartbeat_updates(monkeypatch):
+def _create_active_run(*, agent_id: str = "ai-tech-lead") -> str:
+    store = get_task_run_store()
+    run = store.create_run(session_id="telegram:42", user_message="Do the work")
+    store.transition(run.id, "routed", selected_agent_id=agent_id)
+    store.transition(run.id, "dispatched", selected_agent_id=agent_id)
+    return run.id
+
+
+def test_progress_notifier_keeps_one_live_message_and_edits_meaningful_updates(monkeypatch):
     sent: list[dict] = []
+    edited: list[dict] = []
+    next_message_id = 100
 
     monkeypatch.setattr(
         "agent_hub.telegram_gateway._send_message",
         lambda token, chat_id, text, *, parse_mode="Markdown": sent.append(
             {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
-        ),
+        )
+        or [next_message_id],
+    )
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway._edit_message",
+        lambda token, chat_id, message_id, text, *, parse_mode=None: edited.append(
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": text,
+                "parse_mode": parse_mode,
+            }
+        )
+        or True,
     )
 
     orch = SimpleNamespace(
-        registry=[],
+        registry=[SimpleNamespace(id="ai-tech-lead", name="AI Tech Lead")],
         set_learning_notifier=lambda callback: None,
     )
     gateway = TelegramGateway("token-123", orch)
     now = datetime.now(timezone.utc)
+    run_id = _create_active_run()
 
-    repeated = ProgressUpdate(
-        run_id="run-1",
+    start = ProgressUpdate(
+        run_id=run_id,
+        event_type="start",
+        phase="starting",
+        human_summary="AI Tech Lead started.",
+        occurred_at=now,
+    )
+    first = ProgressUpdate(
+        run_id=run_id,
         event_type="phase",
         phase="editing",
         human_summary="Applying the requested change.",
         occurred_at=now,
         sequence=1,
     )
-    heartbeat = ProgressUpdate(
-        run_id="run-1",
-        event_type="heartbeat",
-        phase="editing",
-        human_summary="Still working: editing.",
-        occurred_at=now,
+    duplicate = ProgressUpdate(
+        run_id=run_id,
+        event_type="phase",
+        phase="reviewing",
+        human_summary="Applying the requested change.",
+        occurred_at=now + timedelta(seconds=20),
+        sequence=2,
     )
 
-    gateway._notify_progress(42, repeated)
-    gateway._notify_progress(42, repeated)
-    gateway._notify_progress(42, heartbeat)
-    gateway._notify_progress(42, heartbeat)
+    gateway._notify_progress(42, start)
+    gateway._notify_progress(42, first)
+    gateway._notify_progress(42, duplicate)
 
     assert sent == [
-        {"chat_id": 42, "text": "Applying the requested change.", "parse_mode": None},
-        {"chat_id": 42, "text": "Still working: editing.", "parse_mode": None},
-        {"chat_id": 42, "text": "Still working: editing.", "parse_mode": None},
+        {
+            "chat_id": 42,
+            "text": "AI Tech Lead is working\n\nElapsed: under 1 minute",
+            "parse_mode": None,
+        }
+    ]
+    assert edited == [
+        {
+            "chat_id": 42,
+            "message_id": 100,
+            "text": "AI Tech Lead is working\n\nApplying the requested change.\n\nElapsed: under 1 minute",
+            "parse_mode": None,
+        }
+    ]
+    run = get_task_run_store().get_run(run_id)
+    assert run is not None
+    assert run.context["telegram_live_chat_id"] == 42
+    assert run.context["telegram_live_message_id"] == 100
+
+
+def test_heartbeat_refresh_edits_elapsed_without_inventing_status_text(monkeypatch):
+    sent: list[dict] = []
+    edited: list[dict] = []
+
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway._send_message",
+        lambda token, chat_id, text, *, parse_mode="Markdown": sent.append(
+            {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
+        )
+        or [200],
+    )
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway._edit_message",
+        lambda token, chat_id, message_id, text, *, parse_mode=None: edited.append(
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": text,
+                "parse_mode": parse_mode,
+            }
+        )
+        or True,
+    )
+
+    orch = SimpleNamespace(
+        registry=[SimpleNamespace(id="ai-tech-lead", name="AI Tech Lead")],
+        set_learning_notifier=lambda callback: None,
+    )
+    gateway = TelegramGateway("token-123", orch)
+    run_id = _create_active_run()
+    now = datetime.now(timezone.utc)
+
+    gateway._notify_progress(
+        42,
+        ProgressUpdate(
+            run_id=run_id,
+            event_type="start",
+            phase="starting",
+            human_summary="AI Tech Lead started.",
+            occurred_at=now,
+        ),
+    )
+    gateway._notify_progress(
+        42,
+        ProgressUpdate(
+            run_id=run_id,
+            event_type="phase",
+            phase="editing",
+            human_summary="Applying the requested change.",
+            occurred_at=now + timedelta(seconds=5),
+            sequence=1,
+        ),
+    )
+    gateway._notify_progress(
+        42,
+        ProgressUpdate(
+            run_id=run_id,
+            event_type="heartbeat",
+            phase="editing",
+            human_summary="Still working: editing.",
+            occurred_at=now + timedelta(seconds=90),
+        ),
+    )
+
+    assert len(sent) == 1
+    assert edited[-1] == {
+        "chat_id": 42,
+        "message_id": 200,
+        "text": "AI Tech Lead is working\n\nApplying the requested change.\n\nElapsed: 1 minute",
+        "parse_mode": None,
+    }
+    assert "Still working" not in edited[-1]["text"]
+
+
+@pytest.mark.parametrize(
+    "reply_text",
+    [
+        "[AI Tech Lead] Clarification needed: Which repo should I change?",
+        "[AI Tech Lead] Approval required: Need permission to apply the patch.\nUse /approve to continue or /reject <reason> to stop.",
+        "[AI Tech Lead] Done.",
+    ],
+)
+def test_progress_and_terminal_operator_messages_stay_separate(monkeypatch, reply_text):
+    sent: list[dict] = []
+    edited: list[dict] = []
+    next_message_id = 300
+
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway._send_message",
+        lambda token, chat_id, text, *, parse_mode="Markdown": sent.append(
+            {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
+        )
+        or [next_message_id + len(sent) - 1],
+    )
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway._edit_message",
+        lambda token, chat_id, message_id, text, *, parse_mode=None: edited.append(
+            {"chat_id": chat_id, "message_id": message_id, "text": text}
+        )
+        or True,
+    )
+
+    now = datetime.now(timezone.utc)
+
+    def _invoke(message, *, progress_notify=None):
+        run_id = _create_active_run()
+        assert progress_notify is not None
+        progress_notify(
+            ProgressUpdate(
+                run_id=run_id,
+                event_type="start",
+                phase="starting",
+                human_summary="AI Tech Lead started.",
+                occurred_at=now,
+            )
+        )
+        progress_notify(
+            ProgressUpdate(
+                run_id=run_id,
+                event_type="phase",
+                phase="editing",
+                human_summary="Applying the requested change.",
+                occurred_at=now + timedelta(seconds=10),
+                sequence=1,
+            )
+        )
+        return reply_text
+
+    orch = SimpleNamespace(
+        pending_run=lambda: None,
+        invoke=_invoke,
+        registry=[SimpleNamespace(id="ai-tech-lead", name="AI Tech Lead")],
+        set_learning_notifier=lambda callback: None,
+    )
+    gateway = TelegramGateway("token-123", orch)
+
+    gateway._process_user_message(42, "Ship it")
+
+    assert sent[0]["text"] == "AI Tech Lead is working\n\nElapsed: under 1 minute"
+    assert edited == [
+        {
+            "chat_id": 42,
+            "message_id": 300,
+            "text": "AI Tech Lead is working\n\nApplying the requested change.\n\nElapsed: under 1 minute",
+        }
+    ]
+    assert sent[-1]["text"] == reply_text
+    assert len(sent) == 2
+
+
+def test_failure_sends_only_one_final_failure_message(monkeypatch):
+    sent: list[dict] = []
+    edited: list[dict] = []
+    next_message_id = 400
+
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway._send_message",
+        lambda token, chat_id, text, *, parse_mode="Markdown": sent.append(
+            {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
+        )
+        or [next_message_id + len(sent) - 1],
+    )
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway._edit_message",
+        lambda token, chat_id, message_id, text, *, parse_mode=None: edited.append(
+            {"chat_id": chat_id, "message_id": message_id, "text": text}
+        )
+        or True,
+    )
+
+    now = datetime.now(timezone.utc)
+
+    def _invoke(message, *, progress_notify=None):
+        run_id = _create_active_run()
+        assert progress_notify is not None
+        progress_notify(
+            ProgressUpdate(
+                run_id=run_id,
+                event_type="start",
+                phase="starting",
+                human_summary="AI Tech Lead started.",
+                occurred_at=now,
+            )
+        )
+        progress_notify(
+            ProgressUpdate(
+                run_id=run_id,
+                event_type="phase",
+                phase="editing",
+                human_summary="Applying the requested change.",
+                occurred_at=now + timedelta(seconds=5),
+                sequence=1,
+            )
+        )
+        progress_notify(
+            ProgressUpdate(
+                run_id=run_id,
+                event_type="failure",
+                phase="editing",
+                human_summary="Agent failed.",
+                occurred_at=now + timedelta(seconds=6),
+                sequence=2,
+            )
+        )
+        return "[AI Tech Lead] Failed: Patch conflicted. Resolve the conflict and retry."
+
+    orch = SimpleNamespace(
+        pending_run=lambda: None,
+        invoke=_invoke,
+        registry=[SimpleNamespace(id="ai-tech-lead", name="AI Tech Lead")],
+        set_learning_notifier=lambda callback: None,
+    )
+    gateway = TelegramGateway("token-123", orch)
+
+    gateway._process_user_message(42, "Ship it")
+
+    assert len(sent) == 2
+    assert edited == [
+        {
+            "chat_id": 42,
+            "message_id": 400,
+            "text": "AI Tech Lead is working\n\nApplying the requested change.\n\nElapsed: under 1 minute",
+        }
+    ]
+    assert [item["text"] for item in sent].count(
+        "[AI Tech Lead] Failed: Patch conflicted. Resolve the conflict and retry."
+    ) == 1
+
+
+def test_concurrent_runs_keep_separate_live_message_ids(monkeypatch):
+    sent: list[dict] = []
+    edited: list[dict] = []
+    next_message_id = 500
+
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway._send_message",
+        lambda token, chat_id, text, *, parse_mode="Markdown": sent.append(
+            {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
+        )
+        or [next_message_id + len(sent) - 1],
+    )
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway._edit_message",
+        lambda token, chat_id, message_id, text, *, parse_mode=None: edited.append(
+            {"chat_id": chat_id, "message_id": message_id, "text": text}
+        )
+        or True,
+    )
+
+    orch = SimpleNamespace(
+        registry=[SimpleNamespace(id="ai-tech-lead", name="AI Tech Lead")],
+        set_learning_notifier=lambda callback: None,
+    )
+    gateway = TelegramGateway("token-123", orch)
+    now = datetime.now(timezone.utc)
+    run_a = _create_active_run()
+    run_b = _create_active_run()
+
+    gateway._notify_progress(
+        42,
+        ProgressUpdate(
+            run_id=run_a,
+            event_type="start",
+            phase="starting",
+            human_summary="AI Tech Lead started.",
+            occurred_at=now,
+        ),
+    )
+    gateway._notify_progress(
+        77,
+        ProgressUpdate(
+            run_id=run_b,
+            event_type="start",
+            phase="starting",
+            human_summary="AI Tech Lead started.",
+            occurred_at=now,
+        ),
+    )
+    gateway._notify_progress(
+        42,
+        ProgressUpdate(
+            run_id=run_a,
+            event_type="phase",
+            phase="editing",
+            human_summary="Applying change A.",
+            occurred_at=now + timedelta(seconds=10),
+            sequence=1,
+        ),
+    )
+    gateway._notify_progress(
+        77,
+        ProgressUpdate(
+            run_id=run_b,
+            event_type="phase",
+            phase="editing",
+            human_summary="Applying change B.",
+            occurred_at=now + timedelta(seconds=10),
+            sequence=1,
+        ),
+    )
+
+    assert [item["chat_id"] for item in sent] == [42, 77]
+    assert edited == [
+        {
+            "chat_id": 42,
+            "message_id": 500,
+            "text": "AI Tech Lead is working\n\nApplying change A.\n\nElapsed: under 1 minute",
+        },
+        {
+            "chat_id": 77,
+            "message_id": 501,
+            "text": "AI Tech Lead is working\n\nApplying change B.\n\nElapsed: under 1 minute",
+        },
     ]

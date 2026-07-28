@@ -8,6 +8,8 @@ import signal
 import threading
 import time
 from collections import deque
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -16,6 +18,7 @@ from .log_config import get_human_logger
 from .orchestrator import HubOrchestrator, cancel_all_active_tasks
 from .progress_events import ProgressUpdate
 from .task_control import TaskCancelled
+from .task_runs import get_task_run_store
 
 logger = logging.getLogger(__name__)
 human_logger = get_human_logger()
@@ -26,6 +29,16 @@ _API_BASE = os.getenv("TELEGRAM_API_BASE", "https://api.telegram.org")
 # as stale backlog and skipped. Anything newer (e.g. a message sent right as Hub was
 # restarting) is processed normally instead of silently dropped.
 _STARTUP_STALE_SECONDS = 60.0
+_LIVE_PROGRESS_REFRESH_SECONDS = 75.0
+
+
+@dataclass
+class _LiveProgressMessage:
+    chat_id: int
+    message_id: int | None
+    summary: str | None
+    rendered_text: str
+    last_rendered_at: datetime
 
 
 def _raise_keyboard_interrupt(signum: int, frame: Any) -> None:
@@ -65,17 +78,57 @@ def _send_message(
     text: str,
     *,
     parse_mode: str | None = "Markdown",
-) -> None:
+) -> list[int]:
+    sent_ids: list[int] = []
     try:
         chunks = [text[i : i + 4096] for i in range(0, len(text), 4096)]
         for chunk in chunks:
             payload: dict[str, Any] = {"chat_id": chat_id, "text": chunk}
             if parse_mode is not None:
                 payload["parse_mode"] = parse_mode
-            _api(token, "sendMessage", **payload)
+            result = _api(token, "sendMessage", **payload).get("result", {})
+            message_id = result.get("message_id")
+            if isinstance(message_id, int):
+                sent_ids.append(message_id)
         human_logger.info("Telegram reply to chat %d: %s", chat_id, _truncate(text))
     except Exception as exc:
         logger.error("sendMessage failed: %s", exc)
+    return sent_ids
+
+
+def _edit_message(
+    token: str,
+    chat_id: int,
+    message_id: int,
+    text: str,
+    *,
+    parse_mode: str | None = None,
+) -> bool:
+    payload: dict[str, Any] = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text,
+    }
+    if parse_mode is not None:
+        payload["parse_mode"] = parse_mode
+    try:
+        _api(token, "editMessageText", **payload)
+        human_logger.info(
+            "Telegram status edit in chat %d (message %d): %s",
+            chat_id,
+            message_id,
+            _truncate(text),
+        )
+        return True
+    except httpx.HTTPStatusError as exc:
+        response_text = exc.response.text if exc.response is not None else ""
+        if "message is not modified" in response_text:
+            return False
+        logger.error("editMessageText failed: %s", exc)
+        return False
+    except Exception as exc:
+        logger.error("editMessageText failed: %s", exc)
+        return False
 
 
 def _allowed_chat_ids() -> set[int]:
@@ -101,7 +154,7 @@ class TelegramGateway:
         self._recent_update_ids: deque[int] = deque(maxlen=256)
         self._recent_message_keys: deque[tuple[int, int]] = deque(maxlen=256)
         self._progress_lock = threading.Lock()
-        self._progress_last_sent: dict[str, tuple[str, str]] = {}
+        self._live_progress_messages: dict[str, _LiveProgressMessage] = {}
         self._orch.set_learning_notifier(self._notify_learning)
 
     def _notify_learning(self, message: str) -> None:
@@ -198,14 +251,14 @@ class TelegramGateway:
         if text == "/new":
             self._orch.new_session()
             with self._progress_lock:
-                self._progress_last_sent.clear()
+                self._live_progress_messages.clear()
             _send_message(self._token, chat_id, "Started a fresh conversation.")
             return
 
         if text == "/reset":
             reply = self._orch.reset_session()
             with self._progress_lock:
-                self._progress_last_sent.clear()
+                self._live_progress_messages.clear()
             _send_message(self._token, chat_id, reply, parse_mode=None)
             return
 
@@ -422,12 +475,63 @@ class TelegramGateway:
         _send_message(self._token, chat_id, reply)
 
     def _notify_progress(self, chat_id: int, update: ProgressUpdate) -> None:
-        key = (update.event_type, update.human_summary)
+        run = get_task_run_store().get_run(update.run_id)
+        if run is None:
+            return
+
+        summary = self._meaningful_specialist_summary(run, update)
+        rendered_at = update.occurred_at.astimezone(timezone.utc)
+
         with self._progress_lock:
-            if update.event_type != "heartbeat" and self._progress_last_sent.get(update.run_id) == key:
+            current = self._live_progress_messages.get(update.run_id)
+            if current is None:
+                text = self._render_live_progress(run, summary, rendered_at=rendered_at)
+                sent_ids = _send_message(self._token, chat_id, text, parse_mode=None)
+                message_id = sent_ids[-1] if sent_ids else None
+                self._live_progress_messages[update.run_id] = _LiveProgressMessage(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    summary=summary,
+                    rendered_text=text,
+                    last_rendered_at=rendered_at,
+                )
+                if message_id is not None:
+                    get_task_run_store().update_context(
+                        update.run_id,
+                        telegram_live_chat_id=chat_id,
+                        telegram_live_message_id=message_id,
+                    )
                 return
-            self._progress_last_sent[update.run_id] = key
-        _send_message(self._token, chat_id, update.human_summary, parse_mode=None)
+
+            refresh_due = (
+                rendered_at - current.last_rendered_at
+            ).total_seconds() >= _LIVE_PROGRESS_REFRESH_SECONDS
+            next_summary = current.summary
+            if summary is not None and summary != current.summary:
+                next_summary = summary
+            elif not refresh_due:
+                return
+
+            text = self._render_live_progress(run, next_summary, rendered_at=rendered_at)
+            if text == current.rendered_text:
+                return
+            if current.message_id is None:
+                return
+            if not _edit_message(
+                self._token,
+                current.chat_id,
+                current.message_id,
+                text,
+                parse_mode=None,
+            ):
+                return
+            self._live_progress_messages[update.run_id] = _LiveProgressMessage(
+                chat_id=current.chat_id,
+                message_id=current.message_id,
+                summary=next_summary,
+                rendered_text=text,
+                last_rendered_at=rendered_at,
+            )
 
     def _handle_update(self, update: dict) -> None:
         if self._is_duplicate_update(update):
@@ -472,6 +576,68 @@ class TelegramGateway:
                 ", ".join(run_id[:8] for run_id in cancelled),
             )
         human_logger.info("Hub Telegram gateway stopped by user (Ctrl-C).")
+
+    def _meaningful_specialist_summary(self, run: Any, update: ProgressUpdate) -> str | None:
+        if update.event_type in {"heartbeat", "start", "failure"}:
+            return None
+        summary = " ".join(update.human_summary.split())
+        if not summary:
+            return None
+        agent_name = self._agent_display_name(run).lower()
+        phase = " ".join((update.phase or "").split()).strip(" .:").lower()
+        normalized = summary.strip(" .:").lower()
+        if normalized in {"in progress", "processing", "running", "working"}:
+            return None
+        if normalized.startswith("still working"):
+            return None
+        if normalized == f"{agent_name} is still working":
+            return None
+        if phase and normalized == phase:
+            return None
+        return summary
+
+    def _render_live_progress(
+        self,
+        run: Any,
+        summary: str | None,
+        *,
+        rendered_at: datetime,
+    ) -> str:
+        lines = [f"{self._agent_display_name(run)} is working", ""]
+        if summary:
+            lines.extend([summary, ""])
+        elapsed = rendered_at - run.created_at.astimezone(timezone.utc)
+        if elapsed.total_seconds() < 0:
+            elapsed = timedelta(0)
+        lines.append(f"Elapsed: {self._format_elapsed(elapsed.total_seconds())}")
+        return "\n".join(lines)
+
+    def _agent_display_name(self, run: Any) -> str:
+        pinned = run.context.get("pinned_agent_spec")
+        if isinstance(pinned, dict):
+            name = pinned.get("name")
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+        agent_id = run.selected_agent_id
+        if isinstance(agent_id, str) and agent_id:
+            for spec in self._orch.registry:
+                if spec.id == agent_id and spec.name.strip():
+                    return spec.name.strip()
+            return agent_id
+        return "Specialist"
+
+    @staticmethod
+    def _format_elapsed(total_seconds: float) -> str:
+        seconds = max(0, int(total_seconds))
+        minutes, _ = divmod(seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours and minutes:
+            return f"{hours} hour{'s' if hours != 1 else ''} {minutes} minute{'s' if minutes != 1 else ''}"
+        if hours:
+            return f"{hours} hour{'s' if hours != 1 else ''}"
+        if minutes < 1:
+            return "under 1 minute"
+        return f"{minutes} minute{'s' if minutes != 1 else ''}"
 
 
 def run_telegram(token: str | None = None) -> None:
