@@ -853,6 +853,14 @@ def test_learn_creates_new_skill_via_governed_skill_store(monkeypatch, tmp_path)
     assert "Validation: Passed — active (version 1)" in reply
     assert "Approval required: No" in reply
 
+    stored_memory = next(
+        r
+        for r in HubMemoryManager().list_learnings()
+        if r.value == "Check evidence before claiming it is unavailable."
+    )
+    assert skill.memory_id == stored_memory.identifier
+    assert skill.source == "cli"
+
 
 def test_learn_updates_existing_skill_reusing_relevant_skill_slug(monkeypatch, tmp_path):
     skill_store = HubSkillStore()
@@ -884,6 +892,13 @@ def test_learn_updates_existing_skill_reusing_relevant_skill_slug(monkeypatch, t
     skill = skill_store.get_active_skill("evidence-checking")
     assert skill.version == 2
     assert "Destination/action: Skill — Updated skill to version 2." in reply
+
+    stored_memory = next(
+        r
+        for r in HubMemoryManager().list_learnings()
+        if r.value == "Check evidence first, then ask for more if inconclusive."
+    )
+    assert skill.memory_id == stored_memory.identifier
 
 
 def test_learn_reports_skill_proposal_rejection_without_claiming_success(monkeypatch, tmp_path):

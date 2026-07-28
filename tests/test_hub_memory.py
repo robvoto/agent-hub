@@ -98,7 +98,8 @@ def test_format_learning_confirmation_for_created_skill(tmp_path):
         body="Always check available evidence before claiming it is unavailable.",
         version=1,
         status="active",
-        source=f"learn:{record.identifier}",
+        source="cli",
+        memory_id=record.identifier,
         created_at=datetime.now(timezone.utc),
     )
     skill_result = SkillProposalResult(accepted=True, skill=skill, reason="Created new skill.")

@@ -1261,7 +1261,8 @@ class HubOrchestrator:
                     decision.skill_slug,
                     decision.skill_title,
                     decision.skill_body,
-                    source=f"learn:{record.identifier}",
+                    source=source,
+                    memory_id=record.identifier,
                 )
             else:
                 skill_result = SkillProposalResult(

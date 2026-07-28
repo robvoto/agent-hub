@@ -13,7 +13,8 @@ def test_propose_new_skill_creates_active_version_one(tmp_path):
         "evidence-checking",
         "Evidence checking procedure",
         "Always check available evidence before claiming it is unavailable.",
-        source="learn:mem-abc123",
+        source="cli",
+        memory_id="mem-abc123",
     )
 
     assert result.accepted is True
@@ -22,13 +23,18 @@ def test_propose_new_skill_creates_active_version_one(tmp_path):
     assert result.skill.version == 1
     assert result.skill.status == "active"
     assert result.skill.supersedes is None
-    assert result.skill.source == "learn:mem-abc123"
+    assert result.skill.source == "cli"
+    assert result.skill.memory_id == "mem-abc123"
 
 
 def test_propose_update_to_existing_slug_supersedes_old_version(tmp_path):
     store = HubSkillStore(SqliteStore(tmp_path / "knowledge.sqlite3"))
     first = store.propose_skill(
-        "evidence-checking", "Evidence checking procedure", "Check evidence first.", source="cli"
+        "evidence-checking",
+        "Evidence checking procedure",
+        "Check evidence first.",
+        source="cli",
+        memory_id="mem-first",
     )
 
     result = store.propose_skill(
@@ -36,12 +42,14 @@ def test_propose_update_to_existing_slug_supersedes_old_version(tmp_path):
         "Evidence checking procedure",
         "Check evidence first, then ask for more if inconclusive.",
         source="cli",
+        memory_id="mem-second",
     )
 
     assert result.accepted is True
     assert result.skill.version == 2
     assert result.skill.status == "active"
     assert result.skill.supersedes == first.skill.identifier
+    assert result.skill.memory_id == "mem-second"
 
     active = store.get_active_skill("evidence-checking")
     assert active.identifier == result.skill.identifier
@@ -50,6 +58,7 @@ def test_propose_update_to_existing_slug_supersedes_old_version(tmp_path):
     all_skills = store._all_skills()
     old = next(s for s in all_skills if s.identifier == first.skill.identifier)
     assert old.status == "superseded"
+    assert old.memory_id == "mem-first"
 
 
 def test_propose_rejects_duplicate_title_under_different_slug(tmp_path):

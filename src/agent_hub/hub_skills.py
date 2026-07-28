@@ -44,6 +44,7 @@ class HubSkill:
     source: str
     created_at: datetime
     supersedes: str | None = None
+    memory_id: str | None = None
     evidence: tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -66,6 +67,7 @@ def _item_to_skill(item: object) -> HubSkill:
         source=str(value.get("source", "unknown")),
         created_at=item.created_at,
         supersedes=value.get("supersedes"),
+        memory_id=value.get("memory_id"),
         evidence=tuple(value.get("evidence", []) or []),
     )
 
@@ -81,6 +83,7 @@ class HubSkillStore:
         body: str,
         *,
         source: str,
+        memory_id: str | None = None,
         evidence: Iterable[str] = (),
     ) -> SkillProposalResult:
         """Create a new skill, or a new version of an existing one at `slug`.
@@ -88,6 +91,11 @@ class HubSkillStore:
         Validates first — nothing is written on rejection. A different slug whose
         title exactly matches (case-insensitively) an already-active skill is
         rejected as a likely duplicate rather than silently creating a near-twin.
+
+        memory_id, when given, is the identifier of the authoritative memory
+        record (see hub_memory.LearningRecord) that this skill version came from
+        — stored on the version itself so every skill version stays traceable
+        back to the specific /learn call that produced it.
         """
         error = self._validate(slug, title, body)
         if error is not None:
@@ -113,6 +121,7 @@ class HubSkillStore:
                 version=1,
                 source=source,
                 supersedes=None,
+                memory_id=memory_id,
                 evidence=evidence,
             )
             return SkillProposalResult(
@@ -126,6 +135,7 @@ class HubSkillStore:
             version=current.version + 1,
             source=source,
             supersedes=current.identifier,
+            memory_id=memory_id,
             evidence=evidence,
         )
         self._set_status(current.identifier, "superseded")
@@ -208,6 +218,7 @@ class HubSkillStore:
         version: int,
         source: str,
         supersedes: str | None,
+        memory_id: str | None,
         evidence: Iterable[str],
     ) -> HubSkill:
         identifier = f"skill-{uuid4().hex[:8]}"
@@ -219,6 +230,7 @@ class HubSkillStore:
             "status": "active",
             "source": source,
             "supersedes": supersedes,
+            "memory_id": memory_id,
             "evidence": list(evidence),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
