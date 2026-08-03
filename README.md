@@ -1,37 +1,67 @@
 # Agent Hub
 
-Main orchestrator, runtime, and control plane for the local agent platform.
+Agent Hub is the local control plane for a multi-agent delivery platform. It receives work from human-facing channels, resolves project context, applies approval boundaries, and routes bounded tasks to registered specialist agents.
 
-Agent Hub is the entry point for operator interaction. It receives work from CLI or Telegram, manages runtime orchestration, and routes tasks to specialist agents.
-
-## Repo role
-
-| Repo | Responsibility |
-|------|----------------|
-| `agent-hub` | Runs and controls agent work |
-| `agent-factory` | Creates, configures, and stages agents |
-| `ai-tech-lead` | Specialist coding/technical-lead agent |
-
-Agent Hub does not create or stage agents. That belongs to Agent Factory.
-
-## Canonical runtime path
-
-Run this repo from WSL:
+## Platform role
 
 ```text
-~/projects/agent-hub
+Human / CLI / Telegram
+          │
+          ▼
+      Agent Hub
+          │
+          ├── Agent Factory
+          │     Creates and stages agent packages
+          │
+          └── AI Tech Lead
+                Plans and coordinates bounded coding work
 ```
 
-Do not use `E:\Programming` as the canonical runtime path.
+Agent Hub is the operator entry point. It does not own specialist implementation logic and it does not create agents directly.
+
+## Responsibilities
+
+- accept and classify incoming work;
+- resolve the selected project and pin that context to the task;
+- route work through registered agent contracts;
+- preserve approval, clarification, and resume state;
+- record execution outcomes and operational events;
+- prevent a task from silently switching projects during execution;
+- provide a consistent CLI and Telegram-facing control surface.
+
+## Repository boundaries
+
+| Repository | Responsibility |
+|---|---|
+| `agent-hub` | Orchestration, routing, task state, approvals, and operator interaction |
+| `agent-factory` | Agent package creation, validation, staging, approval, and promotion |
+| `ai-tech-lead-agent` | Technical planning and bounded coding-agent coordination |
+
+Changes that belong to a specialist should remain in that specialist repository rather than being duplicated in Agent Hub.
+
+## Architecture principles
+
+- **Pinned project context** — a task keeps the project identity it started with.
+- **Explicit contracts** — specialists are invoked through versioned machine-readable boundaries.
+- **Human approval** — risky or consequential actions pause instead of proceeding silently.
+- **Resumable work** — clarification and approval interruptions preserve enough state to continue safely.
+- **Observable execution** — outcomes, failures, approvals, and rework should be inspectable.
+- **Local-first operation** — credentials, runtime state, and project files remain under operator control.
 
 ## Documentation
 
-Start with `docs/INDEX.md`. It is the single documentation entry point.
+Start with [`docs/INDEX.md`](docs/INDEX.md). It is the canonical documentation entry point for architecture, runtime, commands, contracts, and operational guidance.
 
-## Backlog
+The active backlog is maintained outside the repository as an operational source of truth. Repository documentation should describe product behaviour and architecture rather than duplicate mutable backlog rows.
 
-The live backlog and single source of truth for Agent Hub is the Google Sheet:
+## Development status
 
-https://docs.google.com/spreadsheets/d/1v1zJjwGTqhOgb06nYChaGjRNZIVXQht5pNBUbh9r7RA/edit?gid=32071178#gid=32071178
+Active private project. Interfaces between Agent Hub, Agent Factory, and AI Tech Lead are still evolving and should be treated as explicit contracts rather than inferred from implementation details.
 
-Do not create duplicate local backlog files unless explicitly requested.
+## Security
+
+See [`SECURITY.md`](SECURITY.md) for secrets, Telegram, subprocess, project-path, and log-handling boundaries.
+
+## Licence
+
+This private repository does not grant an open-source licence. A licence should be selected deliberately before any public source release.
