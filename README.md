@@ -52,7 +52,11 @@ Changes that belong to a specialist should remain in that specialist repository 
 
 Start with [`docs/INDEX.md`](docs/INDEX.md). It is the canonical documentation entry point for architecture, runtime, commands, contracts, and operational guidance.
 
-The active backlog is maintained outside the repository as an operational source of truth. Repository documentation should describe product behaviour and architecture rather than duplicate mutable backlog rows.
+## Backlog
+
+The live backlog and single source of truth for Agent Hub is the [Agent Hub Google Sheet](https://docs.google.com/spreadsheets/d/1v1zJjwGTqhOgb06nYChaGjRNZIVXQht5pNBUbh9r7RA/edit?gid=32071178#gid=32071178).
+
+Do not create duplicate local backlog files unless explicitly requested. Repository documentation should describe product behaviour and architecture rather than duplicate mutable backlog rows.
 
 ## Development status
 
