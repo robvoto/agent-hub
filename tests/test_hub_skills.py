@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from langgraph.store.base import PutOp
+
 from agent_hub.hub_skills import HubSkillStore
 from agent_hub.knowledge_store import SqliteStore
 
@@ -59,6 +61,36 @@ def test_propose_update_to_existing_slug_supersedes_old_version(tmp_path):
     old = next(s for s in all_skills if s.identifier == first.skill.identifier)
     assert old.status == "superseded"
     assert old.memory_id == "mem-first"
+
+
+def test_update_switches_versions_in_one_atomic_batch(tmp_path):
+    sqlite_store = SqliteStore(tmp_path / "knowledge.sqlite3")
+    store = HubSkillStore(sqlite_store)
+    store.propose_skill(
+        "evidence-checking", "Evidence checking", "v1 body.", source="cli"
+    )
+    recorded_batches = []
+    original_batch = sqlite_store.batch
+
+    def recording_batch(ops):
+        operations = list(ops)
+        recorded_batches.append(operations)
+        return original_batch(operations)
+
+    sqlite_store.batch = recording_batch
+
+    store.propose_skill(
+        "evidence-checking", "Evidence checking", "v2 body.", source="cli"
+    )
+
+    transitions = [
+        batch
+        for batch in recorded_batches
+        if len(batch) == 2 and all(isinstance(op, PutOp) for op in batch)
+    ]
+    assert len(transitions) == 1
+    statuses = {op.value["status"] for op in transitions[0]}
+    assert statuses == {"active", "superseded"}
 
 
 def test_propose_rejects_duplicate_title_under_different_slug(tmp_path):
@@ -142,6 +174,37 @@ def test_rollback_reactivates_previous_version(tmp_path):
 
     active = store.get_active_skill("evidence-checking")
     assert active.version == 1
+
+
+def test_rollback_switches_versions_in_one_atomic_batch(tmp_path):
+    sqlite_store = SqliteStore(tmp_path / "knowledge.sqlite3")
+    store = HubSkillStore(sqlite_store)
+    store.propose_skill(
+        "evidence-checking", "Evidence checking", "v1 body.", source="cli"
+    )
+    store.propose_skill(
+        "evidence-checking", "Evidence checking", "v2 body.", source="cli"
+    )
+    recorded_batches = []
+    original_batch = sqlite_store.batch
+
+    def recording_batch(ops):
+        operations = list(ops)
+        recorded_batches.append(operations)
+        return original_batch(operations)
+
+    sqlite_store.batch = recording_batch
+
+    store.rollback_skill("evidence-checking")
+
+    transitions = [
+        batch
+        for batch in recorded_batches
+        if len(batch) == 2 and all(isinstance(op, PutOp) for op in batch)
+    ]
+    assert len(transitions) == 1
+    statuses = {op.value["status"] for op in transitions[0]}
+    assert statuses == {"active", "disabled"}
 
 
 def test_rollback_with_no_prior_version_returns_none(tmp_path):

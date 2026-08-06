@@ -128,17 +128,14 @@ class HubSkillStore:
                 accepted=True, skill=new_skill, reason="Created new skill."
             )
 
-        new_skill = self._write_skill(
-            slug=slug,
+        new_skill = self._replace_active_skill(
+            current=current,
             title=title,
             body=body,
-            version=current.version + 1,
             source=source,
-            supersedes=current.identifier,
             memory_id=memory_id,
             evidence=evidence,
         )
-        self._set_status(current.identifier, "superseded")
         return SkillProposalResult(
             accepted=True,
             skill=new_skill,
@@ -160,8 +157,29 @@ class HubSkillStore:
         if previous.status != "superseded":
             return None
 
-        self._set_status(current.identifier, "disabled")
-        self._set_status(previous.identifier, "active")
+        current_value = dict(
+            self._store.batch(
+                [GetOp(namespace=_SKILLS_NAMESPACE, key=current.identifier)]
+            )[0].value
+            or {}
+        )
+        previous_value = dict(previous_item.value or {})
+        current_value["status"] = "disabled"
+        previous_value["status"] = "active"
+        self._store.batch(
+            [
+                PutOp(
+                    namespace=_SKILLS_NAMESPACE,
+                    key=current.identifier,
+                    value=current_value,
+                ),
+                PutOp(
+                    namespace=_SKILLS_NAMESPACE,
+                    key=previous.identifier,
+                    value=previous_value,
+                ),
+            ]
+        )
         return self.get_active_skill(slug)
 
     def disable_skill(self, slug: str) -> bool:
@@ -208,6 +226,56 @@ class HubSkillStore:
             if skill.slug != exclude_slug and skill.title.strip().lower() == normalized:
                 return skill
         return None
+
+    def _replace_active_skill(
+        self,
+        *,
+        current: HubSkill,
+        title: str,
+        body: str,
+        source: str,
+        memory_id: str | None,
+        evidence: Iterable[str],
+    ) -> HubSkill:
+        """Create the next version and supersede the current one atomically."""
+        current_item = self._store.batch(
+            [GetOp(namespace=_SKILLS_NAMESPACE, key=current.identifier)]
+        )[0]
+        if current_item is None:
+            raise RuntimeError(f"Active skill '{current.slug}' disappeared during update.")
+
+        identifier = f"skill-{uuid4().hex[:8]}"
+        payload = {
+            "slug": current.slug,
+            "title": title.strip(),
+            "body": " ".join(body.split()),
+            "version": current.version + 1,
+            "status": "active",
+            "source": source,
+            "supersedes": current.identifier,
+            "memory_id": memory_id,
+            "evidence": list(evidence),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        current_value = dict(current_item.value or {})
+        current_value["status"] = "superseded"
+
+        self._store.batch(
+            [
+                PutOp(namespace=_SKILLS_NAMESPACE, key=identifier, value=payload),
+                PutOp(
+                    namespace=_SKILLS_NAMESPACE,
+                    key=current.identifier,
+                    value=current_value,
+                ),
+            ]
+        )
+        item = self._store.batch(
+            [GetOp(namespace=_SKILLS_NAMESPACE, key=identifier)]
+        )[0]
+        if item is None:
+            raise RuntimeError(f"Skill '{current.slug}' update was not persisted.")
+        return _item_to_skill(item)
 
     def _write_skill(
         self,
