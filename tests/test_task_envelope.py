@@ -50,3 +50,17 @@ def test_project_root_alone_omits_enrichment_fields():
     assert "project_id" not in envelope
     assert "project_contract_version" not in envelope
     assert "project_fingerprint" not in envelope
+
+
+def test_governed_skills_are_included_only_when_selected():
+    skills = [
+        {
+            "slug": "evidence-checking",
+            "version": 2,
+            "title": "Evidence checking",
+            "content": "Check evidence first.",
+        }
+    ]
+
+    assert _base_envelope(governed_skills=skills)["governed_skills"] == skills
+    assert "governed_skills" not in _base_envelope(governed_skills=[])

@@ -92,12 +92,22 @@ def test_factory_bridge_streams_progress_and_preserves_final_result(monkeypatch)
             working_directory="/tmp/agent-factory",
             request="Create an agent",
             thread_id="hub-factory-thread-1",
+            governed_skills=[
+                {
+                    "slug": "agent-design",
+                    "version": 1,
+                    "title": "Agent design",
+                    "content": "Prefer bounded workflows.",
+                }
+            ],
         )
 
     assert result == {"response": "Factory result", "interrupted": False}
     assert captured_payload["run_id"] == run.id
     assert captured_payload["request_id"]
     assert captured_payload["action"] == "invoke"
+    assert captured_payload["governed_skills"][0]["slug"] == "agent-design"
+    assert captured_payload["governed_skills"][0]["version"] == 1
 
     persisted = store.list_progress_events(run.id)
     accepted = [event for event in persisted if event.validation_status == "accepted"]

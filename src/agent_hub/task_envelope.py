@@ -32,6 +32,7 @@ def build_task_envelope(
     approval_token: str | None = None,
     resume: Any | None = None,
     decision: dict[str, Any] | None = None,
+    governed_skills: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build the JSON payload written to a subprocess specialist's input file.
 
@@ -94,4 +95,6 @@ def build_task_envelope(
         envelope["resume"] = resume
     if decision is not None:
         envelope["decision"] = decision
+    if governed_skills:
+        envelope["governed_skills"] = list(governed_skills)
     return envelope

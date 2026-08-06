@@ -423,6 +423,28 @@ envelope for. Not a specialist's declaration — Hub's own side of the
 negotiation in `_resolve_project_context_schema_version`."""
 
 
+def _select_governed_skills(task: str) -> list[dict[str, Any]]:
+    """Return bounded active Hub skills relevant to a specialist dispatch."""
+    skills = HubSkillStore().select_for_dispatch(task)
+    return [
+        {
+            "slug": skill.slug,
+            "version": skill.version,
+            "title": skill.title,
+            "content": skill.body,
+        }
+        for skill in skills
+    ]
+
+
+def _governed_skill_metadata(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Persist only stable skill identity, not duplicated instruction content."""
+    return [
+        {"slug": skill["slug"], "version": skill["version"]}
+        for skill in skills
+    ]
+
+
 class ProjectContextVersionError(ValueError):
     """A specialist declared `project_context_contract` but Hub shares no
     schema_version with it — dispatch must stop rather than guess one."""
@@ -552,6 +574,15 @@ def _dispatch_subprocess(
     envelope_project_fingerprint = (
         project_context.fingerprint if (project_root and project_context) else None
     )
+    governed_skills = _select_governed_skills(task)
+    if governed_skills:
+        _human_task_log(
+            task_run_id,
+            "Applying governed Hub skills: %s",
+            ", ".join(
+                f"{skill['slug']}@v{skill['version']}" for skill in governed_skills
+            ),
+        )
 
     if task_run_id:
         get_task_run_store().transition(
@@ -568,6 +599,7 @@ def _dispatch_subprocess(
                 "agent_dispatch_project_id": envelope_project_id,
                 "agent_dispatch_project_contract_version": envelope_project_contract_version,
                 "agent_dispatch_project_fingerprint": envelope_project_fingerprint,
+                "governed_skills": _governed_skill_metadata(governed_skills),
                 "pinned_agent_spec": dataclasses.asdict(spec),
                 "pinned_agent_version": spec.version,
                 "pinned_agent_fingerprint": spec_fingerprint(spec),
@@ -623,6 +655,7 @@ def _dispatch_subprocess(
             approval_token=approval_token,
             resume=resume,
             decision=decision,
+            governed_skills=governed_skills,
         )
         input_file.write_text(json.dumps(input_data, indent=2), encoding="utf-8")
 
@@ -727,6 +760,15 @@ def _dispatch_factory_brain(
     working_directory = runtime["working_directory"]
     resolved_thread_id = thread_id or new_factory_thread_id()
     task_run_id = get_current_task_run_id()
+    governed_skills = _select_governed_skills(task) if action == "invoke" else []
+    if governed_skills:
+        _human_task_log(
+            task_run_id,
+            "Applying governed Hub skills: %s",
+            ", ".join(
+                f"{skill['slug']}@v{skill['version']}" for skill in governed_skills
+            ),
+        )
     _human_task_log(
         task_run_id,
         "Calling %s (%s) in %s mode.",
@@ -747,6 +789,7 @@ def _dispatch_factory_brain(
                 "pinned_agent_spec": dataclasses.asdict(spec),
                 "pinned_agent_version": spec.version,
                 "pinned_agent_fingerprint": spec_fingerprint(spec),
+                "governed_skills": _governed_skill_metadata(governed_skills),
             },
             human_log=False,
         )
@@ -774,6 +817,7 @@ def _dispatch_factory_brain(
             working_directory=working_directory,
             request=task,
             thread_id=resolved_thread_id,
+            governed_skills=governed_skills,
         )
 
     cache = get_manifest_cache().get_or_refresh(spec)

@@ -198,6 +198,34 @@ class HubSkillStore:
     def list_active_skills(self) -> list[HubSkill]:
         return [s for s in self._all_skills() if s.status == "active"]
 
+    def select_for_dispatch(
+        self,
+        query: str,
+        *,
+        max_items: int = 3,
+        max_total_chars: int = 6000,
+    ) -> list[HubSkill]:
+        """Select a bounded set of active skills safe to add to specialist context.
+
+        Skills are ranked by the existing relevance retrieval. A skill is included
+        only when its complete body fits the remaining budget; content is never
+        truncated because that could change the governed instruction's meaning.
+        """
+        if max_items <= 0 or max_total_chars <= 0:
+            return []
+
+        selected: list[HubSkill] = []
+        used_chars = 0
+        for skill in self.find_relevant_skills(query, max_items=1000):
+            if len(selected) >= max_items:
+                break
+            skill_chars = len(skill.body)
+            if skill_chars > max_total_chars - used_chars:
+                continue
+            selected.append(skill)
+            used_chars += skill_chars
+        return selected
+
     def find_relevant_skills(self, query: str, *, max_items: int = 5) -> list[HubSkill]:
         """Bounded retrieval: naive keyword overlap over active skills' title+body."""
         terms = [t for t in re.findall(r"[a-z0-9]+", query.lower()) if t]

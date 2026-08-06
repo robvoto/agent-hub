@@ -132,16 +132,17 @@ def invoke_factory_request(
     request: str,
     thread_id: str,
     purpose: str = "coding",
+    governed_skills: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    return _run_bridge(
-        working_directory=working_directory,
-        payload={
-            "action": "invoke",
-            "request": request,
-            "thread_id": thread_id,
-            "purpose": purpose,
-        },
-    )
+    payload: dict[str, Any] = {
+        "action": "invoke",
+        "request": request,
+        "thread_id": thread_id,
+        "purpose": purpose,
+    }
+    if governed_skills:
+        payload["governed_skills"] = list(governed_skills)
+    return _run_bridge(working_directory=working_directory, payload=payload)
 
 
 def resume_factory_request(

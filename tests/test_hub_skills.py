@@ -306,3 +306,42 @@ def test_find_relevant_skills_with_no_matching_terms_returns_empty(tmp_path):
     )
 
     assert store.find_relevant_skills("completely unrelated query about spaceships") == []
+
+
+def test_select_for_dispatch_limits_count_and_total_content(tmp_path):
+    store = HubSkillStore(SqliteStore(tmp_path / "knowledge.sqlite3"))
+    for i, size in enumerate((1000, 3000, 2500, 500)):
+        store.propose_skill(
+            f"dispatch-{i}",
+            f"Dispatch procedure {i}",
+            "dispatch " + ("x" * size),
+            source="cli",
+        )
+
+    selected = store.select_for_dispatch("dispatch procedure")
+
+    assert len(selected) == 3
+    assert sum(len(skill.body) for skill in selected) <= 6000
+
+
+def test_select_for_dispatch_skips_oversized_skill_without_truncating(tmp_path):
+    store = HubSkillStore(SqliteStore(tmp_path / "knowledge.sqlite3"))
+    # Stored bodies are capped at 4,000 chars, so use a deliberately smaller
+    # dispatch budget to prove complete skills are skipped rather than cut.
+    store.propose_skill(
+        "large-dispatch",
+        "Large dispatch procedure",
+        "dispatch " + ("x" * 1000),
+        source="cli",
+    )
+    store.propose_skill(
+        "small-dispatch",
+        "Small dispatch procedure",
+        "dispatch safely",
+        source="cli",
+    )
+
+    selected = store.select_for_dispatch("dispatch procedure", max_total_chars=100)
+
+    assert [skill.slug for skill in selected] == ["small-dispatch"]
+    assert selected[0].body == "dispatch safely"
