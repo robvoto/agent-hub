@@ -319,7 +319,7 @@ def _run_bridge(*, working_directory: str, payload: dict[str, Any]) -> dict[str,
             raise RuntimeError("Agent Factory bridge produced no output.")
         result = json.loads(output_file.read_text(encoding="utf-8"))
         if progress_tailer is not None and not result.get("interrupted"):
-            progress_tailer.ensure_progress_started()
+            progress_tailer.mark_unavailable_if_silent()
         human_logger.info(
             "Module agent-factory finished (interrupted=%s)",
             result.get("interrupted"),

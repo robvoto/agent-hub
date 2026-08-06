@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -14,6 +15,7 @@ from typing import Any
 from .task_runs import (
     PROGRESS_MODE_PENDING,
     PROGRESS_MODE_STREAMING,
+    PROGRESS_MODE_UNAVAILABLE,
     get_task_run_store,
 )
 
@@ -224,6 +226,10 @@ def validate_specialist_progress_event(
     )
 
 
+def _rejected_line_fingerprint(raw_line: str) -> str:
+    return hashlib.sha256(raw_line.encode("utf-8", errors="replace")).hexdigest()[:16]
+
+
 class SpecialistProgressTailer:
     """Incrementally read, validate, and persist a subprocess progress JSONL stream."""
 
@@ -352,13 +358,10 @@ class SpecialistProgressTailer:
     def finish(self) -> None:
         return
 
-    def ensure_progress_started(self) -> None:
+    def mark_unavailable_if_silent(self) -> None:
         if self._saw_specialist_event:
             return
-        raise RuntimeError(
-            f"{self._specialist_name} finished without emitting any progress events. "
-            "Hub now requires streamed specialist progress."
-        )
+        get_task_run_store().set_progress_mode(self._run_id, PROGRESS_MODE_UNAVAILABLE)
 
     def _process_line(self, raw_line: str, *, partial_ok: bool = False) -> ProgressUpdate | None:
         store = get_task_run_store()
@@ -374,10 +377,10 @@ class SpecialistProgressTailer:
                 phase=None,
                 human_summary=None,
                 occurred_at=None,
-                metadata=None,
+                metadata={"rejection_fingerprint": _rejected_line_fingerprint(raw_line)},
                 validation_status="rejected",
                 validation_message="oversized progress line",
-                raw_json=encoded[:_MAX_LINE_BYTES].decode("utf-8", errors="replace"),
+                raw_json=None,
             )
             return None
 
@@ -394,10 +397,10 @@ class SpecialistProgressTailer:
                 phase=None,
                 human_summary=None,
                 occurred_at=None,
-                metadata=None,
+                metadata={"rejection_fingerprint": _rejected_line_fingerprint(raw_line)},
                 validation_status="malformed",
                 validation_message="partial progress line" if partial_ok else "invalid JSON",
-                raw_json=raw_line,
+                raw_json=None,
             )
             return None
 
@@ -424,10 +427,10 @@ class SpecialistProgressTailer:
                 occurred_at=_parse_timestamp(payload.get("occurred_at"))
                 if isinstance(payload, dict)
                 else None,
-                metadata=payload.get("metadata") if isinstance(payload, dict) else None,
+                metadata={"rejection_fingerprint": _rejected_line_fingerprint(raw_line)},
                 validation_status="rejected",
                 validation_message=error or "invalid progress event",
-                raw_json=raw_line,
+                raw_json=None,
             )
             return None
 

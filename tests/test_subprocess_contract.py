@@ -24,6 +24,7 @@ from agent_hub.registry import AgentSpec
 from agent_hub.task_control import TaskCancelled, get_task_control_registry
 from agent_hub.task_runs import (
     PROGRESS_MODE_STREAMING,
+    PROGRESS_MODE_UNAVAILABLE,
     TASK_STATE_FAILED,
     TASK_STATE_IN_PROGRESS,
     active_task_run,
@@ -150,10 +151,25 @@ def test_dispatch_subprocess_records_streamed_progress(tmp_path):
     assert [event.sequence for event in accepted if event.sequence is not None] == [1, 2]
 
 
-def test_dispatch_subprocess_requires_streamed_progress(tmp_path):
+def test_dispatch_subprocess_consumes_stdout_jsonl_progress(tmp_path):
     spec = _make_spec(tmp_path)
-    with pytest.raises(RuntimeError, match="requires streamed specialist progress"):
-        _run(spec, "SCENARIO:no_progress do the thing")
+    run, output = _run(spec, "SCENARIO:progress_stdout do the thing")
+
+    assert output["status"] == "success"
+    updated = get_task_run_store().get_run(run.id)
+    assert updated is not None
+    assert updated.progress_mode == PROGRESS_MODE_STREAMING
+    assert updated.latest_progress_phase == "streaming"
+    assert updated.latest_progress_summary == "Streaming progress over stdout."
+
+def test_dispatch_subprocess_marks_progress_unavailable_for_legacy_specialist(tmp_path):
+    spec = _make_spec(tmp_path)
+    run, output = _run(spec, "SCENARIO:no_progress do the thing")
+
+    assert output["status"] == "success"
+    updated = get_task_run_store().get_run(run.id)
+    assert updated is not None
+    assert updated.progress_mode == PROGRESS_MODE_UNAVAILABLE
 
 
 def test_dispatch_subprocess_records_rejected_progress_events(tmp_path):
@@ -172,6 +188,15 @@ def test_dispatch_subprocess_records_rejected_progress_events(tmp_path):
         if event.validation_status == "accepted" and event.sequence is not None
     ]
     assert accepted_sequences == [1]
+    rejected = [
+        event for event in events if event.validation_status in {"malformed", "rejected"}
+    ]
+    assert rejected
+    assert all(event.raw_json is None for event in rejected)
+    assert all(
+        isinstance(event.metadata, dict) and event.metadata.get("rejection_fingerprint")
+        for event in rejected
+    )
 
 
 def test_dispatch_subprocess_emits_quiet_heartbeat(tmp_path, monkeypatch):

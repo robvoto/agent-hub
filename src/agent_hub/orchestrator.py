@@ -5,7 +5,9 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import queue
 import subprocess
+import threading
 import tempfile
 import time
 import uuid
@@ -702,20 +704,88 @@ def _dispatch_subprocess(
             _emit_progress_update(update)
         if task_run_id is not None:
             get_task_control_registry().attach_process(task_run_id, proc, agent_id=spec.id)
+        stdout_stream = getattr(proc, "stdout", None)
+        stderr_stream = getattr(proc, "stderr", None)
+        stderr = ""
         try:
-            while True:
-                for update in progress_tailer.poll():
+            if stdout_stream is None or stderr_stream is None:
+                # Compatibility for simple test doubles. Real subprocesses always use
+                # PIPE streams and take the concurrent-drain path below.
+                while proc.poll() is None:
+                    for update in progress_tailer.poll():
+                        _emit_progress_update(update)
+                    time.sleep(PROGRESS_POLL_INTERVAL_SECONDS)
+                for update in progress_tailer.poll(final=True):
                     _emit_progress_update(update)
-                background = progress_tailer.maybe_emit_background_update()
-                if background is not None:
-                    _emit_progress_update(background)
-                if proc.poll() is not None:
-                    break
-                time.sleep(PROGRESS_POLL_INTERVAL_SECONDS)
-            for update in progress_tailer.poll(final=True):
-                _emit_progress_update(update)
-            progress_tailer.finish()
-            _, stderr = proc.communicate()
+                progress_tailer.finish()
+                communicate = getattr(proc, "communicate", None)
+                if callable(communicate):
+                    _, stderr = communicate()
+            else:
+                stream_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
+                stderr_lines: list[str] = []
+
+                def _drain_stream(name: str, stream: Any) -> None:
+                    try:
+                        for line in iter(stream.readline, ""):
+                            stream_queue.put((name, line))
+                    finally:
+                        stream_queue.put((name, None))
+
+                reader_threads = [
+                    threading.Thread(
+                        target=_drain_stream,
+                        args=("stdout", stdout_stream),
+                        name=f"{spec.id}-stdout",
+                        daemon=True,
+                    ),
+                    threading.Thread(
+                        target=_drain_stream,
+                        args=("stderr", stderr_stream),
+                        name=f"{spec.id}-stderr",
+                        daemon=True,
+                    ),
+                ]
+                for thread in reader_threads:
+                    thread.start()
+
+                open_streams = len(reader_threads)
+                stdout_progress_seen = False
+                while open_streams:
+                    try:
+                        source, line = stream_queue.get(
+                            timeout=PROGRESS_POLL_INTERVAL_SECONDS
+                        )
+                    except queue.Empty:
+                        source = ""
+                        line = ""
+                        if not stdout_progress_seen:
+                            for update in progress_tailer.poll():
+                                _emit_progress_update(update)
+
+                    if line is None:
+                        open_streams -= 1
+                    elif source == "stderr":
+                        stderr_lines.append(line.rstrip("\r\n"))
+                    elif source == "stdout":
+                        update = progress_tailer.process_line(line)
+                        if update is not None:
+                            stdout_progress_seen = True
+                            _emit_progress_update(update)
+
+                    background = progress_tailer.maybe_emit_background_update()
+                    if background is not None:
+                        _emit_progress_update(background)
+
+                proc.wait()
+                for thread in reader_threads:
+                    thread.join(timeout=5)
+                # Legacy specialists may still write the negotiated progress file.
+                # Drain it once at completion without permanent file polling.
+                for update in progress_tailer.poll(final=True):
+                    _emit_progress_update(update)
+                progress_tailer.finish()
+                stderr = "\n".join(stderr_lines)
         finally:
             if task_run_id is not None:
                 get_task_control_registry().clear_process(task_run_id)
@@ -734,7 +804,7 @@ def _dispatch_subprocess(
             "needs_clarification",
             "approval_required",
         ) and _valid_pending_decision(output.get("pending_decision")) is None:
-            progress_tailer.ensure_progress_started()
+            progress_tailer.mark_unavailable_if_silent()
         _human_task_log(
             task_run_id,
             "%s finished with status '%s'.",

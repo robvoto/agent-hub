@@ -139,6 +139,21 @@ def _write_progress_events(scenario: str, input_data: dict) -> None:
     if scenario == "no_progress":
         return
 
+    if scenario == "progress_stdout":
+        print(
+            json.dumps(
+                _event_payload(
+                    input_data,
+                    sequence=1,
+                    event_type="phase",
+                    phase="streaming",
+                    human_summary="Streaming progress over stdout.",
+                )
+            ),
+            flush=True,
+        )
+        return
+
     if scenario == "progress_success":
         _append_progress_line(
             progress_path,

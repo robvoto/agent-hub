@@ -86,6 +86,8 @@ def _format_last_activity(run: TaskRun) -> str:
 def _format_live_progress(run: TaskRun) -> str:
     if run.progress_mode == "pending":
         return "Waiting for first streamed update"
+    if run.progress_mode == "unavailable":
+        return "Unavailable from specialist"
     if run.progress_mode == "streaming":
         latest = _latest_activity(run)
         handle = get_task_control_registry().get_handle(run.id)

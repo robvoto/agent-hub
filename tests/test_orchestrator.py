@@ -1225,9 +1225,8 @@ def test_agent_tool_preserves_approval_required_output_without_progress_events(
     assert "Approval required" in reply
 
 
-def test_agent_tool_still_requires_progress_for_success_output(monkeypatch, tmp_path):
-    """Unlike a legitimate short-circuit, a 'success' with zero progress events is the
-    silent/broken-specialist case the progress-required gate must keep rejecting."""
+def test_agent_tool_marks_progress_unavailable_for_silent_success(monkeypatch, tmp_path):
+    """A legacy specialist may complete successfully without progress support."""
     spec = AgentSpec(
         id="ai-tech-lead",
         name="AI Tech Lead",
@@ -1265,10 +1264,13 @@ def test_agent_tool_still_requires_progress_for_success_output(monkeypatch, tmp_
     run = get_task_run_store().create_run(session_id="session-1", user_message="Clean this up")
     tool = _make_agent_tool(spec)
 
-    with active_task_run(run.id), pytest.raises(
-        RuntimeError, match="finished without emitting any progress events"
-    ):
-        tool.invoke("Delete the generated files")
+    with active_task_run(run.id):
+        reply = tool.invoke("Delete the generated files")
+
+    assert "Done." in reply
+    updated = get_task_run_store().get_run(run.id)
+    assert updated is not None
+    assert updated.progress_mode == "unavailable"
 
 
 def test_agent_tool_emits_human_readable_specialist_logs(monkeypatch, tmp_path, caplog):
