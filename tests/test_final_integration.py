@@ -78,7 +78,7 @@ def test_factory_add_change_disable_lifecycle_without_hub_restart(monkeypatch, t
 
     build_calls: list[list[str]] = []
 
-    def _fake_build_graph(self, registry=None):
+    def _fake_build_graph(self, registry=None, **kwargs):
         active = self._registry if registry is None else registry
         build_calls.append([spec.id for spec in active])
         return _FakeGraph("ok")
@@ -267,7 +267,7 @@ def test_ai_tech_lead_shaped_full_back_and_forth_workflow_through_hub(monkeypatc
     ]
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("unused"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused"))
 
     orchestrator = HubOrchestrator()
     orchestrator.set_current_project(str(project_dir))

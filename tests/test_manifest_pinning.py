@@ -104,7 +104,7 @@ def _dispatch_and_pause(monkeypatch, spec):
     ]
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _UnusedGraph())
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph())
 
     orchestrator = HubOrchestrator()
     run = get_task_run_store().create_run(
@@ -161,7 +161,7 @@ def test_require_spec_falls_back_to_live_registry_without_a_pin(monkeypatch, tmp
     back to a live-registry lookup by id."""
     spec = _spec(tmp_path, version="1.0.0", purpose="Primary responsibility: Forge widgets.")
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _UnusedGraph())
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph())
 
     orchestrator = HubOrchestrator()
     run = get_task_run_store().create_run(
@@ -194,7 +194,7 @@ def test_refresh_registry_reports_added_changed_removed_and_invalid(monkeypatch,
         "agent_hub.orchestrator._load_specialists", lambda: [kept, stale, removed]
     )
     monkeypatch.setattr("agent_hub.orchestrator._load_registry_errors", lambda: [])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _UnusedGraph())
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph())
 
     orchestrator = HubOrchestrator()
 
@@ -221,7 +221,7 @@ def test_refresh_registry_reports_added_changed_removed_and_invalid(monkeypatch,
 def test_refresh_registry_reports_no_changes_and_no_invalid_manifests(monkeypatch):
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
     monkeypatch.setattr("agent_hub.orchestrator._load_registry_errors", lambda: [])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _UnusedGraph())
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph())
 
     orchestrator = HubOrchestrator()
     report = orchestrator.refresh_registry()
@@ -236,7 +236,7 @@ def test_refresh_registry_reports_no_changes_and_no_invalid_manifests(monkeypatc
 def test_agents_status_reports_current_agents_without_reloading(monkeypatch, tmp_path):
     spec = _spec(tmp_path, version="1.0.0", purpose="Primary responsibility: Forge widgets.")
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _UnusedGraph())
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph())
 
     orchestrator = HubOrchestrator()
 
@@ -260,7 +260,7 @@ def test_agents_status_reports_invalid_manifests_from_last_refresh(monkeypatch):
         "agent_hub.orchestrator._load_registry_errors",
         lambda: [RegistryLoadError(source="bad-agent/agent.json", message="invalid JSON")],
     )
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _UnusedGraph())
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph())
 
     orchestrator = HubOrchestrator()
     report = orchestrator.agents_status()
@@ -294,7 +294,7 @@ def test_resumed_dispatch_uses_pinned_runtime_after_agent_changed_in_registry(
     ]
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [original])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _UnusedGraph())
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph())
 
     orchestrator = HubOrchestrator()
     run = get_task_run_store().create_run(
@@ -338,7 +338,7 @@ def test_resumed_dispatch_uses_pinned_runtime_after_agent_removed_from_registry(
     ]
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [original])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _UnusedGraph())
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph())
 
     orchestrator = HubOrchestrator()
     run = get_task_run_store().create_run(

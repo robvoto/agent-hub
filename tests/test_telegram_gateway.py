@@ -281,7 +281,7 @@ def test_run_logs_api_base_url_in_human_log(monkeypatch, caplog):
     monkeypatch.setattr(
         TelegramGateway,
         "_prime_offset",
-        lambda self, registry=None: 0,
+        lambda self, registry=None, **kwargs: 0,
     )
     monkeypatch.setattr(
         "agent_hub.telegram_gateway._get_updates",
@@ -308,7 +308,7 @@ def test_run_logs_api_base_url_in_human_log(monkeypatch, caplog):
 
 
 def test_run_cancels_in_flight_tasks_on_keyboard_interrupt(monkeypatch, caplog):
-    monkeypatch.setattr(TelegramGateway, "_prime_offset", lambda self, registry=None: 0)
+    monkeypatch.setattr(TelegramGateway, "_prime_offset", lambda self, registry=None, **kwargs: 0)
     monkeypatch.setattr(
         "agent_hub.telegram_gateway._get_updates",
         lambda token, offset: [],
@@ -341,7 +341,7 @@ def test_run_cancels_in_flight_tasks_on_keyboard_interrupt(monkeypatch, caplog):
 def test_run_installs_and_restores_sigterm_handler(monkeypatch):
     import signal
 
-    monkeypatch.setattr(TelegramGateway, "_prime_offset", lambda self, registry=None: 0)
+    monkeypatch.setattr(TelegramGateway, "_prime_offset", lambda self, registry=None, **kwargs: 0)
     monkeypatch.setattr(
         "agent_hub.telegram_gateway._get_updates",
         lambda token, offset: [],
@@ -1202,7 +1202,7 @@ def test_run_telegram_releases_the_lock_after_it_exits(monkeypatch, tmp_path):
         "agent_hub.telegram_gateway.HubOrchestrator", lambda: SimpleNamespace()
     )
     monkeypatch.setattr(TelegramGateway, "__init__", lambda self, token, orch: None)
-    monkeypatch.setattr(TelegramGateway, "run", lambda self, registry=None: None)
+    monkeypatch.setattr(TelegramGateway, "run", lambda self, registry=None, **kwargs: None)
     monkeypatch.setenv("HUB_BOT_TOKEN", "token-123")
 
     run_telegram()

@@ -1343,13 +1343,18 @@ class HubOrchestrator:
         )
         self._graph = self._build_graph()
 
-    def _build_graph(self, registry: list[AgentSpec] | None = None) -> Any:
+    def _build_graph(
+        self,
+        registry: list[AgentSpec] | None = None,
+        *,
+        include_memory_tools: bool = True,
+    ) -> Any:
         store = get_knowledge_store()
         checkpointer = get_checkpointer()
         active_registry = self._registry if registry is None else registry
 
         agent_tools = [_make_agent_tool(s) for s in active_registry]
-        memory_tools = _build_memory_tools(store, active_registry)
+        memory_tools = _build_memory_tools(store, active_registry) if include_memory_tools else []
         tools = agent_tools + memory_tools
 
         llm = ChatOpenAI(model=self._model, temperature=0)
@@ -1359,7 +1364,7 @@ class HubOrchestrator:
             "Building LangGraph react agent with model=%s, tools=%s, memory_tools=%s",
             self._model,
             agent_names,
-            ["shared_docs"],
+            ["shared_docs"] if include_memory_tools else [],
         )
         logger.debug("Base system prompt length=%d chars", len(_SYSTEM_PROMPT))
 
@@ -2048,10 +2053,13 @@ class HubOrchestrator:
         else:
             human_logger.info("Routing classified request as direct Hub conversation.")
         if routing.route == "specialist":
-            request_graph = (
-                self._graph
-                if len(eligible_registry) == len(self._registry)
-                else self._build_graph(eligible_registry)
+            # Once eligibility says this is specialist work, support/context tools
+            # must not compete with specialist dispatch. The routing graph receives
+            # only the eligible specialist tools; shared_docs remains a Hub-direct
+            # support tool for non-specialist turns.
+            request_graph = self._build_graph(
+                eligible_registry,
+                include_memory_tools=False,
             )
         else:
             # Direct/clarification turns must not retain specialist tools after

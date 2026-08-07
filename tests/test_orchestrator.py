@@ -134,7 +134,7 @@ class _FakeCheckpointedGraph:
 
 def test_invoke_records_successful_task_run(monkeypatch):
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("All done"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("All done"))
 
     orchestrator = HubOrchestrator()
     reply = orchestrator.invoke("Hello")
@@ -214,7 +214,7 @@ def test_repair_dangling_tool_calls_no_op_for_graph_without_checkpoint_api():
 def test_invoke_repairs_dangling_tool_call_before_calling_the_graph(monkeypatch, caplog):
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
     graph = _FakeCheckpointedGraph("All done")
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: graph)
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: graph)
 
     orchestrator = HubOrchestrator()
     thread_id = f"{orchestrator.session_id}:{DEFAULT_PROJECT_KEY}"
@@ -243,7 +243,7 @@ def test_invoke_repairs_dangling_tool_call_before_calling_the_graph(monkeypatch,
 def test_invoke_leaves_clean_thread_state_untouched(monkeypatch):
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
     graph = _FakeCheckpointedGraph("All done")
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: graph)
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: graph)
 
     orchestrator = HubOrchestrator()
     reply = orchestrator.invoke("Hello")
@@ -254,7 +254,7 @@ def test_invoke_leaves_clean_thread_state_untouched(monkeypatch):
 
 def test_invoke_emits_human_readable_progress_logs(monkeypatch, caplog):
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("All done"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("All done"))
 
     orchestrator = HubOrchestrator()
 
@@ -268,7 +268,7 @@ def test_invoke_emits_human_readable_progress_logs(monkeypatch, caplog):
 
 def test_new_session_explains_reset_effect_in_human_log(monkeypatch, caplog):
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("unused"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused"))
 
     orchestrator = HubOrchestrator()
 
@@ -282,7 +282,7 @@ def test_new_session_explains_reset_effect_in_human_log(monkeypatch, caplog):
 
 def test_new_session_returns_startup_summary_with_defaults(monkeypatch):
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("unused"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused"))
 
     orchestrator = HubOrchestrator()
 
@@ -313,7 +313,7 @@ def test_hub_status_reports_state_without_rotating_session(monkeypatch, tmp_path
         },
     )
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("unused"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused"))
 
     orchestrator = HubOrchestrator()
     original_session_id = orchestrator.session_id
@@ -360,7 +360,7 @@ def test_reset_session_stops_active_task_and_rotates_session(monkeypatch, caplog
         },
     )
 
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("unused"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused"))
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
 
     orchestrator = HubOrchestrator()
@@ -393,7 +393,7 @@ def test_reset_session_stops_active_task_and_rotates_session(monkeypatch, caplog
 
 def test_restart_resumes_the_same_session_and_task_history(monkeypatch):
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("All done"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("All done"))
 
     first = HubOrchestrator()
     first.invoke("Hello")
@@ -410,7 +410,7 @@ def test_restart_resumes_the_same_session_and_task_history(monkeypatch):
 
 def test_new_session_rolls_pointer_forward_so_restart_resumes_new_session(monkeypatch):
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("unused"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused"))
 
     first = HubOrchestrator()
     original_session_id = first.session_id
@@ -425,7 +425,7 @@ def test_new_session_rolls_pointer_forward_so_restart_resumes_new_session(monkey
 
 def test_reset_session_rolls_pointer_forward_so_restart_resumes_new_session(monkeypatch):
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("unused"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused"))
 
     first = HubOrchestrator()
     original_session_id = first.session_id
@@ -440,7 +440,7 @@ def test_reset_session_rolls_pointer_forward_so_restart_resumes_new_session(monk
 
 def test_first_ever_run_still_starts_cleanly_with_no_persisted_session(monkeypatch):
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("All done"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("All done"))
 
     orchestrator = HubOrchestrator()
 
@@ -454,7 +454,7 @@ def test_restart_resumes_project_and_learn_mode_selection(monkeypatch, tmp_path)
     from agent_hub.project_context import get_project_context_registry
 
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("unused"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused"))
 
     first = HubOrchestrator()
     first.set_current_project(str(tmp_path))
@@ -474,7 +474,7 @@ def test_invoke_stream_logs_langgraph_node_flow(monkeypatch, caplog):
     monkeypatch.setattr(
         HubOrchestrator,
         "_build_graph",
-        lambda self, registry=None: _FakeStreamingGraph("All done"),
+        lambda self, registry=None, **kwargs: _FakeStreamingGraph("All done"),
     )
 
     orchestrator = HubOrchestrator()
@@ -515,7 +515,7 @@ def test_invoke_stream_logs_single_langgraph_node_path(monkeypatch, caplog):
     monkeypatch.setattr(
         HubOrchestrator,
         "_build_graph",
-        lambda self, registry=None: _FakeSingleNodeStreamingGraph("All done"),
+        lambda self, registry=None, **kwargs: _FakeSingleNodeStreamingGraph("All done"),
     )
 
     orchestrator = HubOrchestrator()
@@ -579,7 +579,7 @@ def test_invoke_relays_specialist_clarification_verbatim_instead_of_llm_paraphra
     monkeypatch.setattr(
         HubOrchestrator,
         "_build_graph",
-        lambda self, registry=None: _FakeToolResultStreamingGraph(
+        lambda self, registry=None, **kwargs: _FakeToolResultStreamingGraph(
             tool_text,
             "The AI Tech Lead requests clarification. Should I proceed?",
         ),
@@ -601,7 +601,7 @@ def test_invoke_relays_specialist_approval_request_verbatim(monkeypatch):
     monkeypatch.setattr(
         HubOrchestrator,
         "_build_graph",
-        lambda self, registry=None: _FakeToolResultStreamingGraph(
+        lambda self, registry=None, **kwargs: _FakeToolResultStreamingGraph(
             tool_text,
             "AI Tech Lead wants to delete some files — should I approve that?",
         ),
@@ -620,7 +620,7 @@ def test_invoke_keeps_llm_paraphrase_for_non_terminal_tool_results(monkeypatch):
     monkeypatch.setattr(
         HubOrchestrator,
         "_build_graph",
-        lambda self, registry=None: _FakeToolResultStreamingGraph(
+        lambda self, registry=None, **kwargs: _FakeToolResultStreamingGraph(
             "[AI Tech Lead] Applied the fix.",
             "I applied the fix as requested.",
         ),
@@ -637,7 +637,7 @@ def test_invoke_records_failed_task_run(monkeypatch):
     monkeypatch.setattr(
         HubOrchestrator,
         "_build_graph",
-        lambda self, registry=None: _FakeGraph(error=RuntimeError("boom")),
+        lambda self, registry=None, **kwargs: _FakeGraph(error=RuntimeError("boom")),
     )
 
     orchestrator = HubOrchestrator()
@@ -654,7 +654,7 @@ def test_invoke_records_failed_task_run(monkeypatch):
 def test_invoke_rebuilds_graph_and_registry_when_an_agent_is_added(monkeypatch):
     build_calls: list[Any] = []
 
-    def _fake_build_graph(self, registry=None):
+    def _fake_build_graph(self, registry=None, **kwargs):
         graph = _FakeGraph("All done")
         build_calls.append(graph)
         return graph
@@ -689,7 +689,7 @@ def test_invoke_rebuilds_graph_and_registry_when_an_agent_is_added(monkeypatch):
 def test_invoke_does_not_rebuild_graph_when_registry_is_unchanged(monkeypatch):
     build_calls: list[Any] = []
 
-    def _fake_build_graph(self, registry=None):
+    def _fake_build_graph(self, registry=None, **kwargs):
         graph = _FakeGraph("All done")
         build_calls.append(graph)
         return graph
@@ -705,7 +705,7 @@ def test_invoke_does_not_rebuild_graph_when_registry_is_unchanged(monkeypatch):
 
 
 def test_invoke_reconciles_added_changed_and_removed_agents(monkeypatch, caplog):
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("All done"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("All done"))
 
     def _spec(agent_id: str, name: str, purpose: str) -> AgentSpec:
         return AgentSpec(
@@ -744,7 +744,7 @@ def test_invoke_reconciles_added_changed_and_removed_agents(monkeypatch, caplog)
 
 def _make_learn_orchestrator(monkeypatch, tmp_path, *, learning_analyzer, skill_store=None):
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("unused"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused"))
     return HubOrchestrator(
         learning_analyzer=learning_analyzer,
         skill_store=skill_store or HubSkillStore(),
@@ -774,7 +774,7 @@ def test_learn_gathers_relevant_skills_and_docs_before_analysis(monkeypatch, tmp
         )
 
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("unused"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused"))
     orchestrator = HubOrchestrator(
         learning_analyzer=fake_analyzer,
         skill_store=skill_store,
@@ -1035,7 +1035,7 @@ def test_learn_still_stores_memory_when_analysis_fails(monkeypatch, caplog, tmp_
 
 
 def test_provide_decision_reply_maps_number_to_specialist_option(monkeypatch):
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("unused"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused"))
     orchestrator = HubOrchestrator(model="test")
     pending = SimpleNamespace(
         state="waiting_decision",
@@ -1066,7 +1066,7 @@ def test_provide_decision_reply_maps_number_to_specialist_option(monkeypatch):
 
 
 def test_provide_decision_reply_rejects_invalid_number(monkeypatch):
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("unused"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused"))
     orchestrator = HubOrchestrator(model="test")
     pending = SimpleNamespace(
         state="waiting_decision",
@@ -1081,7 +1081,7 @@ def test_provide_decision_reply_rejects_invalid_number(monkeypatch):
 
 def test_provide_decision_with_nothing_pending_returns_friendly_message(monkeypatch):
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("unused"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused"))
 
     orchestrator = HubOrchestrator()
 
@@ -1421,7 +1421,7 @@ def test_approve_pending_resumes_subprocess_run(monkeypatch, tmp_path):
             return ("", "")
 
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _FakePopen)
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("unused"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused"))
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
 
     orchestrator = HubOrchestrator()
@@ -1465,7 +1465,7 @@ def test_stop_current_task_cancels_waiting_approval_run(monkeypatch, tmp_path):
         },
     )
 
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("unused"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused"))
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
 
     orchestrator = HubOrchestrator()
@@ -1534,7 +1534,7 @@ def test_stop_current_task_terminates_active_subprocess(monkeypatch, tmp_path):
             terminated.set()
 
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _FakePopen)
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("unused"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused"))
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
 
     orchestrator = HubOrchestrator()
@@ -1687,7 +1687,7 @@ def test_build_system_prompt_without_learnings_uses_base_prompt(monkeypatch, tmp
 
 def test_run_learning_pass_stores_high_confidence_candidate(monkeypatch):
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("unused"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused"))
 
     calls: list[tuple] = []
 
@@ -1730,7 +1730,7 @@ def test_run_learning_pass_shows_extractor_existing_operator_records(monkeypatch
     """The extractor must see Rob's explicit /learn facts, not just auto ones,
     so it can avoid duplicating or conflicting with them."""
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("unused"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused"))
 
     calls: list[tuple] = []
 
@@ -1758,7 +1758,7 @@ def test_run_learning_pass_never_disables_operator_record(monkeypatch):
     """Even if the model proposes superseding an explicit /learn record, Hub
     must refuse — only Rob can change an operator-established fact."""
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("unused"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused"))
 
     operator_record = HubMemoryManager().learn("Prefers tabs over spaces.", source="cli")
 
@@ -1787,7 +1787,7 @@ def test_run_learning_pass_never_disables_operator_record(monkeypatch):
 
 def test_run_learning_pass_is_noop_with_no_new_completed_runs(monkeypatch):
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("unused"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused"))
 
     calls: list = []
     orchestrator = HubOrchestrator(
@@ -1802,7 +1802,7 @@ def test_run_learning_pass_is_noop_with_no_new_completed_runs(monkeypatch):
 
 def test_run_learning_pass_only_processes_runs_after_watermark(monkeypatch):
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("unused"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused"))
 
     call_texts: list[str] = []
 
@@ -1828,7 +1828,7 @@ def test_run_learning_pass_only_processes_runs_after_watermark(monkeypatch):
 
 def test_invoke_rejects_new_task_when_same_project_already_busy(monkeypatch):
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("Should not run"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("Should not run"))
 
     orchestrator = HubOrchestrator()
     store = get_task_run_store()
@@ -1845,7 +1845,7 @@ def test_invoke_rejects_new_task_when_same_project_already_busy(monkeypatch):
 
 def test_invoke_allows_task_for_a_different_project(monkeypatch, tmp_path):
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("Done for B"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("Done for B"))
 
     orchestrator = HubOrchestrator()
     store = get_task_run_store()
@@ -1864,7 +1864,7 @@ def test_invoke_allows_task_for_a_different_project(monkeypatch, tmp_path):
 
 def test_pending_run_disambiguates_by_currently_selected_project(monkeypatch, tmp_path):
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("unused"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused"))
 
     orchestrator = HubOrchestrator()
     store = get_task_run_store()
@@ -1919,7 +1919,7 @@ def test_manifest_task_kind_filter_exposes_only_technical_agent_for_existing_sol
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [technical, factory])
     build_registries: list[list[str]] = []
 
-    def _fake_build_graph(self, registry=None):
+    def _fake_build_graph(self, registry=None, **kwargs):
         active = self._registry if registry is None else registry
         build_registries.append([spec.id for spec in active])
         return _FakeGraph("Done")
@@ -1972,7 +1972,7 @@ def test_manifest_task_kind_filter_exposes_only_factory_for_agent_package_lifecy
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [technical, factory])
     build_registries: list[list[str]] = []
 
-    def _fake_build_graph(self, registry=None):
+    def _fake_build_graph(self, registry=None, **kwargs):
         active = self._registry if registry is None else registry
         build_registries.append([spec.id for spec in active])
         return _FakeGraph("Done")
@@ -1990,3 +1990,48 @@ def test_manifest_task_kind_filter_exposes_only_factory_for_agent_package_lifecy
     orchestrator.invoke("Create and stage a new specialist agent package for BPMN generation.")
 
     assert build_registries[-1] == ["package-governor"]
+
+
+def test_specialist_route_does_not_expose_shared_docs_as_competing_tool(monkeypatch, tmp_path):
+    from agent_hub.orchestrator import RoutingDecision
+
+    runtime = {
+        "mode": "subprocess",
+        "entrypoint": "fake-agent",
+        "working_directory": str(tmp_path),
+        "input_arg": "--input-json",
+        "output_arg": "--output-json",
+        "default_execution_mode": "instruction_only",
+    }
+    technical = AgentSpec(
+        id="technical-delivery",
+        name="Technical Delivery",
+        purpose="Analyses existing technical solutions.",
+        task_contract={"task_kinds": ["technical_analysis"]},
+        runtime=runtime,
+    )
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [technical])
+
+    builds: list[tuple[list[str], bool]] = []
+
+    def _fake_build_graph(self, registry=None, *, include_memory_tools=True):
+        active = self._registry if registry is None else registry
+        builds.append(([spec.id for spec in active], include_memory_tools))
+        return _FakeGraph("Done")
+
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", _fake_build_graph)
+
+    def _classifier(message, registry, *, model):
+        return RoutingDecision(
+            route="specialist",
+            task_kind="technical_analysis",
+            reason="read-only technical analysis",
+        )
+
+    orchestrator = HubOrchestrator(routing_classifier=_classifier)
+    orchestrator.invoke(
+        "Analyse Agent Hub and propose one tiny documentation-only improvement. Do not modify files."
+    )
+
+    assert builds[0] == (["technical-delivery"], True)
+    assert builds[-1] == (["technical-delivery"], False)
