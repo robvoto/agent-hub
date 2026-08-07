@@ -180,7 +180,7 @@ def reject_factory_request(
 
 
 def _run_bridge(*, working_directory: str, payload: dict[str, Any]) -> dict[str, Any]:
-    human_logger.info("Running module: agent-factory (%s)", payload["action"])
+    logger.debug("Running module: agent-factory (%s)", payload["action"])
     logger.info(
         "Running module: agent-factory (%s, thread=%s)",
         payload["action"],

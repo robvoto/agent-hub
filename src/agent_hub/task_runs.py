@@ -424,9 +424,7 @@ class TaskRunStore:
     def create_run(self, session_id: str, user_message: str) -> TaskRun:
         run_id = str(uuid.uuid4())
         now = _utcnow()
-        human_logger.info(
-            "Task %s: human asked: %s", run_id[:8], _truncate(user_message)
-        )
+        human_logger.info("Run %s — %s", run_id[:8], _truncate(user_message))
         with _connect(self._db_path) as conn:
             conn.execute(
                 """INSERT INTO task_runs (
@@ -660,25 +658,38 @@ class TaskRunStore:
             updated = conn.execute("SELECT * FROM task_runs WHERE id=?", (run_id,)).fetchone()
         assert updated is not None
         result = _row_to_task_run(updated)
-        log = human_logger.info if human_log else logger.debug
-        log(
-            "Task %s: %s -> %s%s",
-            run_id[:8],
-            current.state,
-            to_state,
-            f" — {detail}" if detail else "",
-        )
-        if to_state in _TERMINAL_STATES and result.final_response:
-            human_logger.info(
-                "Task %s: I responded: %s", run_id[:8], _truncate(result.final_response)
+        if human_log:
+            if to_state in _TERMINAL_STATES or to_state in _PAUSED_STATES:
+                human_logger.info(
+                    "Run %s — %s%s",
+                    run_id[:8],
+                    to_state,
+                    f" — {detail}" if detail else "",
+                )
+            else:
+                human_logger.info(
+                    "%s -> %s%s",
+                    current.state,
+                    to_state,
+                    f" — {detail}" if detail else "",
+                )
+        else:
+            logger.debug(
+                "Task %s: %s -> %s%s",
+                run_id[:8],
+                current.state,
+                to_state,
+                f" — {detail}" if detail else "",
             )
+        if to_state in _TERMINAL_STATES and result.final_response:
+            human_logger.info("Reply: %s", _truncate(result.final_response))
         # The cumulative flow summary is only worth a human-facing line at a
         # checkpoint where the task stops actively running (finished or
         # paused waiting on the user) — logging it after every intermediate
         # transition just restates the same growing chain repeatedly.
         if to_state in _TERMINAL_STATES or to_state in _PAUSED_STATES:
             events = self.list_events(run_id)
-            human_logger.info("Task %s: Hub lifecycle: %s", run_id[:8], _render_flow(events))
+            human_logger.info("Hub lifecycle: %s", _render_flow(events))
         return result
 
     def set_final_response(self, run_id: str, final_response: str) -> TaskRun:

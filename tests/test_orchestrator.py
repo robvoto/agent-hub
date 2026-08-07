@@ -503,6 +503,11 @@ def test_invoke_stream_logs_langgraph_node_flow(monkeypatch, caplog):
 
     human_text = "\n".join(r.getMessage() for r in caplog.records if r.name == "agent_hub.human")
     assert "LangGraph" not in human_text
+    assert "Node [agent] — Understand the request and decide whether Hub should answer directly or call a specialist." in human_text
+    assert "Node [tools] — Execute the selected specialist/tool and return its result to the orchestrator." in human_text
+    # The short run ID is a correlation header/checkpoint, not a prefix for every line.
+    run_headers = [line for line in human_text.splitlines() if line.startswith("Run ")]
+    assert len(run_headers) <= 2
 
 
 def test_invoke_stream_logs_single_langgraph_node_path(monkeypatch, caplog):

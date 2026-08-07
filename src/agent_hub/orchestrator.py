@@ -113,10 +113,27 @@ def _friendly_project_label(project_key: str) -> str:
 
 
 def _human_task_log(task_run_id: str | None, message: str, *args: Any) -> None:
-    if task_run_id:
-        human_logger.info("Task %s: " + message, task_run_id[:8], *args)
-        return
+    # The run ID is introduced once when TaskRunStore creates the run and
+    # repeated only at terminal/paused checkpoints there. Repeating it on
+    # every human-facing line makes the live log harder to scan. Technical
+    # logs still carry the full run ID for correlation.
     human_logger.info(message, *args)
+
+
+_NODE_EXPLANATIONS = {
+    "agent": "Understand the request and decide whether Hub should answer directly or call a specialist.",
+    "tools": "Execute the selected specialist/tool and return its result to the orchestrator.",
+}
+
+
+def _log_node_intro(node_name: str, explained_nodes: set[str]) -> None:
+    if node_name in explained_nodes:
+        return
+    explanation = _NODE_EXPLANATIONS.get(node_name)
+    if explanation is None:
+        return
+    human_logger.info("Node [%s] — %s", node_name, explanation)
+    explained_nodes.add(node_name)
 
 
 def _resolve_project_context_for_task_run(task_run_id: str | None) -> ProjectContextResolution:
@@ -302,6 +319,7 @@ def _consume_graph_stream_event(
     last_node: str | None,
     graph_path: list[str],
     graph_steps: list[tuple[str, str]],
+    explained_nodes: set[str],
 ) -> tuple[str | None, dict[str, Any] | None]:
     namespace: tuple[Any, ...] = ()
     mode: str | None = None
@@ -347,6 +365,7 @@ def _consume_graph_stream_event(
 
     if mode == "updates" and isinstance(data, dict):
         for node_name, payload in data.items():
+            _log_node_intro(node_name, explained_nodes)
             if last_node is None:
                 logger.debug("Task %s: LangGraph entered node '%s'.", task_run_id, node_name)
             elif last_node != node_name:
@@ -1967,6 +1986,7 @@ class HubOrchestrator:
         graph_path: list[str] = []
         graph_steps: list[tuple[str, str]] = []
         graph_trace_emitted = False
+        explained_nodes: set[str] = set()
         try:
             with active_task_run(task_run.id, progress_callback=progress_notify):
                 if hasattr(self._graph, "stream"):
@@ -1978,7 +1998,7 @@ class HubOrchestrator:
                         stream_mode=["tasks", "updates", "values"],
                     ):
                         last_node, streamed_values = _consume_graph_stream_event(
-                            task_run.id, event, last_node, graph_path, graph_steps
+                            task_run.id, event, last_node, graph_path, graph_steps, explained_nodes
                         )
                         if streamed_values is not None:
                             result = streamed_values
