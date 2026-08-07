@@ -112,6 +112,13 @@ def build_factory_agent_spec(root: Path | None = None) -> AgentSpec | None:
             "existing software project."
         ),
         tools=["factory_brain"],
+        task_contract={
+            "task_kinds": ["agent_package_lifecycle"],
+            "task_kind_descriptions": {
+                "agent_package_lifecycle": "Design, create, configure, validate, stage, approve, reject, or promote a specialist agent package as the requested deliverable."
+            },
+            "default_task_kind": "agent_package_lifecycle",
+        },
         extensions={"knowledge_db": str(project_root / "data" / "knowledge_store.sqlite3")},
         runtime={
             "mode": "factory_brain",

@@ -78,8 +78,9 @@ def test_factory_add_change_disable_lifecycle_without_hub_restart(monkeypatch, t
 
     build_calls: list[list[str]] = []
 
-    def _fake_build_graph(self):
-        build_calls.append([spec.id for spec in self._registry])
+    def _fake_build_graph(self, registry=None):
+        active = self._registry if registry is None else registry
+        build_calls.append([spec.id for spec in active])
         return _FakeGraph("ok")
 
     # `_load_specialists` here is the real generic loader pointed at a real
@@ -107,7 +108,9 @@ def test_factory_add_change_disable_lifecycle_without_hub_restart(monkeypatch, t
 
     orchestrator.invoke("ping")
     assert [spec.id for spec in orchestrator.registry] == ["widget-forge"]
-    assert build_calls[-1] == ["widget-forge"]
+    # Reconciliation sees the newly registered agent, but because this legacy
+    # fixture advertises no task_contract it is not eligible for dispatch.
+    assert build_calls[-2:] == [["widget-forge"], []]
 
     # 3. Factory changes its purpose/workflow. Hub refreshes it and rebuilds
     # the tool bound to it — no restart.
@@ -125,8 +128,8 @@ def test_factory_add_change_disable_lifecycle_without_hub_restart(monkeypatch, t
     assert orchestrator.registry[0].purpose.startswith(
         "Primary responsibility: Forge PREMIUM widgets only."
     )
-    assert len(build_calls) == calls_before_change + 1
-    assert build_calls[-1] == ["widget-forge"]
+    assert len(build_calls) == calls_before_change + 2
+    assert build_calls[-2:] == [["widget-forge"], []]
 
     # 4. Factory disables it — this is how Factory's own `delete` command
     # works: the directory is removed from the enabled registry. Hub stops
@@ -264,7 +267,7 @@ def test_ai_tech_lead_shaped_full_back_and_forth_workflow_through_hub(monkeypatc
     ]
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _FakeGraph("unused"))
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _FakeGraph("unused"))
 
     orchestrator = HubOrchestrator()
     orchestrator.set_current_project(str(project_dir))

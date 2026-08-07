@@ -13,13 +13,14 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool as lc_tool
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
+from pydantic import BaseModel
 
 from .checkpointer import get_checkpointer
 from .config import DEFAULT_MODEL
@@ -179,6 +180,86 @@ def _project_context_override_from_pending(pending: TaskRun) -> ProjectContext |
     )
 
 
+class RoutingDecision(BaseModel):
+    route: Literal["specialist", "direct", "clarify"]
+    task_kind: str | None = None
+    reason: str
+
+
+def _advertised_task_kinds(registry: list[AgentSpec]) -> set[str]:
+    kinds: set[str] = set()
+    for spec in registry:
+        kinds.update(spec.task_contract.get("task_kinds", []) or [])
+    return kinds
+
+
+def _eligible_agents_for_task_kind(registry: list[AgentSpec], task_kind: str) -> list[AgentSpec]:
+    return [
+        spec
+        for spec in registry
+        if task_kind in (spec.task_contract.get("task_kinds", []) or [])
+    ]
+
+
+def _classify_routing_request(
+    message: str,
+    registry: list[AgentSpec],
+    *,
+    model: str,
+) -> RoutingDecision:
+    """Classify against task kinds advertised by the live specialist registry.
+
+    Hub owns only the stable routing outcomes (specialist/direct/clarify). The
+    specialist task taxonomy is discovered from manifests at runtime; Hub has
+    no agent-name or task-keyword mapping.
+    """
+    advertised = sorted(_advertised_task_kinds(registry))
+    if not advertised:
+        return RoutingDecision(route="direct", task_kind=None, reason="No specialist task kinds are advertised.")
+
+    cards = []
+    for spec in registry:
+        kinds = spec.task_contract.get("task_kinds", []) or []
+        if not kinds:
+            continue
+        descriptions = spec.task_contract.get("task_kind_descriptions", {}) or {}
+        kind_lines = [
+            f"- {kind}: {descriptions.get(kind, 'No description supplied.')}"
+            for kind in kinds
+        ]
+        cards.append(
+            f"Agent: {spec.name}\n"
+            f"Task kinds:\n" + "\n".join(kind_lines) + f"\nPurpose:\n{spec.purpose}"
+        )
+    prompt = (
+        "Classify the operator request for routing.\n"
+        "Choose route='specialist' only when exactly one advertised task kind clearly describes the requested work. "
+        "For specialist routing, task_kind MUST be one of the advertised task kinds below. "
+        "Use route='direct' for ordinary conversation that does not require a specialist. "
+        "Use route='clarify' when the requested work is ambiguous or no advertised task kind clearly fits. "
+        "Do not choose an agent; choose only the task kind.\n\n"
+        f"Advertised task kinds: {', '.join(advertised)}\n\n"
+        + "\n\n".join(cards)
+        + f"\n\nOperator request:\n{message}"
+    )
+    llm = ChatOpenAI(model=model, temperature=0).with_structured_output(RoutingDecision)
+    decision = llm.invoke([HumanMessage(content=prompt)])
+    if decision.route == "specialist":
+        if decision.task_kind not in advertised:
+            raise RuntimeError(
+                f"Routing classifier returned unsupported task kind: {decision.task_kind!r}."
+            )
+        if not _eligible_agents_for_task_kind(registry, decision.task_kind):
+            raise RuntimeError(
+                f"Routing classifier selected task kind with no eligible specialist: {decision.task_kind!r}."
+            )
+    elif decision.task_kind is not None:
+        raise RuntimeError(
+            f"Routing classifier returned task_kind for route {decision.route!r}."
+        )
+    return decision
+
+
 def _emit_progress_update(update: ProgressUpdate) -> None:
     callback = get_current_progress_callback()
     if callback is None:
@@ -190,12 +271,10 @@ def _emit_progress_update(update: ProgressUpdate) -> None:
 
 _SYSTEM_PROMPT = """You are the Agent Hub orchestrator. You coordinate specialist AI agents.
 
-Select the specialist using only each tool's purpose. Treat the purpose as the
-complete routing contract: primary responsibility; select for; do not select for.
-Match the user's requested action to that contract.
-
-Use the purpose as the only routing contract. Do not infer specialist scope
-from an agent name, project name, or alias.
+The specialist tools available on this turn have already passed Hub's manifest-driven
+eligibility stage. If more than one specialist remains, choose among those eligible
+tools using each tool's purpose. Do not infer specialist scope from an agent name,
+project name, or alias.
 
 A named project is the target of the work, not automatically the specialist.
 A request naming a project is not routed to that project's own agent unless
@@ -1239,6 +1318,7 @@ class HubOrchestrator:
         learning_analyzer: Any = None,
         skill_store: Any = None,
         context_service: Any = None,
+        routing_classifier: Any = None,
     ) -> None:
         self._model = model
         self._registry = _load_specialists()
@@ -1249,6 +1329,7 @@ class HubOrchestrator:
         self._learning_analyzer = learning_analyzer or analyze_learning
         self._skill_store = skill_store or HubSkillStore()
         self._context_service = context_service or HubContextService()
+        self._routing_classifier = routing_classifier or _classify_routing_request
         self._learning_notify: Any = None
         self._learning_watermark: dict[str, Any] = {}
         logger.info(
@@ -1262,17 +1343,18 @@ class HubOrchestrator:
         )
         self._graph = self._build_graph()
 
-    def _build_graph(self) -> Any:
+    def _build_graph(self, registry: list[AgentSpec] | None = None) -> Any:
         store = get_knowledge_store()
         checkpointer = get_checkpointer()
+        active_registry = self._registry if registry is None else registry
 
-        agent_tools = [_make_agent_tool(s) for s in self._registry]
-        memory_tools = _build_memory_tools(store, self._registry)
+        agent_tools = [_make_agent_tool(s) for s in active_registry]
+        memory_tools = _build_memory_tools(store, active_registry)
         tools = agent_tools + memory_tools
 
         llm = ChatOpenAI(model=self._model, temperature=0)
 
-        agent_names = [spec.id for spec in self._registry]
+        agent_names = [spec.id for spec in active_registry]
         logger.info(
             "Building LangGraph react agent with model=%s, tools=%s, memory_tools=%s",
             self._model,
@@ -1951,6 +2033,31 @@ class HubOrchestrator:
         logger.debug("Invoking graph with session_id=%s", self._session_id)
         self._reconcile_registry()
         task_store = get_task_run_store()
+        routing = self._routing_classifier(message, self._registry, model=self._model)
+        eligible_registry = self._registry
+        if routing.route == "specialist":
+            assert routing.task_kind is not None
+            eligible_registry = _eligible_agents_for_task_kind(self._registry, routing.task_kind)
+            human_logger.info(
+                "Routing classified request as '%s'; eligible specialist(s): %s.",
+                routing.task_kind,
+                ", ".join(spec.name for spec in eligible_registry),
+            )
+        elif routing.route == "clarify":
+            human_logger.info("Routing needs clarification: %s", routing.reason)
+        else:
+            human_logger.info("Routing classified request as direct Hub conversation.")
+        if routing.route == "specialist":
+            request_graph = (
+                self._graph
+                if len(eligible_registry) == len(self._registry)
+                else self._build_graph(eligible_registry)
+            )
+        else:
+            # Direct/clarification turns must not retain specialist tools after
+            # the eligibility stage says no specialist should be dispatched.
+            # When the registry is already empty, the base graph is already safe.
+            request_graph = self._graph if not self._registry else self._build_graph([])
 
         project_key = _project_key_for_session(self._session_id)
         busy_run = task_store.get_active_or_paused_run_for_project(project_key)
@@ -1976,7 +2083,7 @@ class HubOrchestrator:
         thread_id = f"{self._session_id}:{project_key}"
         logger.debug("Task %s: project=%s thread_id=%s", task_run.id[:8], project_key, thread_id)
         _repair_dangling_tool_calls(
-            self._graph, thread_id, "Interrupted before the specialist could reply."
+            request_graph, thread_id, "Interrupted before the specialist could reply."
         )
         config = {"configurable": {"thread_id": thread_id}}
         usage_cb = UsageMetadataCallbackHandler()
@@ -1989,10 +2096,10 @@ class HubOrchestrator:
         explained_nodes: set[str] = set()
         try:
             with active_task_run(task_run.id, progress_callback=progress_notify):
-                if hasattr(self._graph, "stream"):
+                if hasattr(request_graph, "stream"):
                     result = None
                     last_node = None
-                    for event in self._graph.stream(
+                    for event in request_graph.stream(
                         {"messages": [HumanMessage(content=message)]},
                         config=run_config,
                         stream_mode=["tasks", "updates", "values"],
@@ -2005,7 +2112,7 @@ class HubOrchestrator:
                     if result is None:
                         raise RuntimeError("Orchestrator stream returned no final state.")
                 else:
-                    result = self._graph.invoke(
+                    result = request_graph.invoke(
                         {"messages": [HumanMessage(content=message)]},
                         config=run_config,
                     )

@@ -194,7 +194,7 @@ def test_widget_forge_discovered_and_dispatched_through_universal_envelope(
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
     monkeypatch.setattr(
-        HubOrchestrator, "_build_graph", lambda self: _UnusedGraph()
+        HubOrchestrator, "_build_graph", lambda self, registry=None: _UnusedGraph()
     )
 
     # 2. Initial dispatch, with an explicit user-provided reference. The
@@ -300,7 +300,7 @@ def test_widget_forge_resumes_a_generic_pending_decision_via_decide(
     ]
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _UnusedGraph())
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _UnusedGraph())
 
     orchestrator = HubOrchestrator()
     run = get_task_run_store().create_run(
@@ -369,7 +369,7 @@ def test_widget_forge_only_receives_context_its_manifest_accepts(monkeypatch, tm
     _ScriptedFakePopen.responses = [{"status": "success", "summary": "Forged 3 widgets."}]
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _UnusedGraph())
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _UnusedGraph())
 
     orchestrator = HubOrchestrator()
     orchestrator.set_current_project(str(working_directory))
@@ -408,7 +408,7 @@ def test_widget_forge_dispatch_fails_clearly_when_required_context_is_missing(
     _ScriptedFakePopen.responses = []
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _UnusedGraph())
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _UnusedGraph())
 
     orchestrator = HubOrchestrator()
     run = get_task_run_store().create_run(
@@ -450,7 +450,7 @@ def test_widget_forge_receives_versioned_project_context_when_compatible(
     _ScriptedFakePopen.responses = [{"status": "success", "summary": "Forged 3 widgets."}]
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _UnusedGraph())
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _UnusedGraph())
 
     orchestrator = HubOrchestrator()
     orchestrator.set_current_project(str(working_directory))
@@ -493,7 +493,7 @@ def test_widget_forge_dispatch_fails_clearly_on_incompatible_schema_version(
     _ScriptedFakePopen.responses = []
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _UnusedGraph())
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _UnusedGraph())
 
     orchestrator = HubOrchestrator()
     run = get_task_run_store().create_run(
@@ -530,7 +530,7 @@ def test_widget_forge_dispatch_omits_project_context_when_contract_not_declared(
     _ScriptedFakePopen.responses = [{"status": "success", "summary": "Forged 3 widgets."}]
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _UnusedGraph())
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _UnusedGraph())
 
     orchestrator = HubOrchestrator()
     orchestrator.set_current_project(str(working_directory))
@@ -598,7 +598,7 @@ def test_legacy_specialist_without_any_context_declarations_still_dispatches(
     _ScriptedFakePopen.responses = [{"status": "success", "summary": "Forged 3 widgets."}]
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _UnusedGraph())
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _UnusedGraph())
 
     orchestrator = HubOrchestrator()
     orchestrator.set_current_project(str(working_directory))

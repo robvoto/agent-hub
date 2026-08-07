@@ -131,7 +131,7 @@ def _dispatch_initial_task(monkeypatch, spec, task_text, references=None):
     _ScriptedFakePopen.calls = []
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _UnusedGraph())
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _UnusedGraph())
 
     orchestrator = HubOrchestrator()
     run = get_task_run_store().create_run(
@@ -221,7 +221,7 @@ def test_original_universal_context_survives_the_pause(monkeypatch, tmp_path):
     _ScriptedFakePopen.calls = []
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self: _UnusedGraph())
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None: _UnusedGraph())
 
     orchestrator = HubOrchestrator()
     run = get_task_run_store().create_run(
