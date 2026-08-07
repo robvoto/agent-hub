@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import re
 import logging
 import queue
 import subprocess
@@ -179,51 +178,6 @@ def _project_context_override_from_pending(pending: TaskRun) -> ProjectContext |
         metadata={},
     )
 
-
-
-
-_ROUTING_STOPWORDS = {
-    "a", "an", "and", "any", "anything", "as", "at", "be", "by", "else",
-    "for", "from", "in", "into", "is", "it", "new", "not", "of", "on",
-    "or", "other", "select", "specialist", "the", "to", "with",
-}
-
-
-def _routing_terms(text: str) -> set[str]:
-    terms: set[str] = set()
-    for raw in re.findall(r"[a-z0-9]+", text.lower()):
-        if raw in _ROUTING_STOPWORDS or len(raw) < 4:
-            continue
-        term = raw
-        for suffix in ("ing", "ed", "es", "s"):
-            if term.endswith(suffix) and len(term) - len(suffix) >= 4:
-                term = term[: -len(suffix)]
-                break
-        terms.add(term)
-    return terms
-
-
-def _purpose_exclusion(spec: AgentSpec) -> str | None:
-    marker = "do not select for:"
-    lower = spec.purpose.lower()
-    start = lower.find(marker)
-    if start < 0:
-        return None
-    return spec.purpose[start + len(marker):].strip() or None
-
-
-def _routing_exclusion_conflict(spec: AgentSpec, task: str) -> tuple[bool, list[str]]:
-    """Return a deterministic lexical conflict with the canonical exclusion clause.
-
-    This is intentionally a guard, not a second router. The LLM still chooses the
-    specialist from purpose text; this only prevents a dispatch when the chosen
-    specialist's own `Do not select for` clause materially overlaps the task.
-    """
-    exclusion = _purpose_exclusion(spec)
-    if not exclusion:
-        return False, []
-    overlap = sorted(_routing_terms(task) & _routing_terms(exclusion))
-    return bool(overlap), overlap
 
 def _emit_progress_update(update: ProgressUpdate) -> None:
     callback = get_current_progress_callback()
@@ -1190,27 +1144,6 @@ def _make_agent_tool(spec: AgentSpec) -> Any:
     @lc_tool(spec.id, description=description)
     def _call_agent(task: str, references: list[str] | None = None) -> str:
         task_run_id = get_current_task_run_id()
-        conflicts, matched_terms = _routing_exclusion_conflict(spec, task)
-        if conflicts:
-            exclusion = _purpose_exclusion(spec) or ""
-            _human_task_log(
-                task_run_id,
-                "Routing guard rejected %s: request conflicts with its 'Do not select for' clause (%s).",
-                spec.name,
-                ", ".join(matched_terms),
-            )
-            logger.warning(
-                "Task %s: routing guard rejected agent=%s matched_terms=%s exclusion=%r",
-                task_run_id,
-                spec.id,
-                matched_terms,
-                exclusion,
-            )
-            return (
-                f"ROUTING REJECTED for {spec.name}: this task conflicts with that specialist's "
-                f"'Do not select for' clause. Choose another specialist whose purpose matches, "
-                f"or ask the user for clarification. Conflicting terms: {', '.join(matched_terms)}."
-            )
         if task_run_id:
             get_task_run_store().transition(
                 task_run_id,
