@@ -1885,3 +1885,73 @@ def test_pending_run_disambiguates_by_currently_selected_project(monkeypatch, tm
     assert pending is not None
     assert pending.id == run_b.id
     assert pending.approval_token == "token-b"
+
+
+def test_routing_guard_blocks_manifest_exclusion_without_agent_hardcoding(monkeypatch, tmp_path, caplog):
+    spec = AgentSpec(
+        id="doc-governor",
+        name="Doc Governor",
+        purpose=(
+            "Primary responsibility: Govern specialist packages.\n"
+            "Select for: Creating and promoting specialist packages.\n"
+            "Do not select for: Changing documentation or modifying source code in existing software projects."
+        ),
+        runtime={
+            "mode": "subprocess",
+            "entrypoint": "fake-agent",
+            "working_directory": str(tmp_path),
+            "input_arg": "--input-json",
+            "output_arg": "--output-json",
+            "default_execution_mode": "execute",
+        },
+    )
+    popen_called = False
+
+    class _NeverPopen:
+        def __init__(self, *args, **kwargs):
+            nonlocal popen_called
+            popen_called = True
+
+    monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _NeverPopen)
+    run = get_task_run_store().create_run(
+        session_id="routing-guard-test",
+        user_message="Analyse Agent Hub and propose one tiny documentation-only improvement. Do not modify files.",
+    )
+    tool = _make_agent_tool(spec)
+
+    with caplog.at_level(logging.INFO, logger="agent_hub.human"):
+        with active_task_run(run.id):
+            result = tool.invoke(
+                "Analyse Agent Hub and propose one tiny documentation-only improvement. Do not modify files."
+            )
+
+    assert "ROUTING REJECTED" in result
+    assert "documentation" in result
+    assert popen_called is False
+    persisted = get_task_run_store().get_run(run.id)
+    assert persisted is not None
+    assert persisted.state == "received"
+    assert persisted.selected_agent_id is None
+    assert "Routing guard rejected Doc Governor" in caplog.text
+
+
+def test_routing_guard_allows_valid_creation_request(monkeypatch, tmp_path):
+    spec = AgentSpec(
+        id="package-maker",
+        name="Package Maker",
+        purpose=(
+            "Primary responsibility: Design specialist packages.\n"
+            "Select for: Creating, validating, staging, and promoting specialist packages.\n"
+            "Do not select for: Changing documentation or modifying source code in existing software projects."
+        ),
+        runtime={
+            "mode": "subprocess",
+            "entrypoint": "fake-agent",
+            "working_directory": str(tmp_path),
+            "input_arg": "--input-json",
+            "output_arg": "--output-json",
+            "default_execution_mode": "execute",
+        },
+    )
+    from agent_hub.orchestrator import _routing_exclusion_conflict
+    assert _routing_exclusion_conflict(spec, "Create and stage a new specialist package") == (False, [])
