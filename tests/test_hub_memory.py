@@ -430,3 +430,41 @@ def test_learning_analysis_prompt_requires_exact_slug_match_for_skill_updates():
     assert "unmistakably a correction or refinement of that exact same procedure" in prompt
     assert "not a related or adjacent one" in prompt
     assert "propose your own canonical skill_slug" in prompt
+
+
+def test_reinforce_auto_semantic_merges_evidence_provenance_and_recency(tmp_path):
+    manager = HubMemoryManager(SqliteStore(tmp_path / "knowledge.sqlite3"))
+    original = manager.record_auto_semantic(
+        "Agent Hub has a Google Sheets backlog.",
+        source="auto-extraction (session first)",
+        evidence=["run-1"],
+    )
+
+    reinforced = manager.reinforce_auto_semantic(
+        original.identifier,
+        source="auto-extraction (session second)",
+        evidence=["run-1", "run-2"],
+    )
+
+    assert reinforced is not None
+    assert reinforced.identifier == original.identifier
+    assert reinforced.value == original.value
+    assert reinforced.evidence == ("run-1", "run-2")
+    assert reinforced.provenance == (
+        "auto-extraction (session first)",
+        "auto-extraction (session second)",
+    )
+    assert reinforced.reinforcement_count == 1
+    assert reinforced.updated_at is not None
+    records = [r for r in manager.list_learnings(types=["semantic"]) if r.scope == "auto"]
+    assert len(records) == 1
+
+
+def test_reinforce_auto_semantic_refuses_operator_memory(tmp_path):
+    manager = HubMemoryManager(SqliteStore(tmp_path / "knowledge.sqlite3"))
+    operator = manager.learn("Operator fact.", source="telegram")
+
+    assert manager.reinforce_auto_semantic(
+        operator.identifier, source="auto-extraction", evidence=["run-1"]
+    ) is None
+    assert manager.list_learnings(types=["semantic"])[0].reinforcement_count == 0

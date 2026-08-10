@@ -2035,3 +2035,102 @@ def test_specialist_route_does_not_expose_shared_docs_as_competing_tool(monkeypa
 
     assert builds[0] == (["technical-delivery"], True)
     assert builds[-1] == (["technical-delivery"], False)
+
+
+def test_run_learning_pass_reinforces_equivalent_auto_memory_without_duplicate(monkeypatch):
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    monkeypatch.setattr(
+        HubOrchestrator,
+        "_build_graph",
+        lambda self, registry=None, **kwargs: _FakeGraph("unused"),
+    )
+    manager = HubMemoryManager()
+    existing = manager.record_auto_semantic(
+        "Agent Hub has a Google Sheets backlog.",
+        source="auto-extraction (session older)",
+        evidence=["old-run"],
+    )
+
+    def fake_extractor(conversation_text, existing_active_auto, existing_active_operator=()):
+        assert any(r.identifier == existing.identifier for r in existing_active_auto)
+        return [
+            ExtractionCandidate(
+                action="reinforce",
+                value="Agent Hub has a Google Sheets backlog.",
+                supersedes_id=existing.identifier,
+                confidence="high",
+            )
+        ]
+
+    orchestrator = HubOrchestrator(semantic_extractor=fake_extractor)
+    store = get_task_run_store()
+    run = store.create_run(session_id=orchestrator.session_id, user_message="Remember the backlog")
+    store.transition(run.id, TASK_STATE_SUCCEEDED, final_response="Noted")
+
+    messages = orchestrator.run_learning_pass(orchestrator.session_id)
+
+    assert messages == ["\U0001f9e0 Reinforced: Agent Hub has a Google Sheets backlog."]
+    auto = [r for r in HubMemoryManager().list_learnings(types=["semantic"]) if r.scope == "auto"]
+    assert len(auto) == 1
+    assert auto[0].identifier == existing.identifier
+    assert auto[0].reinforcement_count == 1
+    assert run.id in auto[0].evidence
+
+
+def test_run_learning_pass_exact_duplicate_add_is_reinforced_defensively(monkeypatch):
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    monkeypatch.setattr(
+        HubOrchestrator,
+        "_build_graph",
+        lambda self, registry=None, **kwargs: _FakeGraph("unused"),
+    )
+    existing = HubMemoryManager().record_auto_semantic(
+        "Prefers concise answers.", source="auto-extraction (session older)"
+    )
+
+    orchestrator = HubOrchestrator(
+        semantic_extractor=lambda *args, **kwargs: [
+            ExtractionCandidate(
+                action="add",
+                value="  PREFERS   concise answers.  ",
+                supersedes_id=None,
+                confidence="high",
+            )
+        ]
+    )
+    store = get_task_run_store()
+    run = store.create_run(session_id=orchestrator.session_id, user_message="Keep it concise")
+    store.transition(run.id, TASK_STATE_SUCCEEDED, final_response="Okay")
+
+    messages = orchestrator.run_learning_pass(orchestrator.session_id)
+
+    assert messages == ["\U0001f9e0 Reinforced: Prefers concise answers."]
+    auto = [r for r in HubMemoryManager().list_learnings(types=["semantic"]) if r.scope == "auto"]
+    assert len(auto) == 1
+    assert auto[0].identifier == existing.identifier
+    assert auto[0].reinforcement_count == 1
+
+
+def test_run_learning_pass_invalid_reinforce_target_fails_closed(monkeypatch):
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    monkeypatch.setattr(
+        HubOrchestrator,
+        "_build_graph",
+        lambda self, registry=None, **kwargs: _FakeGraph("unused"),
+    )
+    orchestrator = HubOrchestrator(
+        semantic_extractor=lambda *args, **kwargs: [
+            ExtractionCandidate(
+                action="reinforce",
+                value="Some fact.",
+                supersedes_id="mem-doesnotexist",
+                confidence="high",
+            )
+        ]
+    )
+    store = get_task_run_store()
+    run = store.create_run(session_id=orchestrator.session_id, user_message="Some fact")
+    store.transition(run.id, TASK_STATE_SUCCEEDED, final_response="Okay")
+
+    assert orchestrator.run_learning_pass(orchestrator.session_id) == []
+    assert HubMemoryManager().list_learnings(types=["semantic"]) == []

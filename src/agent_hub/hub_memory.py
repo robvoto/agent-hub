@@ -73,6 +73,9 @@ class LearningRecord:
     scope: MemoryScope = "operator"
     status: MemoryStatus = "active"
     evidence: tuple[str, ...] = field(default_factory=tuple)
+    provenance: tuple[str, ...] = field(default_factory=tuple)
+    reinforcement_count: int = 0
+    updated_at: datetime | None = None
 
 
 class HubMemoryManager:
@@ -153,6 +156,43 @@ class HubMemoryManager:
         self._compact_if_needed()
         return record
 
+    def reinforce_auto_semantic(
+        self, identifier: str, *, source: str, evidence: Iterable[str] = ()
+    ) -> LearningRecord | None:
+        """Merge repeated evidence into one active auto-semantic memory in place.
+
+        The memory id and fact text remain stable. Provenance/evidence are deduplicated,
+        updated_at is refreshed, and reinforcement_count records repeated confirmation.
+        Operator-authored memories are deliberately ineligible.
+        """
+        key = identifier.strip()
+        if not key:
+            return None
+        located = self._locate(key)
+        if located is None:
+            return None
+        memory_type, item = located
+        payload = dict(item.value or {})
+        if (
+            memory_type != "semantic"
+            or payload.get("scope") != "auto"
+            or payload.get("status", "active") != "active"
+        ):
+            return None
+
+        merged_evidence = list(dict.fromkeys([*(payload.get("evidence", []) or []), *evidence]))
+        existing_provenance = payload.get("provenance", []) or []
+        if not existing_provenance and payload.get("source"):
+            existing_provenance = [payload["source"]]
+        merged_provenance = list(dict.fromkeys([*existing_provenance, source]))
+        payload["evidence"] = merged_evidence
+        payload["provenance"] = merged_provenance
+        payload["reinforcement_count"] = int(payload.get("reinforcement_count", 0)) + 1
+        payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+        self._store.batch([PutOp(namespace=_namespace_for("semantic"), key=key, value=payload)])
+        updated = self._store.batch([GetOp(namespace=_namespace_for("semantic"), key=key)])[0]
+        return _item_to_record(updated) if updated is not None else None
+
     def _store_record(
         self,
         value: str,
@@ -179,6 +219,8 @@ class HubMemoryManager:
             "scope": scope,
             "status": status,
             "evidence": list(evidence_tuple),
+            "provenance": [source],
+            "reinforcement_count": 0,
             "created_at": now_iso,
             "updated_at": now_iso,
         }
@@ -312,6 +354,15 @@ class HubMemoryManager:
         )
 
 
+def _parse_optional_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
 def _item_to_record(item: object) -> LearningRecord:
     value = item.value or {}
     return LearningRecord(
@@ -326,6 +377,9 @@ def _item_to_record(item: object) -> LearningRecord:
         scope=str(value.get("scope", "operator")),
         status=str(value.get("status", "active")),
         evidence=tuple(value.get("evidence", []) or []),
+        provenance=tuple(value.get("provenance", []) or []),
+        reinforcement_count=int(value.get("reinforcement_count", 0) or 0),
+        updated_at=_parse_optional_datetime(value.get("updated_at")),
     )
 
 
@@ -380,7 +434,7 @@ def _summarize_learnings(records: list[LearningRecord]) -> str:
         raise
 
 
-ExtractionAction = Literal["add", "update", "skip"]
+ExtractionAction = Literal["add", "reinforce", "update", "skip"]
 ExtractionConfidence = Literal["high", "medium", "low"]
 
 _EXTRACTION_SYSTEM_PROMPT = (
@@ -396,13 +450,16 @@ _EXTRACTION_SYSTEM_PROMPT = (
     "Never propose 'update' against one of these ids. If the conversation "
     "seems to add, duplicate, or conflict with one of these, skip it instead.\n"
     "- Auto-inferred facts: extracted automatically on a previous pass. These "
-    "may be superseded by a clearer or corrected version.\n\n"
+    "may be reinforced when repeated or superseded by a clearer/corrected version.\n\n"
     "For each candidate fact you find, decide one of:\n"
-    "- add: a new fact with no existing match\n"
+    "- add: a genuinely new fact with no existing semantic match\n"
+    "- reinforce: the same fact is already present as a specific ACTIVE "
+    "AUTO-INFERRED memory; give its id so Hub can merge evidence/provenance "
+    "and refresh recency without creating another memory\n"
     "- update: a specific existing AUTO-INFERRED fact (give its id) should be "
-    "superseded by this newer/corrected one\n"
-    "- skip: not clear, not stable, ambiguous, already covered, or would "
-    "duplicate/conflict with an operator-established fact\n\n"
+    "superseded because the newer fact corrects or materially changes it\n"
+    "- skip: not clear, not stable, ambiguous, or would duplicate/conflict "
+    "with an operator-established fact\n\n"
     "Rate your confidence in each non-skip candidate as high, medium, or low. "
     "Only clearly-stated, unambiguous facts should be high confidence. "
     "Return an empty candidate list if there is nothing worth remembering."

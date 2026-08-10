@@ -1598,6 +1598,10 @@ class HubOrchestrator:
             r for r in existing_semantic if r.scope == "operator" and r.status == "active"
         ]
         operator_ids = {r.identifier for r in existing_active_operator}
+        auto_ids = {r.identifier for r in existing_active_auto}
+        exact_auto_by_value = {
+            " ".join(r.value.lower().split()): r for r in existing_active_auto if r.value.strip()
+        }
 
         try:
             candidates: list[ExtractionCandidate] = self._semantic_extractor(
@@ -1628,12 +1632,54 @@ class HubOrchestrator:
                     _truncate(candidate.value),
                 )
                 continue
-            if candidate.action == "update" and candidate.supersedes_id:
+            source = f"auto-extraction (session {session_id[:8]})"
+            evidence = [r.id for r in runs]
+            exact_match = exact_auto_by_value.get(" ".join(candidate.value.lower().split()))
+            if candidate.action == "add" and exact_match is not None:
+                record = manager.reinforce_auto_semantic(
+                    exact_match.identifier, source=source, evidence=evidence
+                )
+                if record is not None:
+                    human_logger.info(
+                        "Learning pass: exact duplicate reinforced %s: %s",
+                        record.identifier,
+                        record.value,
+                    )
+                    messages.append(f"\U0001f9e0 Reinforced: {record.value}")
+                continue
+            if candidate.action == "reinforce":
+                if not candidate.supersedes_id or candidate.supersedes_id not in auto_ids:
+                    logger.warning(
+                        "Learning pass: invalid reinforce target %s; skipping candidate: %s",
+                        candidate.supersedes_id,
+                        _truncate(candidate.value),
+                    )
+                    continue
+                record = manager.reinforce_auto_semantic(
+                    candidate.supersedes_id, source=source, evidence=evidence
+                )
+                if record is None:
+                    logger.warning(
+                        "Learning pass: reinforce target %s was not eligible; skipping.",
+                        candidate.supersedes_id,
+                    )
+                    continue
+                human_logger.info(
+                    "Learning pass: reinforced %s: %s", record.identifier, record.value
+                )
+                messages.append(f"\U0001f9e0 Reinforced: {record.value}")
+                continue
+            if candidate.action == "update":
+                if not candidate.supersedes_id or candidate.supersedes_id not in auto_ids:
+                    logger.warning(
+                        "Learning pass: invalid update target %s; skipping candidate: %s",
+                        candidate.supersedes_id,
+                        _truncate(candidate.value),
+                    )
+                    continue
                 manager.set_status(candidate.supersedes_id, "disabled")
             record = manager.record_auto_semantic(
-                candidate.value,
-                source=f"auto-extraction (session {session_id[:8]})",
-                evidence=[r.id for r in runs],
+                candidate.value, source=source, evidence=evidence
             )
             human_logger.info("Learning pass: stored %s: %s", record.identifier, record.value)
             messages.append(f"\U0001f9e0 Learned: {record.value}")
