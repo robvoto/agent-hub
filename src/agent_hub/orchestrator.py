@@ -7,8 +7,8 @@ import json
 import logging
 import queue
 import subprocess
-import threading
 import tempfile
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -36,6 +36,7 @@ from .hub_context import HubContextService
 from .hub_memory import (
     ExtractionCandidate,
     HubMemoryManager,
+    ResourcePromotionCandidate,
     analyze_learning,
     extract_semantic_candidates,
     format_forget_confirmation,
@@ -58,6 +59,12 @@ from .project_context import (
     ProjectContext,
     ProjectContextResolution,
     get_project_context_registry,
+)
+from .project_resources import (
+    BACKLOG_RESOURCE_TYPE,
+    ProjectResource,
+    build_backlog_reference,
+    get_project_resource_registry,
 )
 from .registry import (
     AgentSpec,
@@ -153,7 +160,9 @@ def _resolve_project_context_for_task_run(task_run_id: str | None) -> ProjectCon
     run = get_task_run_store().get_run(task_run_id)
     if run is None:
         return ProjectContextResolution(context=None, error=None)
-    return get_project_context_registry().resolve_for_dispatch(run.session_id)
+    return get_project_context_registry().resolve_for_request(
+        run.session_id, run.user_message
+    )
 
 
 def _project_context_override_from_pending(pending: TaskRun) -> ProjectContext | None:
@@ -178,6 +187,93 @@ def _project_context_override_from_pending(pending: TaskRun) -> ProjectContext |
         fingerprint=pending.context.get("agent_dispatch_project_fingerprint") or "",
         metadata={},
     )
+
+
+def _promote_learning_resource(
+    session_id: str,
+    record: Any,
+    candidate: ResourcePromotionCandidate | None,
+    *,
+    source: str,
+) -> ProjectResource | None:
+    """Validate one explicit-learning resource proposal before persisting it.
+
+    Semantic memory is always stored separately. Promotion is intentionally
+    narrower than memory: only high-confidence backlog metadata with the
+    fields needed by the existing provider-neutral backlog reference contract
+    is accepted, and it is bound to the currently selected canonical project.
+    """
+    if candidate is None:
+        return None
+    if candidate.confidence != "high":
+        logger.info(
+            "Learning %s: resource promotion skipped because confidence was %s.",
+            record.identifier,
+            candidate.confidence,
+        )
+        return None
+    if candidate.resource_type != BACKLOG_RESOURCE_TYPE:
+        logger.info(
+            "Learning %s: resource promotion skipped for unsupported type %r.",
+            record.identifier,
+            candidate.resource_type,
+        )
+        return None
+
+    location = candidate.location
+    if not isinstance(location, dict):
+        return None
+    spreadsheet_id = location.get("spreadsheet_id")
+    sheet_name = location.get("sheet_name")
+    if (
+        not isinstance(spreadsheet_id, str)
+        or not spreadsheet_id.strip()
+        or not isinstance(sheet_name, str)
+        or not sheet_name.strip()
+    ):
+        logger.info(
+            "Learning %s: backlog resource promotion skipped because spreadsheet_id "
+            "and sheet_name were not both supplied.",
+            record.identifier,
+        )
+        return None
+
+    resolution = get_project_context_registry().resolve_for_dispatch(session_id)
+    if resolution.error:
+        logger.info(
+            "Learning %s: resource promotion skipped because the selected project "
+            "could not be revalidated: %s",
+            record.identifier,
+            resolution.error,
+        )
+        return None
+    if resolution.context is None:
+        logger.info(
+            "Learning %s: resource promotion skipped because no canonical project is selected.",
+            record.identifier,
+        )
+        return None
+
+    memory_source = f"memory:{record.identifier}"
+    try:
+        return get_project_resource_registry().register_backlog(
+            resolution.context,
+            location=location,
+            source=memory_source,
+            provenance=(source, memory_source),
+            metadata={
+                "memory_id": record.identifier,
+                "memory_type": record.type,
+                "memory_scope": record.scope,
+            },
+        )
+    except (TypeError, ValueError) as exc:
+        logger.warning(
+            "Learning %s: validated resource promotion could not be stored: %s",
+            record.identifier,
+            exc,
+        )
+        return None
 
 
 class RoutingDecision(BaseModel):
@@ -272,16 +368,18 @@ def _emit_progress_update(update: ProgressUpdate) -> None:
 _SYSTEM_PROMPT = """You are the Agent Hub orchestrator. You coordinate specialist AI agents.
 
 The specialist tools available on this turn have already passed Hub's manifest-driven
-eligibility stage. If more than one specialist remains, choose among those eligible
-tools using each tool's purpose. Do not infer specialist scope from an agent name,
-project name, or alias.
+eligibility stage for the classified advertised task kind. If more than one specialist
+remains, choose only among those eligible tools. Use their advertised task-contract
+capabilities and input/lifecycle contracts as the authority; purpose is descriptive
+context, not a substitute for an advertised capability. Do not infer specialist scope
+from an agent name, project name, or alias.
 
 A named project is the target of the work, not automatically the specialist.
 A request naming a project is not routed to that project's own agent unless
-that agent's purpose is the one being asked for.
+the specialist advertises the task capability being requested.
 
 When a user sends a request:
-1. Select the correct agent from your tool list based only on their purpose.
+1. Select only from the already eligible specialist tools for this request.
 2. Call that agent's tool with a clear, bounded task description.
 3. Return the agent's result to the user.
 
@@ -294,8 +392,7 @@ Do not answer coding, research, or creation tasks yourself — that is the speci
 
 If the agent returns a clarification question, relay it to the user verbatim.
 If the agent requires approval, tell the user exactly what needs approval and wait.
-If no purpose clearly matches the request, ask the user for clarification instead
-of guessing."""
+If the selected specialist asks for clarification, relay it instead of guessing."""
 
 
 def _build_system_prompt(state: Any) -> list[Any]:
@@ -476,11 +573,44 @@ def _consume_graph_stream_event(
 def _accepted_context_keys(spec: AgentSpec) -> set[str]:
     """`input_contract.accepted_context` this specialist declares (see
     `_resolve_dispatch_context`); a specialist with no declaration is
-    treated as accepting both universal context keys."""
+    treated as accepting the legacy project_root/references keys only."""
     input_contract = spec.input_contract
     if "accepted_context" in input_contract:
         return set(input_contract.get("accepted_context") or [])
+    for field_name in ("optional_fields", "optional"):
+        declared = input_contract.get(field_name)
+        if isinstance(declared, list):
+            return set(declared)
     return {"project_root", "references"}
+
+
+_UNSET_RESOURCE_OVERRIDE = object()
+
+
+def _resolve_backlog_reference_for_dispatch(
+    spec: AgentSpec,
+    project_context: ProjectContext | None,
+    *,
+    task: str,
+    references: list[str] | None,
+) -> tuple[dict[str, str] | None, str | None]:
+    """Resolve one project backlog row only for specialists that advertise it."""
+    if "backlog_reference" not in _accepted_context_keys(spec):
+        return None, None
+    if project_context is None:
+        return None, None
+
+    resolution = get_project_resource_registry().resolve_for_request(
+        project_context,
+        resource_type=BACKLOG_RESOURCE_TYPE,
+        request_text=task,
+        references=references or (),
+    )
+    if resolution.error:
+        return None, resolution.error
+    if resolution.resource is None:
+        return None, None
+    return build_backlog_reference(resolution.resource, item_id=resolution.item_id), None
 
 
 def _resolve_dispatch_context(
@@ -604,6 +734,8 @@ def _dispatch_subprocess(
     decision: dict[str, Any] | None = None,
     project_root_override: str | None = None,
     project_context_override: ProjectContext | None = None,
+    backlog_reference_override: dict[str, str] | None | object = _UNSET_RESOURCE_OVERRIDE,
+    task_kind: str | None = None,
 ) -> dict:
     """Invoke a subprocess specialist and return its structured JSON output.
 
@@ -632,11 +764,33 @@ def _dispatch_subprocess(
         project_context = resolution.context
         project_context_error = resolution.error
         project_root = project_context.root if project_context is not None else None
+    if backlog_reference_override is _UNSET_RESOURCE_OVERRIDE:
+        backlog_reference, backlog_resource_error = _resolve_backlog_reference_for_dispatch(
+            spec,
+            project_context,
+            task=task,
+            references=references,
+        )
+    else:
+        backlog_reference = backlog_reference_override
+        backlog_resource_error = None
+
     project_root, references, missing_context = _resolve_dispatch_context(
         spec, project_root=project_root, references=references
     )
-    if project_context_error and "project_root" in _accepted_context_keys(spec):
+    required_context = set(spec.input_contract.get("required_context") or [])
+    if "backlog_reference" in required_context and not backlog_reference:
+        missing_context.append("backlog_reference")
+    accepted_context = _accepted_context_keys(spec)
+    resource_context_accepted = (
+        "project_root" in accepted_context or "backlog_reference" in accepted_context
+    )
+    if project_context_error and resource_context_accepted:
         output = {"status": "failed", "summary": project_context_error}
+        _record_agent_status(spec, output, task_run_id)
+        return output
+    if backlog_resource_error:
+        output = {"status": "failed", "summary": backlog_resource_error}
         _record_agent_status(spec, output, task_run_id)
         return output
     if missing_context:
@@ -699,6 +853,8 @@ def _dispatch_subprocess(
                 "agent_dispatch_project_id": envelope_project_id,
                 "agent_dispatch_project_contract_version": envelope_project_contract_version,
                 "agent_dispatch_project_fingerprint": envelope_project_fingerprint,
+                "agent_dispatch_backlog_reference": backlog_reference,
+                "agent_dispatch_task_kind": task_kind,
                 "governed_skills": _governed_skill_metadata(governed_skills),
                 "pinned_agent_spec": dataclasses.asdict(spec),
                 "pinned_agent_version": spec.version,
@@ -738,6 +894,13 @@ def _dispatch_subprocess(
             )
         else:
             logger.debug("Dispatching %s with no references", spec.id)
+        if backlog_reference:
+            _human_task_log(
+                task_run_id,
+                "Passing resolved backlog resource to %s: %s",
+                spec.name,
+                json.dumps(backlog_reference, sort_keys=True),
+            )
         input_data = build_task_envelope(
             task=task,
             request_id=request_id,
@@ -745,12 +908,14 @@ def _dispatch_subprocess(
             source="agent-hub",
             execution_mode=runtime["default_execution_mode"],
             progress_jsonl=str(progress_file),
+            task_kind=task_kind,
             project_root=project_root,
             project_id=envelope_project_id,
             project_contract_version=envelope_project_contract_version,
             project_fingerprint=envelope_project_fingerprint,
             project_context=envelope_project_context,
             references=references,
+            backlog_reference=backlog_reference,
             human_approved=human_approved,
             approval_token=approval_token,
             resume=resume,
@@ -1215,7 +1380,7 @@ def _update_manifest_cache(spec: AgentSpec, output: dict) -> None:
         get_manifest_cache().update_reference(spec.id, reference)
 
 
-def _make_agent_tool(spec: AgentSpec) -> Any:
+def _make_agent_tool(spec: AgentSpec, *, task_kind: str | None = None) -> Any:
     """Create a LangChain tool that dispatches to the registered agent."""
     mode = spec.runtime["mode"]
     description = get_manifest_cache().description_for(spec)
@@ -1232,7 +1397,13 @@ def _make_agent_tool(spec: AgentSpec) -> Any:
             )
         if mode == "subprocess":
             return _format_output(
-                spec, _dispatch_subprocess(spec, task, references=references)
+                spec,
+                _dispatch_subprocess(
+                    spec,
+                    task,
+                    references=references,
+                    task_kind=task_kind,
+                ),
             )
         if mode == "factory_brain":
             return _format_output(spec, _dispatch_factory_brain(spec, task))
@@ -1348,12 +1519,13 @@ class HubOrchestrator:
         registry: list[AgentSpec] | None = None,
         *,
         include_memory_tools: bool = True,
+        task_kind: str | None = None,
     ) -> Any:
         store = get_knowledge_store()
         checkpointer = get_checkpointer()
         active_registry = self._registry if registry is None else registry
 
-        agent_tools = [_make_agent_tool(s) for s in active_registry]
+        agent_tools = [_make_agent_tool(s, task_kind=task_kind) for s in active_registry]
         memory_tools = _build_memory_tools(store, active_registry) if include_memory_tools else []
         tools = agent_tools + memory_tools
 
@@ -1442,9 +1614,30 @@ class HubOrchestrator:
 
     def pending_run(self) -> TaskRun | None:
         project_key = _project_key_for_session(self._session_id)
-        return get_task_run_store().get_latest_paused_run(
+        store = get_task_run_store()
+        pending = store.get_latest_paused_run(
             self._session_id, project_key=project_key
         )
+        if pending is not None:
+            return pending
+
+        # A request may explicitly target a known project other than the
+        # operator's live /project selection. Once that task has dispatched,
+        # its pinned context is the safe resume authority. Only consider runs
+        # that actually recorded such a pin; older unpinned runs retain the
+        # existing project-scoped disambiguation behavior.
+        pinned = [
+            run
+            for run in store.list_runs(self._session_id)
+            if run.state
+            in {
+                TASK_STATE_WAITING_CLARIFICATION,
+                TASK_STATE_WAITING_APPROVAL,
+                TASK_STATE_WAITING_DECISION,
+            }
+            and run.context.get("agent_dispatch_project_id")
+        ]
+        return pinned[-1] if len(pinned) == 1 else None
 
     def current_run_status(self) -> str:
         run = get_task_run_store().get_latest_active_or_paused_run(self._session_id)
@@ -1474,6 +1667,13 @@ class HubOrchestrator:
         updated_record = manager.reclassify(record.identifier, memory_type=decision.memory_type)
         if updated_record is not None:
             record = updated_record
+
+        promoted_resource = _promote_learning_resource(
+            self._session_id,
+            record,
+            decision.resource_promotion,
+            source=source,
+        )
 
         skill_result = None
         if decision.action_kind == "skill":
@@ -1516,6 +1716,11 @@ class HubOrchestrator:
             relevant_skills=relevant_skills,
             relevant_docs=relevant_docs,
             skill_result=skill_result,
+            resource_promotion=(
+                f"Project resource updated: {promoted_resource.resource_type}."
+                if promoted_resource is not None
+                else None
+            ),
         )
 
     def memory(self) -> str:
@@ -1634,6 +1839,22 @@ class HubOrchestrator:
                 continue
             source = f"auto-extraction (session {session_id[:8]})"
             evidence = [r.id for r in runs]
+
+            def promote_resource(record: Any) -> None:
+                promoted = _promote_learning_resource(
+                    session_id,
+                    record,
+                    candidate.resource_promotion,
+                    source=source,
+                )
+                if promoted is not None:
+                    human_logger.info(
+                        "Learning pass: updated project resource %s from memory %s.",
+                        promoted.resource_type,
+                        record.identifier,
+                    )
+                    messages.append(f"\U0001f9ed Resource updated: {promoted.resource_type}")
+
             exact_match = exact_auto_by_value.get(" ".join(candidate.value.lower().split()))
             if candidate.action == "add" and exact_match is not None:
                 record = manager.reinforce_auto_semantic(
@@ -1646,6 +1867,7 @@ class HubOrchestrator:
                         record.value,
                     )
                     messages.append(f"\U0001f9e0 Reinforced: {record.value}")
+                    promote_resource(record)
                 continue
             if candidate.action == "reinforce":
                 if not candidate.supersedes_id or candidate.supersedes_id not in auto_ids:
@@ -1668,6 +1890,7 @@ class HubOrchestrator:
                     "Learning pass: reinforced %s: %s", record.identifier, record.value
                 )
                 messages.append(f"\U0001f9e0 Reinforced: {record.value}")
+                promote_resource(record)
                 continue
             if candidate.action == "update":
                 if not candidate.supersedes_id or candidate.supersedes_id not in auto_ids:
@@ -1683,6 +1906,7 @@ class HubOrchestrator:
             )
             human_logger.info("Learning pass: stored %s: %s", record.identifier, record.value)
             messages.append(f"\U0001f9e0 Learned: {record.value}")
+            promote_resource(record)
 
         self._learning_watermark[session_id] = runs[-1].created_at
         return messages
@@ -1778,6 +2002,10 @@ class HubOrchestrator:
                     project_root_override=pending.context.get("agent_dispatch_project_root"),
                     project_context_override=_project_context_override_from_pending(pending),
                     references=pending.context.get("agent_dispatch_references"),
+                    backlog_reference_override=pending.context.get(
+                        "agent_dispatch_backlog_reference"
+                    ),
+                    task_kind=pending.context.get("agent_dispatch_task_kind"),
                 )
         return self._finalize_specialist_follow_up(pending.id, spec, output)
 
@@ -1879,6 +2107,10 @@ class HubOrchestrator:
                     project_root_override=pending.context.get("agent_dispatch_project_root"),
                     project_context_override=_project_context_override_from_pending(pending),
                     references=pending.context.get("agent_dispatch_references"),
+                    backlog_reference_override=pending.context.get(
+                        "agent_dispatch_backlog_reference"
+                    ),
+                    task_kind=pending.context.get("agent_dispatch_task_kind"),
                 )
             else:
                 resumed_task = (
@@ -1889,6 +2121,13 @@ class HubOrchestrator:
                     spec,
                     resumed_task,
                     request_id=pending.context.get("agent_request_id"),
+                    project_root_override=pending.context.get("agent_dispatch_project_root"),
+                    project_context_override=_project_context_override_from_pending(pending),
+                    references=pending.context.get("agent_dispatch_references"),
+                    backlog_reference_override=pending.context.get(
+                        "agent_dispatch_backlog_reference"
+                    ),
+                    task_kind=pending.context.get("agent_dispatch_task_kind"),
                 )
         return self._finalize_specialist_follow_up(pending.id, spec, output)
 
@@ -1977,6 +2216,10 @@ class HubOrchestrator:
                 project_root_override=pending.context.get("agent_dispatch_project_root"),
                 project_context_override=_project_context_override_from_pending(pending),
                 references=pending.context.get("agent_dispatch_references"),
+                backlog_reference_override=pending.context.get(
+                    "agent_dispatch_backlog_reference"
+                ),
+                task_kind=pending.context.get("agent_dispatch_task_kind"),
             )
         return self._finalize_specialist_follow_up(pending.id, spec, output)
 
@@ -2106,6 +2349,7 @@ class HubOrchestrator:
             request_graph = self._build_graph(
                 eligible_registry,
                 include_memory_tools=False,
+                task_kind=routing.task_kind,
             )
         else:
             # Direct/clarification turns must not retain specialist tools after
@@ -2113,7 +2357,19 @@ class HubOrchestrator:
             # When the registry is already empty, the base graph is already safe.
             request_graph = self._graph if not self._registry else self._build_graph([])
 
-        project_key = _project_key_for_session(self._session_id)
+        project_resolution = get_project_context_registry().resolve_for_request(
+            self._session_id, message
+        )
+        if project_resolution.error:
+            return (
+                "I cannot safely resolve the project for this request. "
+                f"{project_resolution.error}"
+            )
+        project_key = (
+            project_resolution.context.project_id
+            if project_resolution.context is not None
+            else _project_key_for_session(self._session_id)
+        )
         busy_run = task_store.get_active_or_paused_run_for_project(project_key)
         if busy_run is not None:
             human_logger.info(

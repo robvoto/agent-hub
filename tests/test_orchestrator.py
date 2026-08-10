@@ -13,7 +13,12 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from agent_hub.hub_context import HubContextService
-from agent_hub.hub_memory import ExtractionCandidate, HubMemoryManager, LearningAnalysis
+from agent_hub.hub_memory import (
+    ExtractionCandidate,
+    HubMemoryManager,
+    LearningAnalysis,
+    ResourcePromotionCandidate,
+)
 from agent_hub.hub_skills import HubSkillStore
 from agent_hub.knowledge_store import SqliteStore
 from agent_hub.orchestrator import (
@@ -25,6 +30,8 @@ from agent_hub.orchestrator import (
     _repair_dangling_tool_calls,
     cancel_all_active_tasks,
 )
+from agent_hub.project_context import get_project_context_registry
+from agent_hub.project_resources import get_project_resource_registry
 from agent_hub.registry import AgentSpec
 from agent_hub.task_control import TaskCancelled, get_task_control_registry
 from agent_hub.task_runs import (
@@ -834,6 +841,72 @@ def test_learn_memory_only_stores_semantic_by_default(monkeypatch, tmp_path):
     assert len(stored) == 1
     assert stored[0].type == "semantic"
     assert reply == "Learned: Rob prefers tabs over spaces."
+
+
+def test_learn_promotes_only_valid_high_confidence_backlog_metadata(
+    monkeypatch, tmp_path
+):
+    def fake_analyzer(value, existing_operator, relevant_skills, relevant_docs):
+        return LearningAnalysis(
+            restated_lesson=value,
+            memory_type="semantic",
+            action_kind="memory_only",
+            suggestion="Nothing else to do.",
+            code_change_needed=False,
+            resource_promotion=ResourcePromotionCandidate(
+                resource_type="backlog",
+                location={
+                    "spreadsheet_id": "sheet-123",
+                    "sheet_name": "Backlog",
+                },
+                confidence="high",
+            ),
+        )
+
+    orchestrator = _make_learn_orchestrator(
+        monkeypatch, tmp_path, learning_analyzer=fake_analyzer
+    )
+    orchestrator.set_current_project(str(tmp_path))
+
+    reply = orchestrator.learn("Agent Hub's backlog is this Google Sheet.", source="cli")
+
+    context = get_project_context_registry().get(orchestrator.session_id)
+    assert context is not None
+    project = get_project_resource_registry().list(context)
+    assert len(project) == 1
+    assert project[0].resource_type == "backlog"
+    assert project[0].location == {
+        "spreadsheet_id": "sheet-123",
+        "sheet_name": "Backlog",
+    }
+    assert project[0].provenance == ("cli", f"memory:{project[0].metadata['memory_id']}")
+    assert "Project resource updated: backlog." in reply
+
+
+def test_learn_does_not_promote_low_confidence_or_unselected_project(
+    monkeypatch, tmp_path
+):
+    def fake_analyzer(value, existing_operator, relevant_skills, relevant_docs):
+        return LearningAnalysis(
+            restated_lesson=value,
+            memory_type="semantic",
+            action_kind="memory_only",
+            suggestion="Nothing else to do.",
+            code_change_needed=False,
+            resource_promotion=ResourcePromotionCandidate(
+                resource_type="backlog",
+                location={"spreadsheet_id": "sheet-123", "sheet_name": "Backlog"},
+                confidence="low",
+            ),
+        )
+
+    orchestrator = _make_learn_orchestrator(
+        monkeypatch, tmp_path, learning_analyzer=fake_analyzer
+    )
+    orchestrator.learn("The backlog may be this sheet.", source="cli")
+
+    context = get_project_context_registry().get(orchestrator.session_id)
+    assert context is None
 
 
 def test_learn_stores_procedural_memory_when_classified_procedural(monkeypatch, tmp_path):
@@ -1726,6 +1799,53 @@ def test_run_learning_pass_stores_high_confidence_candidate(monkeypatch):
     assert run.id in stored[0].evidence
 
 
+def test_run_learning_pass_promotes_high_confidence_resource_candidate(monkeypatch, tmp_path):
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    monkeypatch.setattr(
+        HubOrchestrator,
+        "_build_graph",
+        lambda self, registry=None, **kwargs: _FakeGraph("unused"),
+    )
+
+    def fake_extractor(conversation_text, existing_active_auto, existing_active_operator=()):
+        return [
+            ExtractionCandidate(
+                action="add",
+                value="Agent Hub has a Google Sheets backlog.",
+                supersedes_id=None,
+                confidence="high",
+                resource_promotion=ResourcePromotionCandidate(
+                    resource_type="backlog",
+                    location={
+                        "spreadsheet_id": "sheet-123",
+                        "sheet_name": "Backlog",
+                    },
+                    confidence="high",
+                ),
+            )
+        ]
+
+    orchestrator = HubOrchestrator(semantic_extractor=fake_extractor)
+    orchestrator.set_current_project(str(tmp_path))
+    store = get_task_run_store()
+    run = store.create_run(
+        session_id=orchestrator.session_id, user_message="Remember the backlog"
+    )
+    store.transition(run.id, TASK_STATE_SUCCEEDED, final_response="Noted")
+
+    messages = orchestrator.run_learning_pass(orchestrator.session_id)
+
+    context = get_project_context_registry().get(orchestrator.session_id)
+    assert context is not None
+    resources = get_project_resource_registry().list(context)
+    assert len(resources) == 1
+    assert resources[0].location == {
+        "spreadsheet_id": "sheet-123",
+        "sheet_name": "Backlog",
+    }
+    assert any("Resource updated: backlog" in message for message in messages)
+
+
 def test_run_learning_pass_shows_extractor_existing_operator_records(monkeypatch):
     """The extractor must see Rob's explicit /learn facts, not just auto ones,
     so it can avoid duplicating or conflicting with them."""
@@ -2014,7 +2134,9 @@ def test_specialist_route_does_not_expose_shared_docs_as_competing_tool(monkeypa
 
     builds: list[tuple[list[str], bool]] = []
 
-    def _fake_build_graph(self, registry=None, *, include_memory_tools=True):
+    def _fake_build_graph(
+        self, registry=None, *, include_memory_tools=True, task_kind=None
+    ):
         active = self._registry if registry is None else registry
         builds.append(([spec.id for spec in active], include_memory_tools))
         return _FakeGraph("Done")

@@ -123,3 +123,88 @@ def test_resolve_for_dispatch_stops_when_identity_changed_underneath(tmp_path):
     assert resolution.context is None
     assert resolution.error is not None
     assert "no longer matches" in resolution.error
+
+
+def test_resolve_for_request_uses_one_known_project_alias(tmp_path):
+    project_a = tmp_path / "alpha"
+    project_b = tmp_path / "beta"
+    project_a.mkdir()
+    project_b.mkdir()
+    registry = ProjectContextRegistry()
+    context_a = registry.set("session-a", str(project_a))
+    context_b = registry.set("session-b", str(project_b))
+
+    resolution = registry.resolve_for_request("session-empty", "Code work for beta")
+
+    assert resolution.error is None
+    assert resolution.context == context_b
+    assert resolution.context != context_a
+
+
+def test_resolve_for_request_falls_back_to_current_project_without_project_reference(tmp_path):
+    project = tmp_path / "alpha"
+    project.mkdir()
+    registry = ProjectContextRegistry()
+    context = registry.set("session-1", str(project))
+
+    resolution = registry.resolve_for_request("session-1", "Code AGENT-HUB-123")
+
+    assert resolution.error is None
+    assert resolution.context == context
+
+
+def test_resolve_for_request_honors_explicit_known_project_over_current(tmp_path):
+    project_a = tmp_path / "alpha"
+    project_b = tmp_path / "beta"
+    project_a.mkdir()
+    project_b.mkdir()
+    registry = ProjectContextRegistry()
+    registry.set("session-a", str(project_a))
+    context_b = registry.set("session-b", str(project_b))
+    registry.set("operator", str(project_a))
+
+    resolution = registry.resolve_for_request("operator", "project:beta Code AGENT-HUB-123")
+
+    assert resolution.error is None
+    assert resolution.context == context_b
+
+
+def test_resolve_for_request_stops_on_unknown_explicit_project(tmp_path):
+    project = tmp_path / "alpha"
+    project.mkdir()
+    registry = ProjectContextRegistry()
+    registry.set("session-1", str(project))
+
+    resolution = registry.resolve_for_request("session-1", "project:unknown Code AGENT-HUB-123")
+
+    assert resolution.context is None
+    assert resolution.error is not None
+    assert "unknown project" in resolution.error
+
+
+def test_resolve_for_request_stops_on_ambiguous_known_alias(tmp_path):
+    project_a = tmp_path / "a" / "shared"
+    project_b = tmp_path / "b" / "shared"
+    project_a.mkdir(parents=True)
+    project_b.mkdir(parents=True)
+    registry = ProjectContextRegistry()
+    registry.set("session-a", str(project_a))
+    registry.set("session-b", str(project_b))
+
+    resolution = registry.resolve_for_request("session-empty", "Code shared")
+
+    assert resolution.context is None
+    assert resolution.error is not None
+    assert "multiple known projects" in resolution.error
+
+
+def test_ticket_like_identifier_does_not_resolve_by_project_name_prefix(tmp_path):
+    project = tmp_path / "AGENT-HUB"
+    project.mkdir()
+    registry = ProjectContextRegistry()
+    registry.set("session-known", str(project))
+
+    resolution = registry.resolve_for_request("session-empty", "Code AGENT-HUB-123")
+
+    assert resolution.context is None
+    assert resolution.error is None

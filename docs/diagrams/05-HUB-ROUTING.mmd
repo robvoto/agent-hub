@@ -3,27 +3,44 @@ sequenceDiagram
     participant Bot as Telegram or CLI entry
     participant Runs as Task run store
     participant Orch as Hub orchestrator
-    participant Mem as Hub memory store
-    participant Reg as Agent registry
+    participant Ctx as Canonical project context
+    participant Mem as Bounded Hub memory
+    participant Reg as Specialist manifests
+    participant Res as Project resources
     participant Agent as Selected specialist
 
-    You->>Bot: user request
-    Bot->>Runs: create task run (received)
+    You->>Bot: operator request
     Bot->>Orch: forward message
+    Orch->>Ctx: resolve request project against known canonical metadata
+    Ctx-->>Orch: one canonical target, current /project fallback, or safe error
 
-    Note over Orch,Mem: Hub reads saved operator preferences before routing<br/>This is context lookup, not new learning
+    Note over Orch,Mem: bounded context lookup, not new learning
     Orch->>Mem: load relevant preferences
     Mem-->>Orch: active preference records
 
-    Orch->>Reg: load enabled specialists
-    Reg-->>Orch: callable agent specs
+    Orch->>Reg: load specialist manifests
+    Reg-->>Orch: advertised task kinds and contracts
 
-    Orch->>Orch: LLM chooses best specialist
+    Orch->>Orch: classify advertised task kind
+    Orch->>Orch: deterministically filter eligible specialists
+    Orch->>Res: resolve required resources for canonical target project
+    Res-->>Orch: exact resource, no match, or safe ambiguity error
+    Note over Orch,Res: backlog reference = stored source + exact item ID from request
     Orch->>Runs: transition routed
-    Orch->>Agent: dispatch bounded task
+    Orch->>Agent: dispatch bounded task envelope<br/>only advertised resource fields included
     Orch->>Runs: transition dispatched -> in_progress
 
+    loop progress and pause-resume as needed
+        Agent-->>Orch: bounded progress or pause state
+        Orch->>Runs: persist progress / pause state
+    end
     Agent-->>Orch: structured result
     Orch->>Runs: finalize succeeded or paused state
     Orch-->>Bot: operator-facing response
     Bot-->>You: result, question, or approval prompt
+
+    opt explicit governed teaching
+        You->>Bot: /learn operational resource fact
+        Bot->>Orch: store memory and validate promotion
+        Orch->>Res: upsert resource with provenance
+    end

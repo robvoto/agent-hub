@@ -22,16 +22,18 @@ from __future__ import annotations
 
 import configparser
 import hashlib
+import re
 import threading
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from langgraph.store.base import GetOp, PutOp
+from langgraph.store.base import GetOp, PutOp, SearchOp
 
 from .knowledge_store import get_knowledge_store
 
 _NAMESPACE = ("hub", "project_context")
+_EXPLICIT_PROJECT_RE = re.compile(r"\bproject\s*[:=]\s*([A-Za-z0-9][^\s,;]*)", re.IGNORECASE)
 
 PROJECT_CONTRACT_VERSION = 1
 """Schema version of the `ProjectContext` Hub persists and dispatches. Bump
@@ -177,6 +179,20 @@ class ProjectContextRegistry:
         with self._lock:
             self._store.batch([PutOp(namespace=_NAMESPACE, key=session_id, value=None)])
 
+    def list_known(self) -> list[ProjectContext]:
+        """Return canonical contexts already known to Hub, without adding identity state."""
+        with self._lock:
+            results = self._store.batch(
+                [SearchOp(namespace_prefix=_NAMESPACE, limit=1000, offset=0)]
+            )[0]
+        contexts: dict[tuple[str, str, str], ProjectContext] = {}
+        for item in results or []:
+            if not item.value:
+                continue
+            context = ProjectContext.from_dict(item.value)
+            contexts[(context.project_id, context.root, context.fingerprint)] = context
+        return sorted(contexts.values(), key=lambda context: (context.project_id, context.root))
+
     def resolve_for_dispatch(self, session_id: str) -> ProjectContextResolution:
         """Revalidate the persisted selection against the filesystem right now.
 
@@ -190,6 +206,71 @@ class ProjectContextRegistry:
         stored = self.get(session_id)
         if stored is None:
             return ProjectContextResolution(context=None, error=None)
+
+        return self._revalidate(stored)
+
+    def resolve_for_request(
+        self, session_id: str, request_text: str
+    ) -> ProjectContextResolution:
+        """Resolve a project named by a request, bounded by known contexts.
+
+        Exact known aliases (canonical project ID, root, remote, or the
+        existing metadata name) may identify one project. A ``project:...`` or
+        ``project=...`` marker makes an unknown value an explicit error. With
+        no project reference, the valid current /project selection is the
+        only fallback. No ticket syntax is interpreted as project identity.
+        """
+        current = self.resolve_for_dispatch(session_id)
+        explicit_value_match = _EXPLICIT_PROJECT_RE.search(request_text or "")
+        explicit_value = explicit_value_match.group(1).strip() if explicit_value_match else None
+        known = self.list_known()
+
+        if explicit_value is not None:
+            matches = [
+                context
+                for context in known
+                if any(_same_alias(explicit_value, alias) for alias in _context_aliases(context))
+            ]
+            if not matches:
+                return ProjectContextResolution(
+                    context=None,
+                    error=(
+                        f"The request explicitly names unknown project '{explicit_value}'. "
+                        "Use /project <path> or name a known project."
+                    ),
+                )
+            if len(matches) > 1:
+                return ProjectContextResolution(
+                    context=None,
+                    error=(
+                        f"The request's project '{explicit_value}' matches multiple known "
+                        "projects; refusing to choose one."
+                    ),
+                )
+            return self._revalidate(matches[0])
+
+        matches = [
+            context
+            for context in known
+            if any(
+                _contains_alias(request_text or "", alias)
+                for alias in _context_aliases(context)
+            )
+        ]
+        if len(matches) > 1:
+            return ProjectContextResolution(
+                context=None,
+                error="The request matches multiple known projects; refusing to choose one.",
+            )
+        if len(matches) == 1:
+            return self._revalidate(matches[0])
+        if current.error:
+            return current
+        return current
+
+    @staticmethod
+    def _revalidate(stored: ProjectContext) -> ProjectContextResolution:
+        """Revalidate one persisted canonical context against its current root."""
 
         root = Path(stored.root)
         if not root.is_dir():
@@ -213,6 +294,27 @@ class ProjectContextRegistry:
                 ),
             )
         return ProjectContextResolution(context=stored, error=None)
+
+
+def _context_aliases(context: ProjectContext) -> tuple[str, ...]:
+    values = (
+        context.project_id,
+        context.root,
+        context.metadata.get("name"),
+        context.metadata.get("remote"),
+    )
+    return tuple(
+        dict.fromkeys(str(value).strip() for value in values if value and str(value).strip())
+    )
+
+
+def _same_alias(value: str, alias: str) -> bool:
+    return value.strip().casefold() == alias.strip().casefold()
+
+
+def _contains_alias(text: str, alias: str) -> bool:
+    pattern = rf"(?<![A-Za-z0-9_-]){re.escape(alias)}(?![A-Za-z0-9_-])"
+    return re.search(pattern, text, flags=re.IGNORECASE) is not None
 
 
 _registry: ProjectContextRegistry | None = None

@@ -22,6 +22,7 @@ This documentation is primarily operational context for coding agents and the Hu
 - `src/agent_hub/hub_skills.py` — governed versioned runtime skills
 - `src/agent_hub/hub_context.py` — bounded authoritative documentation context
 - `src/agent_hub/project_context.py` — canonical selected-project identity
+- `src/agent_hub/project_resources.py` — persistent typed resources associated with canonical projects
 
 ## Source-of-truth rules
 

@@ -95,7 +95,8 @@ class ManifestCache:
     def description_for(self, spec: Any) -> str:
         """Build the routing description for an agent tool.
 
-        `spec.purpose` is the complete routing contract. Factory owns writing
+        `spec.purpose` is descriptive context for an already capability-eligible
+        specialist, not a substitute for the task contract. Factory owns writing
         and validating it; Hub uses that field unchanged.
         """
         return f"{spec.name}: {spec.purpose}"

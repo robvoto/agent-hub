@@ -24,7 +24,7 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 from langgraph.store.base import GetOp, PutOp, SearchOp
@@ -443,7 +443,9 @@ _EXTRACTION_SYSTEM_PROMPT = (
     "correction about Rob or how Hub should behave that is worth remembering "
     "long-term. Do not invent anything not actually said. Do not propose "
     "changes to routing, permissions, budgets, safety rules, prompts, or "
-    "code — only personal facts and preferences belong here.\n\n"
+    "code. A clearly stated project-owned resource may be represented separately "
+    "as structured resource_promotion metadata, but arbitrary operational prose "
+    "must remain memory only.\n\n"
     "You are given two kinds of existing remembered facts, each with an id:\n"
     "- Operator-established facts: Rob stated these explicitly via /learn. "
     "They are authoritative and can only be changed by Rob doing that again. "
@@ -466,11 +468,27 @@ _EXTRACTION_SYSTEM_PROMPT = (
 )
 
 
+class _ResourcePromotionModel(BaseModel):
+    resource_type: str
+    location: dict[str, Any]
+    confidence: ExtractionConfidence
+
+
+@dataclass(frozen=True)
+class ResourcePromotionCandidate:
+    """Structured, model-proposed metadata eligible for governed validation."""
+
+    resource_type: str
+    location: dict[str, Any]
+    confidence: ExtractionConfidence
+
+
 class _ExtractionCandidateModel(BaseModel):
     action: ExtractionAction
     value: str
     supersedes_id: str | None = None
     confidence: ExtractionConfidence
+    resource_promotion: _ResourcePromotionModel | None = None
 
 
 class _ExtractionResponse(BaseModel):
@@ -483,6 +501,7 @@ class ExtractionCandidate:
     value: str
     supersedes_id: str | None
     confidence: ExtractionConfidence
+    resource_promotion: ResourcePromotionCandidate | None = None
 
 
 def extract_semantic_candidates(
@@ -517,7 +536,8 @@ def extract_semantic_candidates(
         "\n".join(f"- {r.identifier}: {r.value}" for r in existing_active_auto) or "(none yet)"
     )
     human_content = (
-        f"Operator-established facts (authoritative; do not update/supersede):\n{operator_block}\n\n"
+        "Operator-established facts (authoritative; do not update/supersede):\n"
+        f"{operator_block}\n\n"
         f"Auto-inferred facts (may be superseded):\n{auto_block}\n\n"
         f"Recent conversation:\n{conversation_text}"
     )
@@ -563,6 +583,15 @@ def extract_semantic_candidates(
             value=c.value.strip(),
             supersedes_id=c.supersedes_id,
             confidence=c.confidence,
+            resource_promotion=(
+                ResourcePromotionCandidate(
+                    resource_type=c.resource_promotion.resource_type.strip(),
+                    location=dict(c.resource_promotion.location),
+                    confidence=c.resource_promotion.confidence,
+                )
+                if c.resource_promotion is not None
+                else None
+            ),
         )
         for c in response.candidates
         if c.action != "skip" and c.value.strip()
@@ -629,7 +658,14 @@ _LEARNING_ANALYSIS_SYSTEM_PROMPT = (
     "can still imply one.\n\n"
     "You are shown existing operator-established facts, Hub's existing relevant "
     "skills, and relevant authoritative documentation, so you don't recommend or "
-    "duplicate something already known, already a skill, or already documented."
+    "duplicate something already known, already a skill, or already documented.\n\n"
+    "Optionally return resource_promotion only when the lesson explicitly and "
+    "unambiguously identifies a project-owned resource. This is a separate, "
+    "governed metadata proposal — it does not replace or rewrite the semantic "
+    "memory. The proposal must contain a non-empty resource_type, a structured "
+    "JSON object location/identifier, and high confidence. Do not turn arbitrary "
+    "conversation text into resource metadata, do not invent a project identity, "
+    "and omit resource_promotion when the resource type or location is unclear."
 )
 
 
@@ -642,6 +678,7 @@ class _LearningAnalysisModel(BaseModel):
     skill_slug: str | None = None
     skill_title: str | None = None
     skill_body: str | None = None
+    resource_promotion: _ResourcePromotionModel | None = None
 
 
 @dataclass(frozen=True)
@@ -654,6 +691,7 @@ class LearningAnalysis:
     skill_slug: str | None = None
     skill_title: str | None = None
     skill_body: str | None = None
+    resource_promotion: ResourcePromotionCandidate | None = None
 
 
 def analyze_learning(
@@ -740,6 +778,15 @@ def analyze_learning(
         )
         raise
 
+    raw_promotion = response.resource_promotion
+    resource_promotion = None
+    if raw_promotion is not None:
+        resource_promotion = ResourcePromotionCandidate(
+            resource_type=raw_promotion.resource_type.strip(),
+            location=dict(raw_promotion.location),
+            confidence=raw_promotion.confidence,
+        )
+
     return LearningAnalysis(
         restated_lesson=response.restated_lesson.strip(),
         memory_type=response.memory_type,
@@ -749,6 +796,7 @@ def analyze_learning(
         skill_slug=(response.skill_slug or "").strip() or None,
         skill_title=(response.skill_title or "").strip() or None,
         skill_body=(response.skill_body or "").strip() or None,
+        resource_promotion=resource_promotion,
     )
 
 
@@ -842,6 +890,7 @@ def format_learning_confirmation(
     relevant_skills: list = (),
     relevant_docs: list = (),
     skill_result: object | None = None,
+    resource_promotion: str | None = None,
 ) -> str:
     """Return a concise operator-facing confirmation.
 
@@ -868,6 +917,9 @@ def format_learning_confirmation(
             )
         elif not skill_result.accepted:
             lines.append("The learning was saved; no reusable skill was changed.")
+
+    if resource_promotion:
+        lines.append(resource_promotion)
 
     return "\n".join(lines)
 

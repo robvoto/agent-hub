@@ -60,6 +60,13 @@ def _isolate_project_context_registry(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_project_resource_registry(monkeypatch):
+    import agent_hub.project_resources as pr_mod
+
+    monkeypatch.setattr(pr_mod, "_registry", None)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_learning_mode_registry(monkeypatch):
     import agent_hub.learning_mode as lm_mod
 

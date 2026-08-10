@@ -64,3 +64,20 @@ def test_governed_skills_are_included_only_when_selected():
 
     assert _base_envelope(governed_skills=skills)["governed_skills"] == skills
     assert "governed_skills" not in _base_envelope(governed_skills=[])
+
+
+def test_backlog_reference_is_included_only_when_resolved():
+    reference = {
+        "project_key": "git@example.com:org/repo",
+        "spreadsheet_id": "sheet-123",
+        "sheet_name": "Backlog",
+        "item_id": "AGENT-HUB-999",
+    }
+
+    assert _base_envelope(backlog_reference=reference)["backlog_reference"] == reference
+    assert "backlog_reference" not in _base_envelope(backlog_reference=None)
+
+
+def test_advertised_task_kind_is_included_when_classified():
+    assert _base_envelope(task_kind="backlog_refinement")["task_kind"] == "backlog_refinement"
+    assert "task_kind" not in _base_envelope(task_kind=None)

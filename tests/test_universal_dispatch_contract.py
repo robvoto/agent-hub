@@ -25,6 +25,8 @@ import logging
 from pathlib import Path
 
 from agent_hub.orchestrator import HubOrchestrator, _make_agent_tool
+from agent_hub.project_context import get_project_context_registry
+from agent_hub.project_resources import get_project_resource_registry
 from agent_hub.registry import load_registry
 from agent_hub.task_runs import (
     TASK_STATE_DISPATCHED,
@@ -382,6 +384,99 @@ def test_widget_forge_only_receives_context_its_manifest_accepts(monkeypatch, tm
 
     assert _ScriptedFakePopen.calls[0]["project_root"] == str(working_directory)
     assert "references" not in _ScriptedFakePopen.calls[0]
+
+
+def test_compatible_specialist_receives_resolved_backlog_reference(monkeypatch, tmp_path):
+    registry_dir = tmp_path / "agents"
+    working_directory = tmp_path / "workdir"
+    working_directory.mkdir()
+    _write_fake_specialist_manifest(
+        registry_dir,
+        working_directory,
+        input_contract_overrides={
+            "accepted_context": ["project_root", "backlog_reference"],
+        },
+    )
+    spec = load_registry(registry_dir)[0]
+    _ScriptedFakePopen.calls = []
+    _ScriptedFakePopen.responses = [{"status": "success", "summary": "Done."}]
+    monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
+    monkeypatch.setattr(
+        HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph()
+    )
+
+    orchestrator = HubOrchestrator()
+    orchestrator.set_current_project(str(working_directory))
+    context = get_project_context_registry().get(orchestrator.session_id)
+    assert context is not None
+    get_project_resource_registry().register_backlog(
+        context,
+        location={
+            "spreadsheet_id": "sheet-123",
+            "sheet_name": "Backlog",
+        },
+        source="memory:backlog",
+    )
+    registered = get_project_resource_registry().list(
+        context, resource_type="backlog"
+    )
+    assert len(registered) == 1
+    assert "item_id" not in registered[0].location
+    assert "item_id" not in registered[0].metadata
+    run = get_task_run_store().create_run(
+        session_id=orchestrator.session_id, user_message="Code AGENT-HUB-123"
+    )
+
+    with active_task_run(run.id):
+        _make_agent_tool(spec).invoke({"task": "Code AGENT-HUB-123"})
+
+    assert _ScriptedFakePopen.calls[0]["backlog_reference"] == {
+        "project_key": context.project_id,
+        "spreadsheet_id": "sheet-123",
+        "sheet_name": "Backlog",
+        "item_id": "AGENT-HUB-123",
+    }
+
+
+def test_incompatible_specialist_does_not_receive_backlog_reference(monkeypatch, tmp_path):
+    registry_dir = tmp_path / "agents"
+    working_directory = tmp_path / "workdir"
+    working_directory.mkdir()
+    _write_fake_specialist_manifest(
+        registry_dir,
+        working_directory,
+        input_contract_overrides={"accepted_context": ["project_root"]},
+    )
+    spec = load_registry(registry_dir)[0]
+    _ScriptedFakePopen.calls = []
+    _ScriptedFakePopen.responses = [{"status": "success", "summary": "Done."}]
+    monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
+    monkeypatch.setattr(
+        HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph()
+    )
+
+    orchestrator = HubOrchestrator()
+    orchestrator.set_current_project(str(working_directory))
+    context = get_project_context_registry().get(orchestrator.session_id)
+    assert context is not None
+    get_project_resource_registry().register_backlog(
+        context,
+        location={
+            "spreadsheet_id": "sheet-123",
+            "sheet_name": "Backlog",
+        },
+        source="memory:backlog",
+    )
+    run = get_task_run_store().create_run(
+        session_id=orchestrator.session_id, user_message="Work on AGENT-HUB-123"
+    )
+
+    with active_task_run(run.id):
+        _make_agent_tool(spec).invoke({"task": "Work on AGENT-HUB-123"})
+
+    assert "backlog_reference" not in _ScriptedFakePopen.calls[0]
 
 
 def test_widget_forge_dispatch_fails_clearly_when_required_context_is_missing(

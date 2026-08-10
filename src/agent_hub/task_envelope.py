@@ -22,12 +22,14 @@ def build_task_envelope(
     source: str,
     execution_mode: str,
     progress_jsonl: str,
+    task_kind: str | None = None,
     project_root: str | None = None,
     project_id: str | None = None,
     project_contract_version: int | None = None,
     project_fingerprint: str | None = None,
     project_context: dict[str, Any] | None = None,
     references: list[str] | None = None,
+    backlog_reference: dict[str, Any] | None = None,
     human_approved: bool = False,
     approval_token: str | None = None,
     resume: Any | None = None,
@@ -75,6 +77,8 @@ def build_task_envelope(
         "execution_mode": execution_mode,
         "progress_jsonl": progress_jsonl,
     }
+    if task_kind:
+        envelope["task_kind"] = task_kind
     if project_root:
         envelope["project_root"] = project_root
         if project_id:
@@ -85,6 +89,8 @@ def build_task_envelope(
             envelope["project_fingerprint"] = project_fingerprint
     if references:
         envelope["references"] = list(references)
+    if backlog_reference is not None:
+        envelope["backlog_reference"] = dict(backlog_reference)
     if project_context is not None:
         envelope["project_context"] = project_context
     if human_approved:
