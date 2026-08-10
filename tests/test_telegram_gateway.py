@@ -1213,3 +1213,72 @@ def test_run_telegram_releases_the_lock_after_it_exits(monkeypatch, tmp_path):
     # And a fresh instance can start immediately afterward.
     second = singleton_lock.acquire_singleton_lock("telegram-gateway")
     second.release()
+
+
+def test_waiting_progress_does_not_duplicate_terminal_decision_in_live_status(monkeypatch):
+    sent: list[dict] = []
+    edited: list[dict] = []
+
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway._send_message",
+        lambda token, chat_id, text, *, parse_mode="Markdown": sent.append(
+            {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
+        )
+        or [400 + len(sent) - 1],
+    )
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway._edit_message",
+        lambda token, chat_id, message_id, text, *, parse_mode=None: edited.append(
+            {"chat_id": chat_id, "message_id": message_id, "text": text}
+        )
+        or True,
+    )
+
+    now = datetime.now(timezone.utc)
+    decision = "[AI Tech Lead] Decision needed: Choose a recovery action."
+
+    def _invoke(message, *, progress_notify=None):
+        run_id = _create_active_run()
+        progress_notify(
+            ProgressUpdate(
+                run_id=run_id,
+                event_type="start",
+                phase="starting",
+                human_summary="AI Tech Lead started.",
+                occurred_at=now,
+            )
+        )
+        progress_notify(
+            ProgressUpdate(
+                run_id=run_id,
+                event_type="phase",
+                phase="planning",
+                human_summary="Preparing an implementation plan.",
+                occurred_at=now + timedelta(seconds=5),
+                sequence=1,
+            )
+        )
+        progress_notify(
+            ProgressUpdate(
+                run_id=run_id,
+                event_type="waiting",
+                phase="waiting_decision",
+                human_summary=decision,
+                occurred_at=now + timedelta(seconds=6),
+                sequence=2,
+            )
+        )
+        return decision
+
+    orch = SimpleNamespace(
+        pending_run=lambda: None,
+        invoke=_invoke,
+        registry=[SimpleNamespace(id="ai-tech-lead", name="AI Tech Lead")],
+        set_learning_notifier=lambda callback: None,
+    )
+    gateway = TelegramGateway("token-123", orch)
+    gateway._process_user_message(42, "Do it")
+
+    assert sent[-1]["text"] == decision
+    assert sum(decision in item["text"] for item in sent) == 1
+    assert all(decision not in item["text"] for item in edited)

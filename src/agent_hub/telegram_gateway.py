@@ -573,7 +573,10 @@ class TelegramGateway:
         human_logger.info("Hub Telegram gateway stopped by user (Ctrl-C).")
 
     def _meaningful_specialist_summary(self, run: Any, update: ProgressUpdate) -> str | None:
-        if update.event_type in {"heartbeat", "start", "failure"}:
+        # Terminal/action-required events are delivered separately as the operator
+        # message. Do not copy their full payload into the live progress message,
+        # otherwise Telegram shows the same decision/clarification twice.
+        if update.event_type in {"heartbeat", "start", "waiting", "completed", "failure"}:
             return None
         summary = " ".join(update.human_summary.split())
         if not summary:
