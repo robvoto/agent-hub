@@ -203,38 +203,27 @@ class TelegramGateway:
     def _help_text() -> str:
         return (
             "Agent Hub\n"
-            "Send a plain message to dispatch it to a specialist agent "
-            "(e.g. AI Tech Lead). Slash commands control the hub itself:\n\n"
-            "/agents - list registered specialist agents\n"
-            "/agents-refresh - re-read the specialist registry now and show what changed\n"
-            "/agents-status - show registry health (versions, fingerprints, invalid "
-            "manifests) without refreshing\n"
-            "/approve - approve a task waiting on approval\n"
+            "Send a plain message to dispatch work. Commands:\n\n"
+            "/new - start a fresh conversation; paused work is preserved\n"
+            "/tasks - list all active/paused tasks\n"
+            "/resume <id> - select a paused task to continue\n"
+            "/status - show details for this conversation's current task\n"
+            "/stop [id] - cancel the current task, or a specific task\n"
+            "/reset - cancel the current task and start a fresh conversation\n"
+            "/reset-all - cancel all active/paused tasks and start fresh\n"
+            "/approve - approve the current task when requested\n"
+            "/reject [reason] - reject the current task when requested\n"
+            "/project [<path>|clear] - set/show/clear the target project\n"
+            "/hub-status - show Hub status\n"
+            "/last - show the most recently finished task\n"
+            "/agents - list registered specialists\n"
+            "/agents-refresh - refresh specialist registry\n"
+            "/agents-status - show specialist registry health\n"
+            "/learn <fact> - store an explicit learning\n"
+            "/learn-mode [on|off] - set/show persistent automatic learning preference\n"
+            "/memory - list stored learnings\n"
             "/forget <id> - remove a stored learning\n"
             "/help - show this\n"
-            "/hub-status - show the hub startup summary without starting a new "
-            "conversation\n"
-            "/last - show the most recently finished task\n"
-            "/learn <fact> - store an explicit learning and get a recommended next action\n"
-            "/learn-mode [on|off] - toggle automatic background learning "
-            "(off by default; shows status with no argument)\n"
-            "/memory - list stored learnings\n"
-            "/new - start a fresh conversation; keep active work running\n"
-            "/project [<path>|clear] - set/show/clear the target project "
-            "passed to specialists (shows current with no argument)\n"
-            "/reject [reason] - reject a task waiting on approval\n"
-            "/reset - stop the active specialist tree here, then start a fresh conversation\n"
-            "/status - show the active or paused task\n"
-            "/stop - cancel the active task and its specialist tree; keep this conversation\n"
-            "\n"
-            "Thread model:\n"
-            "Reply normally to continue a clarification pause in the same thread.\n"
-            "Use /approve to continue an approval pause in the same thread.\n"
-            "Reply with the option number or name to continue a decision pause; /status shows\n"
-            "the options a paused specialist last reported.\n"
-            "/new starts a fresh empty thread; it is not a fork.\n"
-            "Cancelled work from /stop or /reset is not resumable.\n"
-            "There is no /fork or generic /resume command yet.\n"
         )
 
     def _handle_message(self, msg: dict) -> None:
@@ -265,6 +254,13 @@ class TelegramGateway:
 
         if text == "/reset":
             reply = self._orch.reset_session()
+            with self._progress_lock:
+                self._live_progress_messages.clear()
+            _send_message(self._token, chat_id, reply, parse_mode=None)
+            return
+
+        if text == "/reset-all":
+            reply = self._orch.reset_all()
             with self._progress_lock:
                 self._live_progress_messages.clear()
             _send_message(self._token, chat_id, reply, parse_mode=None)
@@ -305,6 +301,16 @@ class TelegramGateway:
                 self._orch.current_run_status(),
                 parse_mode=None,
             )
+            return
+
+        if text == "/tasks":
+            _send_message(self._token, chat_id, self._orch.tasks_status(), parse_mode=None)
+            return
+
+        if text == "/resume" or text.startswith("/resume "):
+            identifier = text[len("/resume"):].strip()
+            reply = "Usage: /resume <id>" if not identifier else self._orch.resume_task(identifier)
+            _send_message(self._token, chat_id, reply, parse_mode=None)
             return
 
         if text == "/last":
@@ -364,8 +370,9 @@ class TelegramGateway:
             _send_message(self._token, chat_id, reply, parse_mode=None)
             return
 
-        if text == "/stop":
-            reply = self._orch.stop_current_task()
+        if text == "/stop" or text.startswith("/stop "):
+            identifier = text[len("/stop"):].strip() or None
+            reply = self._orch.stop_current_task(identifier=identifier)
             _send_message(self._token, chat_id, reply, parse_mode=None)
             return
 
@@ -397,9 +404,10 @@ class TelegramGateway:
         # itself rejects a new task for a project that already has one
         # in flight, so the gateway just dispatches every message and lets
         # that per-project check produce the "already running" reply.
+        request_started_at = datetime.now(timezone.utc)
         worker = threading.Thread(
             target=self._process_user_message,
-            args=(chat_id, text),
+            args=(chat_id, text, request_started_at),
             daemon=True,
         )
         with self._workers_lock:
@@ -442,7 +450,9 @@ class TelegramGateway:
 
         return next_offset
 
-    def _process_user_message(self, chat_id: int, text: str) -> None:
+    def _process_user_message(
+        self, chat_id: int, text: str, request_started_at: datetime | None = None
+    ) -> None:
         try:
             pending = self._orch.pending_run()
             if pending is not None and pending.state == "waiting_decision":
@@ -459,6 +469,7 @@ class TelegramGateway:
                 reply = self._orch.invoke(
                     text,
                     progress_notify=lambda update: self._notify_progress(chat_id, update),
+                    request_started_at=request_started_at,
                 )
         except TaskCancelled:
             logger.info("Task was cancelled before completion message delivery.")
@@ -604,7 +615,20 @@ class TelegramGateway:
         lines = [f"{self._agent_display_name(run)} is working", ""]
         if summary:
             lines.extend([summary, ""])
-        elapsed = rendered_at - run.created_at.astimezone(timezone.utc)
+        lifecycle_started_at = run.created_at.astimezone(timezone.utc)
+        stored_started_at = run.context.get("request_started_at")
+        if isinstance(stored_started_at, str):
+            try:
+                lifecycle_started_at = datetime.fromisoformat(stored_started_at).astimezone(
+                    timezone.utc
+                )
+            except ValueError:
+                logger.warning(
+                    "Run %s has invalid request_started_at=%r; falling back to created_at.",
+                    run.id[:8],
+                    stored_started_at,
+                )
+        elapsed = rendered_at - lifecycle_started_at
         if elapsed.total_seconds() < 0:
             elapsed = timedelta(0)
         lines.append(f"Elapsed: {self._format_elapsed(elapsed.total_seconds())}")

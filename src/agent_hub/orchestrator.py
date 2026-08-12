@@ -1589,6 +1589,39 @@ class HubOrchestrator:
             return "Reset complete. Stopped the active task and started a fresh conversation."
         return "Reset complete. Started a fresh conversation."
 
+    def reset_all(self) -> str:
+        store = get_task_run_store()
+        active_or_paused = [
+            run for run in store.list_runs()
+            if is_active_state(run.state) or is_paused_state(run.state)
+        ]
+
+        cancelled = 0
+        for run in active_or_paused:
+            handle = get_task_control_registry().request_cancel(
+                run.id, "Reset all by user"
+            )
+            current = store.get_run(run.id)
+            if current is not None and not is_terminal_state(current.state):
+                store.transition(
+                    run.id,
+                    TASK_STATE_CANCELLED,
+                    detail="Human cancelled all active/paused tasks via /reset-all.",
+                    selected_agent_id=run.selected_agent_id,
+                    final_response="Cancelled by /reset-all.",
+                    cancellation_reason="Reset all by user",
+                    raw_result={"status": "cancelled", "summary": "Reset all by user"},
+                )
+                cancelled += 1
+            if handle is not None:
+                handle.mark_stop_reply_sent()
+
+        self._rotate_session(carry_active_work=False)
+        return (
+            f"Reset all complete. Cancelled {cancelled} active/paused task(s) and "
+            "started a fresh conversation."
+        )
+
     def hub_status(self) -> str:
         """Report the same startup metadata as /new without rotating the session."""
         return self._hub_summary("Agent Hub status")
@@ -1598,7 +1631,12 @@ class HubOrchestrator:
         project = get_project_context_registry().get(self._session_id)
         project_label = project.metadata.get("name", project.root) if project else "none"
         active_run = get_task_run_store().get_latest_active_or_paused_run(self._session_id)
-        active_label = "none" if active_run is None else active_run.state
+        if active_run is None:
+            active_label = "none"
+        else:
+            backlog_reference = active_run.context.get("agent_dispatch_backlog_reference") or {}
+            task_identifier = backlog_reference.get("item_id") or active_run.id[:8]
+            active_label = f"{task_identifier} — {active_run.state}"
         memory_count = len(HubMemoryManager().list_learnings())
         return "\n".join(
             [
@@ -1642,6 +1680,71 @@ class HubOrchestrator:
     def current_run_status(self) -> str:
         run = get_task_run_store().get_latest_active_or_paused_run(self._session_id)
         return format_current_run_status(run)
+
+    def tasks_status(self) -> str:
+        store = get_task_run_store()
+        runs = [
+            run
+            for run in store.list_runs()
+            if is_active_state(run.state) or is_paused_state(run.state)
+        ]
+        if not runs:
+            return "No active or paused tasks."
+
+        lines = ["Active/paused tasks:"]
+        for run in sorted(runs, key=lambda item: item.updated_at, reverse=True):
+            backlog_reference = run.context.get("agent_dispatch_backlog_reference") or {}
+            identifier = backlog_reference.get("item_id") or run.id[:8]
+            project_key = run.context.get("target_project") or DEFAULT_PROJECT_KEY
+            summary = _truncate(run.user_message, 80)
+            lines.append(
+                f"{identifier} | {_friendly_project_label(project_key)} | {run.state} | {summary}"
+            )
+        return "\n".join(lines)
+
+    def _resolve_task_identifier(self, identifier: str) -> tuple[TaskRun | None, str | None]:
+        key = identifier.strip()
+        if not key:
+            return None, "A task ID is required."
+        candidates: list[TaskRun] = []
+        for run in get_task_run_store().list_runs():
+            if not (is_active_state(run.state) or is_paused_state(run.state)):
+                continue
+            backlog_reference = run.context.get("agent_dispatch_backlog_reference") or {}
+            backlog_id = str(backlog_reference.get("item_id") or "")
+            if run.id == key or run.id.startswith(key) or backlog_id == key:
+                candidates.append(run)
+        if not candidates:
+            return None, f"No active or paused task matches '{key}'."
+        if len(candidates) > 1:
+            return None, f"Task ID '{key}' is ambiguous. Use /tasks and provide a longer ID."
+        return candidates[0], None
+
+    def resume_task(self, identifier: str) -> str:
+        run, error = self._resolve_task_identifier(identifier)
+        if error:
+            return error
+        assert run is not None
+        if not is_paused_state(run.state):
+            return f"Task {run.id[:8]} is {run.state}, not paused."
+
+        current = get_task_run_store().get_latest_active_or_paused_run(self._session_id)
+        if current is not None and current.id != run.id:
+            return (
+                f"This conversation already has task {current.id[:8]} ({current.state}). "
+                "Stop it or start a new conversation first."
+            )
+
+        attached = get_task_run_store().attach_paused_run_to_session(run.id, self._session_id)
+        backlog_reference = attached.context.get("agent_dispatch_backlog_reference") or {}
+        task_id = backlog_reference.get("item_id") or attached.id[:8]
+        if attached.state == TASK_STATE_WAITING_APPROVAL:
+            next_action = "Use /approve or /reject."
+        elif attached.state == TASK_STATE_WAITING_DECISION:
+            next_action = "Reply with the requested option."
+        else:
+            next_action = "Reply with the requested clarification."
+        return f"Resumed {task_id} — {attached.state}. {next_action}"
 
     def last_run_status(self) -> str:
         run = get_task_run_store().get_latest_completed_or_failed_run(self._session_id)
@@ -1933,16 +2036,24 @@ class HubOrchestrator:
             return f"No stored learning exists with identifier '{key}'."
         return format_forget_confirmation(key)
 
-    def stop_current_task(self, reason: str = "Stopped by user") -> str:
+    def stop_current_task(
+        self, reason: str = "Stopped by user", *, identifier: str | None = None
+    ) -> str:
         store = get_task_run_store()
         project_key = _project_key_for_session(self._session_id)
-        run = store.get_latest_active_or_paused_run(self._session_id, project_key=project_key)
+        if identifier:
+            run, error = self._resolve_task_identifier(identifier)
+            if error:
+                return error
+        else:
+            run = store.get_active_or_paused_run_for_project(project_key)
         if run is None:
             human_logger.info(
                 "Stop requested for project '%s', but no active or paused task was found.",
                 _friendly_project_label(project_key),
             )
             return "No task is currently active."
+        project_key = run.context.get("target_project") or DEFAULT_PROJECT_KEY
 
         agent_id = run.selected_agent_id or "unknown-agent"
         confirmation = f"Stopped run {run.id} for agent '{agent_id}'. State is now cancelled."
@@ -2322,7 +2433,13 @@ class HubOrchestrator:
         lines.extend(self._format_registry_errors())
         return "\n".join(lines)
 
-    def invoke(self, message: str, *, progress_notify: Any | None = None) -> str:
+    def invoke(
+        self,
+        message: str,
+        *,
+        progress_notify: Any | None = None,
+        request_started_at: datetime | None = None,
+    ) -> str:
         logger.info("Received user request: %s", message)
         logger.debug("Invoking graph with session_id=%s", self._session_id)
         self._reconcile_registry()
@@ -2384,7 +2501,14 @@ class HubOrchestrator:
             )
 
         task_run = task_store.create_run(session_id=self._session_id, user_message=message)
-        task_store.update_run(task_run.id, context_updates={"target_project": project_key})
+        lifecycle_started_at = request_started_at or datetime.now(timezone.utc)
+        task_store.update_run(
+            task_run.id,
+            context_updates={
+                "target_project": project_key,
+                "request_started_at": lifecycle_started_at.astimezone(timezone.utc).isoformat(),
+            },
+        )
         _human_task_log(
             task_run.id,
             "Hub is deciding how to handle this request for project '%s'.",

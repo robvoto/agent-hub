@@ -60,6 +60,7 @@ Reusable defaults:
 ## Universal rules
 
 - Never guess or invent.
+- Before introducing or relying on heuristic/approximate inference, use the global `heuristic-review` guardrail. Assistive heuristics may help an LLM or reduce search cost when they cannot determine the final outcome; heuristics that decide semantic meaning, business outcome, target, permission, or action require explicit human approval.
 - Keep context bounded. Load the smallest file set that can answer the task.
 - Keep work bounded and small. Touch only files required for the task.
 - Do not add hidden autonomous behaviour, broad discovery loops, or uncontrolled self-improvement.

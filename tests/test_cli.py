@@ -7,20 +7,17 @@ from agent_hub.task_control import get_task_control_registry
 from agent_hub.task_runs import TASK_STATE_CANCELLED, get_task_run_store
 
 
-def test_help_text_explains_current_thread_controls() -> None:
-    assert (
-        "/agents-refresh - re-read the specialist registry now and show what changed"
-        in _HELP_TEXT
-    )
-    assert "/agents-status - show registry health" in _HELP_TEXT
-    assert "Reply normally to continue a clarification pause in the same thread." in _HELP_TEXT
-    assert "Use /approve to continue an approval pause in the same thread." in _HELP_TEXT
-    assert "/decide" not in _HELP_TEXT
-    assert "Reply with the option number or name to continue a decision pause" in _HELP_TEXT
-    assert "/new starts a fresh empty thread; it is not a fork." in _HELP_TEXT
-    assert "Cancelled work from /stop or /reset is not resumable." in _HELP_TEXT
-    assert "There is no /fork or generic /resume command yet." in _HELP_TEXT
-    assert "/hub-status - show the hub startup summary" in _HELP_TEXT
+def test_help_text_explains_task_controls() -> None:
+    assert "/agents-refresh - refresh specialist registry" in _HELP_TEXT
+    assert "/agents-status - show specialist registry health" in _HELP_TEXT
+    assert "/tasks - list all active/paused tasks" in _HELP_TEXT
+    assert "/resume <id> - select a paused task to continue" in _HELP_TEXT
+    assert "/status - show details for this conversation's current task" in _HELP_TEXT
+    assert "/stop [id] - cancel the current task, or a specific task" in _HELP_TEXT
+    assert "/reset-all - cancel all active/paused tasks and start fresh" in _HELP_TEXT
+    assert "Thread model:" not in _HELP_TEXT
+    assert "There is no /fork" not in _HELP_TEXT
+    assert "/hub-status - show Hub status" in _HELP_TEXT
 
 
 def test_handle_cli_shutdown_interrupt_cancels_active_tasks_and_reports_count(capsys):

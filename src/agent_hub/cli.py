@@ -9,37 +9,30 @@ import sys
 from .log_config import configure_logging
 
 _HELP_TEXT = (
-    "Send a plain message to dispatch it to a specialist agent.\n"
+    "Send a plain message to dispatch work.\n"
     "Commands:\n"
-    "/agents - list registered specialist agents\n"
-    "/agents-refresh - re-read the specialist registry now and show what changed\n"
-    "/agents-status - show registry health (versions, fingerprints, invalid manifests)"
-    " without refreshing\n"
-    "/approve - approve a task waiting on approval\n"
+    "/new - start a fresh conversation; paused work is preserved\n"
+    "/tasks - list all active/paused tasks\n"
+    "/resume <id> - select a paused task to continue\n"
+    "/status - show details for this conversation's current task\n"
+    "/stop [id] - cancel the current task, or a specific task\n"
+    "/reset - cancel the current task and start a fresh conversation\n"
+    "/reset-all - cancel all active/paused tasks and start fresh\n"
+    "/approve - approve the current task when requested\n"
+    "/reject [reason] - reject the current task when requested\n"
+    "/project [<path>|clear] - set/show/clear the target project\n"
+    "/hub-status - show Hub status\n"
+    "/last - show the most recently finished task\n"
+    "/agents - list registered specialists\n"
+    "/agents-refresh - refresh specialist registry\n"
+    "/agents-status - show specialist registry health\n"
+    "/learn <fact> - store an explicit learning\n"
+    "/learn-mode [on|off] - set/show persistent automatic learning preference\n"
+    "/memory - list stored learnings\n"
     "/forget <id> - remove a stored learning\n"
     "/help - show this\n"
-    "/hub-status - show the hub startup summary without starting a new session\n"
-    "/last - show the most recently finished task\n"
-    "/learn <fact> - store an explicit learning and get a recommended next action\n"
-    "/learn-mode [on|off] - toggle automatic background learning\n"
-    "/memory - list stored learnings\n"
-    "/new - start a fresh conversation; keep active work running\n"
-    "/project [<path>|clear] - set/show/clear the target project for specialists\n"
     "/quit - exit chat mode\n"
-    "/reject [reason] - reject a task waiting on approval\n"
-    "/reset - stop the active specialist tree here, then start a fresh conversation\n"
-    "/status - show the active or paused task\n"
-    "/stop - cancel the active task and its specialist tree; keep this conversation\n"
     "Ctrl-C - exit\n"
-    "\n"
-    "Thread model:\n"
-    "Reply normally to continue a clarification pause in the same thread.\n"
-    "Use /approve to continue an approval pause in the same thread.\n"
-    "Reply with the option number or name to continue a decision pause; /status shows\n"
-    "the options a paused specialist last reported.\n"
-    "/new starts a fresh empty thread; it is not a fork.\n"
-    "Cancelled work from /stop or /reset is not resumable.\n"
-    "There is no /fork or generic /resume command yet.\n"
 )
 
 
@@ -114,6 +107,10 @@ def _run_chat(model: str) -> None:
             print(f"\nHub: {orch.reset_session()}\n")
             continue
 
+        if text == "/reset-all":
+            print(f"\nHub: {orch.reset_all()}\n")
+            continue
+
         if text == "/agents":
             if not orch.registry:
                 print("No agents registered yet.")
@@ -132,6 +129,16 @@ def _run_chat(model: str) -> None:
 
         if text == "/status":
             print(f"\nHub: {orch.current_run_status()}\n")
+            continue
+
+        if text == "/tasks":
+            print(f"\nHub: {orch.tasks_status()}\n")
+            continue
+
+        if text == "/resume" or text.startswith("/resume "):
+            identifier = text[len("/resume"):].strip()
+            reply = "Usage: /resume <id>" if not identifier else orch.resume_task(identifier)
+            print(f"\nHub: {reply}\n")
             continue
 
         if text == "/last":
@@ -177,8 +184,9 @@ def _run_chat(model: str) -> None:
                 print(f"\nHub: {orch.set_current_project(arg)}\n")
             continue
 
-        if text == "/stop":
-            print(f"\nHub: {orch.stop_current_task()}\n")
+        if text == "/stop" or text.startswith("/stop "):
+            identifier = text[len("/stop"):].strip() or None
+            print(f"\nHub: {orch.stop_current_task(identifier=identifier)}\n")
             continue
 
         if text == "/approve":

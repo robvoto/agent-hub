@@ -17,17 +17,17 @@ from agent_hub.task_runs import TASK_STATE_CANCELLED, get_task_run_store
 from agent_hub.telegram_gateway import TelegramGateway, _raise_keyboard_interrupt, run_telegram
 
 
-def test_help_text_explains_current_thread_controls() -> None:
+def test_help_text_explains_task_controls() -> None:
     help_text = TelegramGateway._help_text()
 
-    assert "Reply normally to continue a clarification pause in the same thread." in help_text
-    assert "Use /approve to continue an approval pause in the same thread." in help_text
-    assert "/decide" not in help_text
-    assert "Reply with the option number or name to continue a decision pause" in help_text
-    assert "/new starts a fresh empty thread; it is not a fork." in help_text
-    assert "Cancelled work from /stop or /reset is not resumable." in help_text
-    assert "There is no /fork or generic /resume command yet." in help_text
-    assert "/hub-status - show the hub startup summary" in help_text
+    assert "/tasks - list all active/paused tasks" in help_text
+    assert "/resume <id> - select a paused task to continue" in help_text
+    assert "/status - show details for this conversation's current task" in help_text
+    assert "/stop [id] - cancel the current task, or a specific task" in help_text
+    assert "/reset-all - cancel all active/paused tasks and start fresh" in help_text
+    assert "Thread model:" not in help_text
+    assert "There is no /fork" not in help_text
+    assert "/hub-status - show Hub status" in help_text
 
 
 def test_hub_status_command_reports_summary_without_starting_new_session(monkeypatch):
@@ -392,7 +392,7 @@ def test_status_command_sends_plain_text_status(monkeypatch):
         memory=lambda: "Stored hub learnings:\nmem-1\n  example",
         forget_learning=lambda identifier: f"Forgot learning {identifier}.",
         reset_session=lambda: "unused",
-        stop_current_task=lambda: "unused",
+        stop_current_task=lambda *, identifier=None: "unused",
         registry=[],
         set_learning_notifier=lambda callback: None,
     )
@@ -500,7 +500,7 @@ def test_last_command_sends_plain_text_summary(monkeypatch):
         memory=lambda: "Stored hub learnings:\nmem-1\n  example",
         forget_learning=lambda identifier: f"Forgot learning {identifier}.",
         reset_session=lambda: "unused",
-        stop_current_task=lambda: "unused",
+        stop_current_task=lambda *, identifier=None: "unused",
         registry=[],
         set_learning_notifier=lambda callback: None,
     )
@@ -541,7 +541,9 @@ def test_stop_command_sends_plain_text_confirmation(monkeypatch):
         forget_learning=lambda identifier: f"Forgot learning {identifier}.",
         reset_session=lambda: "unused",
         stop_current_task=(
-            lambda: "Stopped run run-123 for agent 'ai-tech-lead'. State is now cancelled."
+            lambda *, identifier=None: (
+                "Stopped run run-123 for agent 'ai-tech-lead'. State is now cancelled."
+            )
         ),
         registry=[],
         set_learning_notifier=lambda callback: None,
@@ -582,7 +584,7 @@ def test_learn_command_sends_plain_text_confirmation(monkeypatch):
         memory=lambda: "unused",
         forget_learning=lambda identifier: f"unused {identifier}",
         reset_session=lambda: "unused",
-        stop_current_task=lambda: "unused",
+        stop_current_task=lambda *, identifier=None: "unused",
         registry=[],
         set_learning_notifier=lambda callback: None,
     )
@@ -621,7 +623,7 @@ def test_memory_command_sends_plain_text_listing(monkeypatch):
         learn=lambda value, *, source: f"unused {value} {source}",
         memory=lambda: "Stored hub learnings:\nmem-1\n  example",
         forget_learning=lambda identifier: f"unused {identifier}",
-        stop_current_task=lambda: "unused",
+        stop_current_task=lambda *, identifier=None: "unused",
         registry=[],
         set_learning_notifier=lambda callback: None,
     )
@@ -660,7 +662,7 @@ def test_forget_command_sends_plain_text_confirmation(monkeypatch):
         learn=lambda value, *, source: f"unused {value} {source}",
         memory=lambda: "unused",
         forget_learning=lambda identifier: f"Forgot learning {identifier}.",
-        stop_current_task=lambda: "unused",
+        stop_current_task=lambda *, identifier=None: "unused",
         registry=[],
         set_learning_notifier=lambda callback: None,
     )
@@ -861,6 +863,39 @@ def test_progress_notifier_keeps_one_live_message_and_edits_meaningful_updates(m
     assert run.context["telegram_live_message_id"] == 100
 
 
+def test_live_progress_elapsed_uses_original_request_ingress_time(monkeypatch):
+    sent: list[dict] = []
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway._send_message",
+        lambda token, chat_id, text, *, parse_mode="Markdown": sent.append(
+            {"text": text, "parse_mode": parse_mode}
+        ) or [1],
+    )
+
+    gateway = TelegramGateway(
+        "token-123",
+        SimpleNamespace(
+            registry=[SimpleNamespace(id="ai-tech-lead", name="AI Tech Lead")],
+            set_learning_notifier=lambda callback: None,
+        ),
+    )
+    store = get_task_run_store()
+    run = store.create_run(session_id="s1", user_message="Code ITEM-42")
+    ingress = datetime.now(timezone.utc) - timedelta(minutes=3)
+    store.update_run(
+        run.id,
+        context_updates={"request_started_at": ingress.isoformat()},
+    )
+    run = store.get_run(run.id)
+    assert run is not None
+
+    text = gateway._render_live_progress(
+        run, "Preparing result.", rendered_at=datetime.now(timezone.utc)
+    )
+
+    assert "Elapsed: 3 minutes" in text
+
+
 def test_heartbeat_refresh_edits_elapsed_without_inventing_status_text(monkeypatch):
     sent: list[dict] = []
     edited: list[dict] = []
@@ -965,7 +1000,7 @@ def test_progress_and_terminal_operator_messages_stay_separate(monkeypatch, repl
 
     now = datetime.now(timezone.utc)
 
-    def _invoke(message, *, progress_notify=None):
+    def _invoke(message, *, progress_notify=None, request_started_at=None):
         run_id = _create_active_run()
         assert progress_notify is not None
         progress_notify(
@@ -1033,7 +1068,7 @@ def test_failure_sends_only_one_final_failure_message(monkeypatch):
 
     now = datetime.now(timezone.utc)
 
-    def _invoke(message, *, progress_notify=None):
+    def _invoke(message, *, progress_notify=None, request_started_at=None):
         run_id = _create_active_run()
         assert progress_notify is not None
         progress_notify(
@@ -1237,7 +1272,7 @@ def test_waiting_progress_does_not_duplicate_terminal_decision_in_live_status(mo
     now = datetime.now(timezone.utc)
     decision = "[AI Tech Lead] Decision needed: Choose a recovery action."
 
-    def _invoke(message, *, progress_notify=None):
+    def _invoke(message, *, progress_notify=None, request_started_at=None):
         run_id = _create_active_run()
         progress_notify(
             ProgressUpdate(

@@ -1,8 +1,8 @@
 """Opt-in, debounced ("dreaming") automatic semantic memory extraction.
 
-Off by default per session — matching how ChatGPT, Mem0, and Letta all ship
-automatic memory as user-controlled, never silently always-on. When a Rob
-turns it on, extraction is deferred until the session goes quiet, so a burst
+Stored as an operator-level preference so /new, /reset, and process restarts do
+not silently change it. Automatic memory remains user-controlled. When the
+operator turns it on, extraction is deferred until the session goes quiet, so a burst
 of messages costs one extraction pass instead of one per task.
 
 The on/off flag is persisted in the Hub knowledge store, keyed by session_id,
@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 DREAM_DELAY_SECONDS = 300.0
 _NAMESPACE = ("hub", "learning_mode")
+_OPERATOR_KEY = "operator-default"
 
 
 class LearningModeRegistry:
@@ -48,16 +49,22 @@ class LearningModeRegistry:
             return self._is_enabled_locked(session_id)
 
     def _is_enabled_locked(self, session_id: str) -> bool:
+        operator_item = self._store.batch([GetOp(namespace=_NAMESPACE, key=_OPERATOR_KEY)])[0]
+        if operator_item is not None:
+            return bool(operator_item.value.get("enabled"))
+        # Backward-compatible migration path: honour the legacy per-session flag
+        # until the operator explicitly changes the preference once.
         item = self._store.batch([GetOp(namespace=_NAMESPACE, key=session_id)])[0]
         return bool(item.value.get("enabled")) if item is not None else False
 
     def set_enabled(self, session_id: str, enabled: bool) -> None:
         with self._lock:
             self._store.batch(
-                [PutOp(namespace=_NAMESPACE, key=session_id, value={"enabled": enabled})]
+                [PutOp(namespace=_NAMESPACE, key=_OPERATOR_KEY, value={"enabled": enabled})]
             )
             if not enabled:
-                self._cancel_locked(session_id)
+                for active_session_id in tuple(self._timers):
+                    self._cancel_locked(active_session_id)
 
     def notify_task_completed(self, session_id: str, on_fire: Callable[[str], None]) -> None:
         """Reschedule the dream timer for this session, if learning mode is on.

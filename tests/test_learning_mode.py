@@ -85,9 +85,15 @@ def test_disabling_cancels_pending_timer():
     assert registry.is_enabled("session-1") is False
 
 
-def test_sessions_are_independent():
+
+def test_learning_preference_survives_new_session_ids():
     registry = LearningModeRegistry(timer_factory=_fake_timer_factory())
     registry.set_enabled("session-a", True)
 
     assert registry.is_enabled("session-a") is True
-    assert registry.is_enabled("session-b") is False
+    assert registry.is_enabled("session-b") is True
+
+    registry.set_enabled("session-b", False)
+
+    assert registry.is_enabled("session-a") is False
+    assert registry.is_enabled("session-c") is False

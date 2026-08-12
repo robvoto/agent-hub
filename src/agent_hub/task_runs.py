@@ -448,6 +448,26 @@ class TaskRunStore:
             row = conn.execute("SELECT * FROM task_runs WHERE id=?", (run_id,)).fetchone()
         return _row_to_task_run(row) if row else None
 
+    def attach_paused_run_to_session(self, run_id: str, session_id: str) -> TaskRun:
+        """Make an existing paused run the current task for another Hub session."""
+        with _connect(self._db_path) as conn:
+            row = conn.execute("SELECT * FROM task_runs WHERE id=?", (run_id,)).fetchone()
+            if row is None:
+                raise KeyError(f"Unknown task run: {run_id}")
+            current = _row_to_task_run(row)
+            if current.state not in _PAUSED_STATES:
+                raise ValueError(
+                    f"Task {run_id[:8]} is not paused; current state is {current.state}."
+                )
+            now = _utcnow()
+            conn.execute(
+                "UPDATE task_runs SET session_id=?, updated_at=? WHERE id=?",
+                (session_id, now, run_id),
+            )
+            updated = conn.execute("SELECT * FROM task_runs WHERE id=?", (run_id,)).fetchone()
+        assert updated is not None
+        return _row_to_task_run(updated)
+
     def list_runs(self, session_id: str | None = None) -> list[TaskRun]:
         query = "SELECT * FROM task_runs"
         params: tuple[str, ...] = ()

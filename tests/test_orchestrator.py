@@ -347,7 +347,7 @@ def test_hub_status_reports_state_without_rotating_session(monkeypatch, tmp_path
         "Learning: ON\n"
         f"Project: {tmp_path.name}\n"
         "Agents available: 1\n"
-        f"Active task: {TASK_STATE_WAITING_APPROVAL}\n"
+        f"Active task: {run.id[:8]} — {TASK_STATE_WAITING_APPROVAL}\n"
         "Memory records: 1"
     )
 
@@ -456,6 +456,68 @@ def test_first_ever_run_still_starts_cleanly_with_no_persisted_session(monkeypat
     assert reply == "All done"
 
 
+def test_new_session_inherits_learning_mode_preference(monkeypatch):
+    from agent_hub.learning_mode import get_learning_mode_registry
+
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    monkeypatch.setattr(
+        HubOrchestrator,
+        "_build_graph",
+        lambda self, registry=None, **kwargs: _FakeGraph("unused"),
+    )
+
+    orchestrator = HubOrchestrator()
+    orchestrator.set_learning_mode(True)
+    previous_session_id = orchestrator.session_id
+
+    reply = orchestrator.new_session()
+
+    assert orchestrator.session_id != previous_session_id
+    assert get_learning_mode_registry().is_enabled(orchestrator.session_id) is True
+    assert "Learning: ON" in reply
+
+
+def test_new_session_preserves_explicit_learning_off(monkeypatch):
+    from agent_hub.learning_mode import get_learning_mode_registry
+
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    monkeypatch.setattr(
+        HubOrchestrator,
+        "_build_graph",
+        lambda self, registry=None, **kwargs: _FakeGraph("unused"),
+    )
+
+    orchestrator = HubOrchestrator()
+    orchestrator.set_learning_mode(False)
+
+    reply = orchestrator.new_session()
+
+    assert get_learning_mode_registry().is_enabled(orchestrator.session_id) is False
+    assert "Learning: OFF" in reply
+
+
+def test_hub_summary_prefers_backlog_item_id_for_active_task(monkeypatch):
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    monkeypatch.setattr(
+        HubOrchestrator,
+        "_build_graph",
+        lambda self, registry=None, **kwargs: _FakeGraph("unused"),
+    )
+
+    orchestrator = HubOrchestrator()
+    store = get_task_run_store()
+    run = store.create_run(session_id=orchestrator.session_id, user_message="Code ITEM-42")
+    store.update_run(
+        run.id,
+        context_updates={
+            "agent_dispatch_backlog_reference": {"item_id": "ITEM-42"}
+        },
+    )
+    store.transition(run.id, TASK_STATE_WAITING_APPROVAL)
+
+    assert "Active task: ITEM-42 — waiting_approval" in orchestrator.hub_status()
+
+
 def test_restart_resumes_project_and_learn_mode_selection(monkeypatch, tmp_path):
     from agent_hub.learning_mode import get_learning_mode_registry
     from agent_hub.project_context import get_project_context_registry
@@ -474,6 +536,109 @@ def test_restart_resumes_project_and_learn_mode_selection(monkeypatch, tmp_path)
     assert resumed_context is not None
     assert resumed_context.root == str(tmp_path.resolve())
     assert get_learning_mode_registry().is_enabled(restarted.session_id) is True
+
+
+def test_tasks_status_lists_all_active_and_paused_tasks(monkeypatch):
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    monkeypatch.setattr(
+        HubOrchestrator,
+        "_build_graph",
+        lambda self, registry=None, **kwargs: _FakeGraph("unused"),
+    )
+    orchestrator = HubOrchestrator()
+    store = get_task_run_store()
+
+    run = store.create_run(
+        session_id="older-session", user_message="Code ITEM-42 and keep changes bounded"
+    )
+    store.update_run(
+        run.id,
+        context_updates={
+            "target_project": "agent-hub-project",
+            "agent_dispatch_backlog_reference": {"item_id": "ITEM-42"},
+        },
+    )
+    store.transition(run.id, TASK_STATE_WAITING_APPROVAL)
+
+    status = orchestrator.tasks_status()
+
+    assert "ITEM-42 | agent-hub-project | waiting_approval" in status
+    assert "Code ITEM-42" in status
+
+
+def test_resume_task_selects_paused_task_from_old_session(monkeypatch):
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    monkeypatch.setattr(
+        HubOrchestrator,
+        "_build_graph",
+        lambda self, registry=None, **kwargs: _FakeGraph("unused"),
+    )
+    orchestrator = HubOrchestrator()
+    store = get_task_run_store()
+
+    run = store.create_run(session_id="older-session", user_message="Code ITEM-42")
+    store.update_run(
+        run.id,
+        context_updates={"agent_dispatch_backlog_reference": {"item_id": "ITEM-42"}},
+    )
+    store.transition(run.id, TASK_STATE_WAITING_APPROVAL)
+
+    reply = orchestrator.resume_task("ITEM-42")
+
+    assert reply == "Resumed ITEM-42 — waiting_approval. Use /approve or /reject."
+    attached = store.get_run(run.id)
+    assert attached is not None
+    assert attached.session_id == orchestrator.session_id
+    assert orchestrator.pending_run() is not None
+    assert orchestrator.pending_run().id == run.id
+
+
+def test_stop_specific_task_by_short_id_across_sessions(monkeypatch):
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    monkeypatch.setattr(
+        HubOrchestrator,
+        "_build_graph",
+        lambda self, registry=None, **kwargs: _FakeGraph("unused"),
+    )
+    orchestrator = HubOrchestrator()
+    store = get_task_run_store()
+
+    run = store.create_run(session_id="older-session", user_message="Pause this")
+    store.transition(run.id, TASK_STATE_WAITING_APPROVAL)
+
+    reply = orchestrator.stop_current_task(identifier=run.id[:8])
+
+    assert "Stopped run" in reply
+    stopped = store.get_run(run.id)
+    assert stopped is not None
+    assert stopped.state == TASK_STATE_CANCELLED
+
+
+def test_reset_all_cancels_all_active_and_paused_tasks_and_rotates_session(monkeypatch):
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    monkeypatch.setattr(
+        HubOrchestrator,
+        "_build_graph",
+        lambda self, registry=None, **kwargs: _FakeGraph("unused"),
+    )
+    orchestrator = HubOrchestrator()
+    original_session_id = orchestrator.session_id
+    store = get_task_run_store()
+
+    first = store.create_run(session_id="session-a", user_message="first")
+    store.transition(first.id, TASK_STATE_WAITING_APPROVAL)
+    second = store.create_run(session_id="session-b", user_message="second")
+    store.transition(second.id, TASK_STATE_IN_PROGRESS)
+
+    reply = orchestrator.reset_all()
+
+    assert reply == (
+        "Reset all complete. Cancelled 2 active/paused task(s) and started a fresh conversation."
+    )
+    assert orchestrator.session_id != original_session_id
+    assert store.get_run(first.id).state == TASK_STATE_CANCELLED
+    assert store.get_run(second.id).state == TASK_STATE_CANCELLED
+    assert orchestrator.tasks_status() == "No active or paused tasks."
 
 
 def test_invoke_stream_logs_langgraph_node_flow(monkeypatch, caplog):

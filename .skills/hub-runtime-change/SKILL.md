@@ -22,6 +22,7 @@ Read the owner module before editing. If one module clearly owns the behavior, s
 - `src/agent_hub/cli.py`: CLI operator flow
 
 ## Rules
+- If the design introduces or relies on a heuristic/approximate inference, apply the global `heuristic-review` skill before coding. Assistive heuristics are allowed only when an independent LLM/authoritative validation layer controls the final outcome; authoritative heuristics require explicit human approval.
 
 - Keep changes small and scoped.
 - Do not implement specialist-internal logic inside Hub — a contract test double speaks only the runtime shape (status/result_kind/etc.), never real specialist reasoning.
