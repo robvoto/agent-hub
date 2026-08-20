@@ -18,7 +18,8 @@ Agent Hub is the runtime orchestrator and control plane.
 1. Use `docs/INDEX.md` as the single documentation entry point, then read only the smallest linked document needed.
 2. Inspect current files before giving code-specific advice or editing.
 3. If changing project setup, architecture, runtime behaviour, documentation, backlog, automation, config, tests, environment examples, packaging, templates, AI model/provider defaults, cost logging, approval workflows, long-running workflows, or AGENTS.md, check the current project standards first if they are available.
-4. Do not load the whole repository unless the task explicitly requires a broad audit.
+4. Before any branch/worktree, commit, push, PR, merge, or `main`-integration action, use `.skills/git-lifecycle/SKILL.md`.
+5. Do not load the whole repository unless the task explicitly requires a broad audit.
 
 ## Navigation
 
@@ -36,6 +37,7 @@ Reusable defaults:
 - `agent-hub-work`: repo boundary, orchestration ownership, hub-vs-specialist scope
 - `hub-runtime-change`: orchestrator, Telegram, CLI, task lifecycle, dispatch, approvals
 - `instruction-maintenance`: AGENTS, skills, docs, diagrams, and stale instruction cleanup
+- `git-lifecycle`: branch/worktree, commit, push, PR, merge, and verified `main` integration
 - `human-mcp-access`: discover and use the repo-configured Human MCP server for Google Sheets/Docs
 - `backlog-management`: creating/updating/grooming rows in the live backlog Google Sheet; load `human-mcp-access` first
 
