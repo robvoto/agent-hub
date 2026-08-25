@@ -1008,6 +1008,157 @@ def test_learn_memory_only_stores_semantic_by_default(monkeypatch, tmp_path):
     assert reply == "Learned: Rob prefers tabs over spaces."
 
 
+def test_learned_backlog_url_is_reused_as_specialist_reference_without_project_selection(
+    monkeypatch, tmp_path
+):
+    backlog_url = (
+        "https://docs.google.com/spreadsheets/d/"
+        "1v1zJjwGTqhOgb06nYChaGjRNZIVXQht5pNBUbh9r7RA/"
+        "edit?gid=32071178#gid=32071178"
+    )
+    HubMemoryManager().learn(
+        f"Agent Hub's improvement backlog is here: {backlog_url}",
+        source="telegram chat 8754838132",
+    )
+
+    spec = AgentSpec(
+        id="ai-tech-lead",
+        name="AI Tech Lead",
+        purpose="Implements code changes",
+        runtime={
+            "mode": "subprocess",
+            "entrypoint": "fake-agent",
+            "working_directory": str(tmp_path),
+            "input_arg": "--input-json",
+            "output_arg": "--output-json",
+            "default_execution_mode": "execute",
+        },
+    )
+    captured: dict[str, object] = {}
+
+    def fake_dispatch(spec, task, *, references=None, task_kind=None, **kwargs):
+        captured["task"] = task
+        captured["references"] = references
+        return {"status": "success", "summary": "Done."}
+
+    monkeypatch.setattr("agent_hub.orchestrator._dispatch_subprocess", fake_dispatch)
+    run = get_task_run_store().create_run(
+        session_id="session-memory-reference",
+        user_message="Add and remove a test item from the Agent Hub backlog.",
+    )
+    tool = _make_agent_tool(spec)
+
+    with active_task_run(run.id):
+        tool.invoke("Add and remove a test item from the Agent Hub backlog.")
+
+    assert captured["references"] == [backlog_url]
+
+
+def test_unrelated_learned_url_is_not_added_to_specialist_references(monkeypatch, tmp_path):
+    HubMemoryManager().learn(
+        "The household electricity dashboard is https://example.com/power",
+        source="telegram chat 8754838132",
+    )
+    spec = AgentSpec(
+        id="ai-tech-lead",
+        name="AI Tech Lead",
+        purpose="Implements code changes",
+        runtime={
+            "mode": "subprocess",
+            "entrypoint": "fake-agent",
+            "working_directory": str(tmp_path),
+            "input_arg": "--input-json",
+            "output_arg": "--output-json",
+            "default_execution_mode": "execute",
+        },
+    )
+    captured: dict[str, object] = {}
+
+    def fake_dispatch(spec, task, *, references=None, task_kind=None, **kwargs):
+        captured["references"] = references
+        return {"status": "success", "summary": "Done."}
+
+    monkeypatch.setattr("agent_hub.orchestrator._dispatch_subprocess", fake_dispatch)
+    tool = _make_agent_tool(spec)
+    tool.invoke("Fix the Agent Hub backlog workflow.")
+
+    assert captured["references"] is None
+
+
+def test_explicit_specialist_references_are_not_replaced_by_learned_urls(monkeypatch, tmp_path):
+    HubMemoryManager().learn(
+        "Agent Hub's backlog is https://example.com/backlog",
+        source="telegram chat 8754838132",
+    )
+    spec = AgentSpec(
+        id="ai-tech-lead",
+        name="AI Tech Lead",
+        purpose="Implements code changes",
+        runtime={
+            "mode": "subprocess",
+            "entrypoint": "fake-agent",
+            "working_directory": str(tmp_path),
+            "input_arg": "--input-json",
+            "output_arg": "--output-json",
+            "default_execution_mode": "execute",
+        },
+    )
+    captured: dict[str, object] = {}
+
+    def fake_dispatch(spec, task, *, references=None, task_kind=None, **kwargs):
+        captured["references"] = references
+        return {"status": "success", "summary": "Done."}
+
+    monkeypatch.setattr("agent_hub.orchestrator._dispatch_subprocess", fake_dispatch)
+    tool = _make_agent_tool(spec)
+    tool.invoke(
+        {
+            "task": "Fix the Agent Hub backlog workflow.",
+            "references": ["https://example.com/explicit"],
+        }
+    )
+
+    assert captured["references"] == ["https://example.com/explicit"]
+
+
+def test_explicit_empty_specialist_references_are_not_replaced_by_learned_urls(
+    monkeypatch, tmp_path
+):
+    HubMemoryManager().learn(
+        "Agent Hub's backlog is https://example.com/backlog",
+        source="telegram chat 8754838132",
+    )
+    spec = AgentSpec(
+        id="ai-tech-lead",
+        name="AI Tech Lead",
+        purpose="Implements code changes",
+        runtime={
+            "mode": "subprocess",
+            "entrypoint": "fake-agent",
+            "working_directory": str(tmp_path),
+            "input_arg": "--input-json",
+            "output_arg": "--output-json",
+            "default_execution_mode": "execute",
+        },
+    )
+    captured: dict[str, object] = {}
+
+    def fake_dispatch(spec, task, *, references=None, task_kind=None, **kwargs):
+        captured["references"] = references
+        return {"status": "success", "summary": "Done."}
+
+    monkeypatch.setattr("agent_hub.orchestrator._dispatch_subprocess", fake_dispatch)
+    tool = _make_agent_tool(spec)
+    tool.invoke(
+        {
+            "task": "Fix the Agent Hub backlog workflow.",
+            "references": [],
+        }
+    )
+
+    assert captured["references"] == []
+
+
 def test_learn_promotes_only_valid_high_confidence_backlog_metadata(
     monkeypatch, tmp_path
 ):

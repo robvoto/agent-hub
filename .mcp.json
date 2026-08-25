@@ -1,6 +1,10 @@
 {
   "mcpServers": {
-    "human-mcp": {
+    "human-mcp-secure": {
+      "type": "url",
+      "url": "http://127.0.0.1:8001/mcp"
+    },
+    "human-mcp-ngrok-fallback": {
       "type": "url",
       "url": "https://qualify-provided-providing.ngrok-free.dev/mcp"
     }

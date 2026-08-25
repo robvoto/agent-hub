@@ -6,6 +6,7 @@ import dataclasses
 import json
 import logging
 import queue
+import re
 import subprocess
 import tempfile
 import threading
@@ -118,6 +119,86 @@ def _project_key_for_session(session_id: str) -> str:
 
 def _friendly_project_label(project_key: str) -> str:
     return "default" if project_key == DEFAULT_PROJECT_KEY else project_key
+
+
+_LEARNED_URL_RE = re.compile(r"https?://[^\s<>\"]+")
+_LEARNED_REFERENCE_STOPWORDS = frozenset(
+    {
+        "about",
+        "after",
+        "again",
+        "also",
+        "and",
+        "are",
+        "can",
+        "from",
+        "has",
+        "have",
+        "here",
+        "into",
+        "its",
+        "just",
+        "make",
+        "not",
+        "our",
+        "remove",
+        "that",
+        "the",
+        "this",
+        "use",
+        "was",
+        "with",
+        "you",
+        "your",
+    }
+)
+
+
+def _reference_terms(text: str) -> set[str]:
+    without_urls = _LEARNED_URL_RE.sub(" ", text)
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", without_urls.lower())
+        if len(token) >= 3 and token not in _LEARNED_REFERENCE_STOPWORDS
+    }
+
+
+def _learned_references_for_task(task: str, *, max_items: int = 3) -> list[str]:
+    """Recover exact operator-taught URLs when they are clearly relevant.
+
+    The LLM still decides what task to dispatch, but it is not trusted to copy
+    durable pointers out of memory. Only active explicit /learn records are
+    considered, relevance requires lexical overlap with the dispatched task,
+    and the number of recovered pointers is bounded.
+    """
+    task_terms = _reference_terms(task)
+    if not task_terms:
+        return []
+
+    ranked: list[tuple[int, float, list[str]]] = []
+    for record in HubMemoryManager().list_learnings():
+        if record.scope != "operator" or record.status != "active":
+            continue
+        urls = [
+            value.rstrip(".,;:!?)]}")
+            for value in _LEARNED_URL_RE.findall(record.value)
+        ]
+        if not urls:
+            continue
+        overlap = task_terms & _reference_terms(record.value)
+        if not overlap:
+            continue
+        ranked.append((len(overlap), record.created_at.timestamp(), urls))
+
+    ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    result: list[str] = []
+    for _, _, urls in ranked:
+        for url in urls:
+            if url not in result:
+                result.append(url)
+            if len(result) >= max_items:
+                return result
+    return result
 
 
 def _human_task_log(task_run_id: str | None, message: str, *args: Any) -> None:
@@ -1387,6 +1468,17 @@ def _make_agent_tool(spec: AgentSpec, *, task_kind: str | None = None) -> Any:
 
     @lc_tool(spec.id, description=description)
     def _call_agent(task: str, references: list[str] | None = None) -> str:
+        resolved_references = (
+            references
+            if references is not None
+            else _learned_references_for_task(task)
+        )
+        if references is None and resolved_references:
+            logger.info(
+                "Recovered %d relevant reference(s) from active operator learning for %s.",
+                len(resolved_references),
+                spec.id,
+            )
         task_run_id = get_current_task_run_id()
         if task_run_id:
             get_task_run_store().transition(
@@ -1401,7 +1493,11 @@ def _make_agent_tool(spec: AgentSpec, *, task_kind: str | None = None) -> Any:
                 _dispatch_subprocess(
                     spec,
                     task,
-                    references=references,
+                    references=(
+                        resolved_references
+                        if references is not None or resolved_references
+                        else None
+                    ),
                     task_kind=task_kind,
                 ),
             )

@@ -38,7 +38,7 @@ Reusable defaults:
 - `hub-runtime-change`: orchestrator, Telegram, CLI, task lifecycle, dispatch, approvals
 - `instruction-maintenance`: AGENTS, skills, docs, diagrams, and stale instruction cleanup
 - `git-lifecycle`: branch/worktree, commit, push, PR, merge, and verified `main` integration
-- `human-mcp-access`: discover and use the repo-configured Human MCP server for Google Sheets/Docs
+- `human-mcp-access`: use the secure-first repo-configured Human MCP connection for Google Sheets/Docs; its declared ngrok endpoint is fallback-only
 - `backlog-management`: creating/updating/grooming rows in the live backlog Google Sheet; load `human-mcp-access` first
 
 ## Governed self-improvement
