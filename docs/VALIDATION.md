@@ -66,7 +66,7 @@ Use a harmless, repeatable procedural lesson likely to classify as a skill.
 4. A conflicting duplicate title under another slug must be rejected.
 5. Confirm memory storage still exists even if skill creation is rejected.
 
-Do not confuse runtime skills in the knowledge store with repository `.skills/` files.
+Do not confuse runtime skills in the knowledge store with repository `.agents/skills/` files.
 
 ## Proposal-only outcomes
 

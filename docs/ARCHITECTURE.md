@@ -102,9 +102,9 @@ If analysis fails, memory storage still succeeds and the failure is reported pla
 
 ### Runtime skills versus project instructions
 
-Hub runtime skills are versioned records in the Hub knowledge store, managed by `HubSkillStore`. They are not files under `.skills/`.
+Hub runtime skills are versioned records in the Hub knowledge store, managed by `HubSkillStore`. They are not files under `.agents/skills/`.
 
-The repository `.skills/` directory contains instructions for coding agents working on this codebase. Hub runtime does not read or rewrite those files as its operational skill store.
+The repository `.agents/skills/` directory contains instructions for coding agents working on this codebase. Hub runtime does not read or rewrite those files as its operational skill store.
 
 ## Authoritative documentation context
 

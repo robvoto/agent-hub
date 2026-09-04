@@ -1,97 +1,52 @@
-# AGENTS.md
+# Agent Instructions
 
-Purpose: minimal always-loaded repository instructions for AI agents working in Agent Hub.
+Minimal shared routing instructions for Agent Hub. This file is not the project manual, architecture guide, backlog, standards document, skill catalogue, or test plan.
 
-This file is a routing layer only. It is not the project manual, architecture guide, backlog, standards document, or test plan.
+## Project boundary
 
-## Project role
-
-Agent Hub is the runtime orchestrator and control plane.
-
-- Hub receives operator input and routes work.
-- Hub reads staged agent definitions from Agent Factory.
-- Hub dispatches work to specialist agents such as AI Tech Lead.
-- Hub does not create, configure, or stage agents. That belongs to Agent Factory.
+Agent Hub is the runtime orchestrator/control plane. It receives operator input, reads staged agent definitions, and dispatches work to specialists. Agent creation/configuration/staging belongs to Agent Factory, not Hub.
 
 ## Default workflow
 
-1. Use `docs/INDEX.md` as the single documentation entry point, then read only the smallest linked document needed.
-2. Inspect current files before giving code-specific advice or editing.
-3. If changing project setup, architecture, runtime behaviour, documentation, backlog, automation, config, tests, environment examples, packaging, templates, AI model/provider defaults, cost logging, approval workflows, long-running workflows, or AGENTS.md, check the current project standards first if they are available.
-4. Before any branch/worktree, commit, push, PR, merge, or `main`-integration action, use `.skills/git-lifecycle/SKILL.md`.
-5. Do not load the whole repository unless the task explicitly requires a broad audit.
+1. Use `docs/INDEX.md` to find the smallest relevant project document.
+2. Use `.agents/skills/INDEX.md` to choose the smallest relevant task skill.
+3. Inspect current files before editing or giving code-specific advice.
+4. Check current project standards before changing project/instruction structure, architecture, runtime, automation, config, tests, packaging, models/providers, costs, or approval workflows.
+5. For branch/worktree, commit, push, PR, merge, or `main` integration, use `.agents/skills/git-lifecycle/SKILL.md`.
+6. Do not load the whole repo unless the task requires a broad audit.
 
-## Navigation
+## Durable rule placement
 
-- Documentation entry point: `docs/INDEX.md`
-- Project skills: `.skills/`
-- Runtime code: `src/agent_hub/`
-- Tests: `tests/`
+- Shared project rules must be runtime-neutral.
+- Put task-specific procedures in `.agents/skills/` and register them in `.agents/skills/INDEX.md`.
+- If no skill owns a durable rule, create a focused shared skill rather than expanding `AGENTS.md`.
+- Agent-specific adapter files, when present, own only themselves. Shared docs/tests must not enumerate, require, or depend on specific adapter filenames.
 
-## Skill selection
-
-Use the most relevant project skill from `.skills/` for bounded work in this repo.
-
-Reusable defaults:
-
-- `agent-hub-work`: repo boundary, orchestration ownership, hub-vs-specialist scope
-- `hub-runtime-change`: orchestrator, Telegram, CLI, task lifecycle, dispatch, approvals
-- `instruction-maintenance`: AGENTS, skills, docs, diagrams, and stale instruction cleanup
-- `git-lifecycle`: branch/worktree, commit, push, PR, merge, and verified `main` integration
-- `human-mcp-access`: use the secure-first repo-configured Human MCP connection for Google Sheets/Docs; its declared ngrok endpoint is fallback-only
-- `backlog-management`: creating/updating/grooming rows in the live backlog Google Sheet; load `human-mcp-access` first
-
-## Governed self-improvement
-
-- The agent may improve its own reusable skills or `AGENTS.md` without separate approval when evidence from completed work shows a repeatable problem, recurring correction, avoidable rework, or stable procedure.
-- Keep every improvement bounded to the demonstrated problem. Do not broaden Hub ownership, specialist ownership, permissions, memory access, tool access, runtime authority, or repository scope.
-- Before editing, record the evidence, target file, expected reusable benefit, risk, and validation method in the task trace or final report.
-- Reusable skills must remain concise and procedural, be registered in the relevant `.skills/` index, and be validated with the smallest relevant test or deterministic check.
-- Do not duplicate policy across skills and `AGENTS.md`. Put universal behavioural rules in `AGENTS.md`; put task-specific procedures in skills.
-- Code or runtime self-modification still requires the normal approved bounded coding workflow and relevant validation.
-- Stop without changing anything when the evidence, target, ownership, or validation method is unclear.
+Use `.agents/skills/instruction-maintenance/SKILL.md` for instruction structure changes.
 
 ## Runtime boundaries
 
-- Agent registry definitions are owned by Agent Factory.
-- Hub may read the staged registry from Agent Factory.
-- Hub must not write registry definitions back to Agent Factory unless explicitly approved.
-- Specialist implementation work should be dispatched to the appropriate specialist agent, not implemented by Hub by default.
-- Telegram is an operator interface, not the source of orchestration rules.
+- Agent registry definitions are owned by Agent Factory; Hub may read staged definitions but must not write them back unless explicitly approved.
+- Specialist implementation work should be dispatched to the appropriate specialist by default.
+- Telegram is an operator interface, not the source of orchestration policy.
+- Runtime Hub skills stored in the knowledge store are product data; `.agents/skills/` contains repository instructions for coding agents. Do not conflate them.
 
 ## Universal rules
 
-- Never guess or invent.
-- Before introducing or relying on heuristic/approximate inference, use the global `heuristic-review` guardrail. Assistive heuristics may help an LLM or reduce search cost when they cannot determine the final outcome; heuristics that decide semantic meaning, business outcome, target, permission, or action require explicit human approval.
-- Keep context bounded. Load the smallest file set that can answer the task.
-- Keep work bounded and small. Touch only files required for the task.
-- Do not add hidden autonomous behaviour, broad discovery loops, or uncontrolled self-improvement.
-- Do not add compatibility shims, duplicate implementations, unused code, dead code, or legacy code unless explicitly requested.
-- Do not hardcode hidden choices. If a prototype hardcode is explicitly approved, state why, where it lives, and what would make it configurable later.
-- Do not add fallback/default behaviour that changes the outcome unless explicitly approved.
-- On uncertainty, missing standards, failed validation, unavailable tools, invalid AI output, or ambiguous requirements, stop or escalate instead of silently choosing an alternate path.
-- Stop and ask before destructive, broad, risky, ambiguous, expensive, repo-changing, or code-executing actions unless the human has already approved them.
-- Runtime safety must be enforced in code/settings/admin, not only in instruction files.
-- Do not mask failures with broad fallback logic or silent defaults.
-- Do not claim completion without validation evidence or a clear reason validation was not applicable.
+- Never guess or invent; inspect authoritative sources first.
+- Keep context and changes bounded to the task.
+- Do not add hidden autonomous behaviour, broad discovery loops, compatibility shims, duplicate implementations, dead code, or outcome-changing fallbacks unless explicitly approved.
+- Do not hardcode hidden choices that belong in config/schema/managed knowledge.
+- Heuristics that determine semantic meaning, business outcome, target, permission, or action require explicit human approval; assistive heuristics may only support an authoritative path.
+- Runtime safety must be enforced in code/settings/admin, not only prose.
+- Stop/escalate on uncertainty or failed validation rather than silently choosing an alternate path.
+- Do not claim completion without validation evidence.
+- Preserve unrelated concurrent work.
 
 ## Backlog
 
-The live backlog source of truth is the Agent Hub Google Sheet referenced in README.md.
-
-Do not create duplicate local backlog files unless explicitly requested.
+The live Agent Hub backlog is the Google Sheet referenced in project docs. Do not create a competing local backlog.
 
 ## Finish report
 
-Report only what matters when the agent finishes a task:
-
-- Files changed
-- Behaviour changed
-- Self-improvement evidence and validation, when applicable
-- Validation command/result, or why not run
-- Remaining risk or follow-up
-
-## Repository text format
-
-- All tracked text files use LF line endings. `.gitattributes` and `.editorconfig` are authoritative; do not introduce or preserve CRLF.
-- Before finishing edits, run `git diff --check`. If a touched tracked text file is CRLF or mixed, normalize that touched file to LF without rewriting unrelated dirty work.
+Report what changed, validation performed/result, remaining risk/follow-up, and Git integration state when relevant.

@@ -5,7 +5,7 @@ description: Use only when editing Agent Hub instruction files: AGENTS.md, proje
 
 # Skill: Instruction Maintenance
 
-Use when editing `AGENTS.md`, `.skills/*/SKILL.md`, or important project docs that guide agents.
+Use when editing `AGENTS.md`, `.agents/skills/*/SKILL.md`, or important project docs that guide agents.
 
 ## Purpose
 
@@ -14,7 +14,7 @@ Keep instructions useful, small, current, and non-contradictory.
 ## Source hierarchy
 
 - `AGENTS.md`: always-loaded repo rules and routing.
-- `.skills/*/SKILL.md`: compact task-specific rules loaded only for that work area.
+- `.agents/skills/*/SKILL.md`: compact task-specific rules loaded only for that work area.
 - `docs/*`: human/reference documentation, not always-loaded operating rules unless explicitly linked.
 
 ## Cleanup rules
@@ -47,7 +47,7 @@ Keep instructions useful, small, current, and non-contradictory.
 
 ## Cross-tool sharing
 
-`.skills/` and `AGENTS.md` at the repo root are read by more than one agent tool (Claude Code and Codex have both worked this repo in the same session history). Do not relocate `.skills/` into a tool-specific path (e.g. `.claude/skills/`) to make it "properly discoverable" by one tool — that breaks it for the other. If a tool can't invoke these as native skills, the fix is reading them directly per AGENTS.md's own instruction, not moving the files.
+``.agents/skills/` and `AGENTS.md` are shared repository instruction owners. Do not relocate shared skills into an agent-specific adapter path to satisfy one runtime. If a runtime needs a bootstrap adapter, that adapter may point into the shared routing; the shared project must not depend on the adapter.
 
 ## Do not
 

@@ -4,7 +4,7 @@ A Hub skill is an inert procedural instruction Hub's own reasoning can draw on â
 never executable code, never a permission/scope/registered-agent change. Skills
 live in their own namespace in the shared knowledge store (the same SqliteStore
 hub_memory.py already writes learnings into), so this module never touches the
-filesystem and can never reach the repository's `.skills/` coding-agent
+filesystem and can never reach the repository's `.agents/skills/` coding-agent
 instructions.
 
 HubOrchestrator.learn() uses this store both to retrieve relevant existing

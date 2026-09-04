@@ -41,7 +41,7 @@ Use the secure Human MCP tools directly when they are exposed by the current cli
 5. Deduplicate against existing rows. Do not invent a new ID until the live sheet has been checked.
 6. Append or update only the agreed fields.
 7. Re-read the sheet and verify the written row or cells before claiming success.
-8. Follow `.skills/backlog-management/SKILL.md` for backlog content and governance rules.
+8. Follow `.agents/skills/backlog-management/SKILL.md` for backlog content and governance rules.
 
 ## When MCP tools are not exposed directly
 

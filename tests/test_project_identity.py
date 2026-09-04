@@ -30,7 +30,7 @@ def test_cli_parser_uses_agent_hub_prog_name() -> None:
 def test_tracked_project_files_do_not_reference_retired_identity() -> None:
     tracked_files = [ROOT / "README.md", ROOT / "src" / "agent_hub" / "cli.py"]
     tracked_files.extend(sorted((ROOT / "docs").rglob("*")))
-    tracked_files.extend(sorted((ROOT / ".skills").rglob("SKILL.md")))
+    tracked_files.extend(sorted((ROOT / ".agents" / "skills").rglob("SKILL.md")))
 
     retired_identity = "ar" + "my"
 

@@ -17,9 +17,9 @@ Use when creating, updating, deduplicating, grooming, or analysing backlog items
 
 ## How to read and write the sheet
 
-Load `.skills/human-mcp-access/SKILL.md` first.
+Load `.agents/skills/human-mcp-access/SKILL.md` first.
 
-Preferred access is the secure-first Human MCP configuration from `.mcp.json`, following `.skills/human-mcp-access/SKILL.md`. Use its ngrok fallback only after a genuine secure failure, stated explicitly. Runtime connector names may differ, so inspect the current tool catalogue rather than guessing. Use:
+Preferred access is the secure-first Human MCP configuration from `.mcp.json`, following `.agents/skills/human-mcp-access/SKILL.md`. Use its ngrok fallback only after a genuine secure failure, stated explicitly. Runtime connector names may differ, so inspect the current tool catalogue rather than guessing. Use:
 
 - `sheets_read_rows` to inspect the live header and all existing rows
 - `sheets_append_row` to add a complete row
