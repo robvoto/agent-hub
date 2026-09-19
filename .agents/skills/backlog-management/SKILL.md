@@ -12,7 +12,7 @@ Use when creating, updating, deduplicating, grooming, or analysing backlog items
 - Working backlog: `https://docs.google.com/spreadsheets/d/1v1zJjwGTqhOgb06nYChaGjRNZIVXQht5pNBUbh9r7RA/edit?gid=32071178#gid=32071178`
 - Spreadsheet ID: `1v1zJjwGTqhOgb06nYChaGjRNZIVXQht5pNBUbh9r7RA`
 - This Google Sheet is the only backlog source of truth for Agent Hub. Do not create local backlog files as a substitute.
-- Use the canonical Agent Hub backlog service account: `agent-backlog-access@robvoto-agent-platform-iam.gserviceaccount.com`. Do not use the generic CV account or the old Angular/Job Hunter backlog account.
+- Use the canonical backlog access identity where configured: `agent-backlog-access@robvoto-agent-platform-iam.gserviceaccount.com`. It should have access to all relevant project backlog spreadsheets. Do not infer that other configured service accounts are prohibited.
 - Read the header row first and update by column name, never by fixed position.
 - Do not add, remove, or rename columns unless explicitly agreed.
 

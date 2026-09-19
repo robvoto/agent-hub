@@ -22,8 +22,9 @@ Use this skill to discover and call the repo-configured Human MCP connection wit
 - Sheet/tab name: `Backlog`
 - Browser gid: `32071178`
 - The live Google Sheet is the only backlog source of truth.
-- Canonical Agent Hub backlog service account: `agent-backlog-access@robvoto-agent-platform-iam.gserviceaccount.com`
-- Do not use the generic CV service account or the old Angular/Job Hunter backlog service account for this sheet.
+- Canonical backlog access identity: `agent-backlog-access@robvoto-agent-platform-iam.gserviceaccount.com`
+- This identity should have access to all relevant project backlog spreadsheets, not only Agent Hub.
+- Do not infer that other configured service accounts are prohibited; use a project-specific account only when current configuration and access evidence require it.
 
 ## Preferred MCP tools
 
