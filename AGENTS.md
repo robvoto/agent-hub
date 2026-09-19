@@ -42,6 +42,9 @@ Use `.agents/skills/instruction-maintenance/SKILL.md` for instruction structure 
 - Stop/escalate on uncertainty or failed validation rather than silently choosing an alternate path.
 - Do not claim completion without validation evidence.
 - Preserve unrelated concurrent work.
+- Before editing, inspect the exact current target file and apply a narrow, context-checked patch.
+- If a patch hunk or `old_text` does not match, stop and reread the file before creating a new patch; never retry stale patch text.
+- After editing, inspect the diff and run the required validation before reporting completion.
 
 ## Backlog
 
