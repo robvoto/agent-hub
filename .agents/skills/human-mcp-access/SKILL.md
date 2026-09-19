@@ -22,6 +22,8 @@ Use this skill to discover and call the repo-configured Human MCP connection wit
 - Sheet/tab name: `Backlog`
 - Browser gid: `32071178`
 - The live Google Sheet is the only backlog source of truth.
+- Canonical Agent Hub backlog service account: `agent-backlog-access@robvoto-agent-platform-iam.gserviceaccount.com`
+- Do not use the generic CV service account or the old Angular/Job Hunter backlog service account for this sheet.
 
 ## Preferred MCP tools
 
@@ -84,6 +86,7 @@ The `row` and `col` values are 1-based. For updates, derive both from the freshl
 ## Safety and stop conditions
 
 - Never print tokens, credentials, cookies, or unrelated MCP configuration values.
+- Browser use is allowed when genuinely needed, but never hijack, focus, navigate, reload, close, reset, or otherwise disturb the user's currently open browser session or tabs. Identify the correct named profile and use a separate isolated instance or assistant-owned tab; stop if safe isolation is unavailable.
 - Never use a local Markdown, CSV, Excel file, or copied spreadsheet as a substitute for the live backlog.
 - Never claim a write succeeded without re-reading the live sheet.
 - Never create backlog IDs from memory alone.
