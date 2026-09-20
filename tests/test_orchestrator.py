@@ -2428,6 +2428,86 @@ def test_manifest_task_kind_filter_exposes_only_factory_for_agent_package_lifecy
     assert build_registries[-1] == ["package-governor"]
 
 
+def test_live_documentation_request_excludes_agent_factory_by_manifest_contract(
+    monkeypatch, tmp_path
+):
+    """The live AGENT-HUB-015 request must not expose Agent Factory."""
+    from agent_hub.orchestrator import RoutingDecision
+
+    runtime = {
+        "mode": "subprocess",
+        "entrypoint": "fake-agent",
+        "working_directory": str(tmp_path),
+        "input_arg": "--input-json",
+        "output_arg": "--output-json",
+        "default_execution_mode": "instruction_only",
+    }
+    ai_tech_lead = AgentSpec(
+        id="ai-tech-lead",
+        name="AI Tech Lead",
+        purpose=(
+            "Primary responsibility: Lead and execute work on new or existing technical solutions.\n"
+            "Select for: Implementing backlog items, building new technical solutions, or changing "
+            "code, tests, configuration, architecture, infrastructure, or documentation for a new "
+            "or existing technical solution.\n"
+            "Do not select for: Designing, staging, approving, rejecting, or promoting a new "
+            "specialist agent package as the requested deliverable."
+        ),
+        task_contract={
+            "task_kinds": ["coding_task", "technical_analysis", "backlog_refinement"],
+            "task_kind_descriptions": {
+                "technical_analysis": "Analyse or review an existing technical solution and produce recommendations or documentation without requiring implementation."
+            },
+        },
+        runtime=runtime,
+    )
+    agent_factory = AgentSpec(
+        id="agent-factory",
+        name="Agent Factory",
+        purpose=(
+            "Primary responsibility: Design and govern new specialist agent packages.\n"
+            "Select for: Creating, configuring, validating, staging, approving, rejecting, or "
+            "promoting a specialist agent package as the requested deliverable.\n"
+            "Do not select for: Implementing backlog items, fixing bugs, changing documentation, "
+            "or modifying source code in an existing software project."
+        ),
+        task_contract={
+            "task_kinds": ["agent_package_lifecycle"],
+            "task_kind_descriptions": {
+                "agent_package_lifecycle": "Design, create, configure, validate, stage, approve, reject, or promote a specialist agent package as the requested deliverable."
+            },
+        },
+        runtime=runtime,
+    )
+    monkeypatch.setattr(
+        "agent_hub.orchestrator._load_specialists",
+        lambda: [ai_tech_lead, agent_factory],
+    )
+    eligible_registries: list[list[str]] = []
+
+    def _fake_build_graph(self, registry=None, **kwargs):
+        active = self._registry if registry is None else registry
+        eligible_registries.append([spec.id for spec in active])
+        return _FakeGraph("Done")
+
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", _fake_build_graph)
+
+    def _classifier(message, registry, *, model):
+        return RoutingDecision(
+            route="specialist",
+            task_kind="technical_analysis",
+            reason="Existing-project documentation analysis belongs to technical delivery.",
+        )
+
+    orchestrator = HubOrchestrator(routing_classifier=_classifier)
+    reply = orchestrator.invoke(
+        "Analyse Agent Hub and propose one tiny documentation-only improvement. Do not modify files."
+    )
+
+    assert reply == "Done"
+    assert eligible_registries[-1] == ["ai-tech-lead"]
+
+
 def test_specialist_route_does_not_expose_shared_docs_as_competing_tool(monkeypatch, tmp_path):
     from agent_hub.orchestrator import RoutingDecision
 
