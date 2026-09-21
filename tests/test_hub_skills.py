@@ -66,9 +66,7 @@ def test_propose_update_to_existing_slug_supersedes_old_version(tmp_path):
 def test_update_switches_versions_in_one_atomic_batch(tmp_path):
     sqlite_store = SqliteStore(tmp_path / "knowledge.sqlite3")
     store = HubSkillStore(sqlite_store)
-    store.propose_skill(
-        "evidence-checking", "Evidence checking", "v1 body.", source="cli"
-    )
+    store.propose_skill("evidence-checking", "Evidence checking", "v1 body.", source="cli")
     recorded_batches = []
     original_batch = sqlite_store.batch
 
@@ -79,9 +77,7 @@ def test_update_switches_versions_in_one_atomic_batch(tmp_path):
 
     sqlite_store.batch = recording_batch
 
-    store.propose_skill(
-        "evidence-checking", "Evidence checking", "v2 body.", source="cli"
-    )
+    store.propose_skill("evidence-checking", "Evidence checking", "v2 body.", source="cli")
 
     transitions = [
         batch
@@ -179,12 +175,8 @@ def test_rollback_reactivates_previous_version(tmp_path):
 def test_rollback_switches_versions_in_one_atomic_batch(tmp_path):
     sqlite_store = SqliteStore(tmp_path / "knowledge.sqlite3")
     store = HubSkillStore(sqlite_store)
-    store.propose_skill(
-        "evidence-checking", "Evidence checking", "v1 body.", source="cli"
-    )
-    store.propose_skill(
-        "evidence-checking", "Evidence checking", "v2 body.", source="cli"
-    )
+    store.propose_skill("evidence-checking", "Evidence checking", "v1 body.", source="cli")
+    store.propose_skill("evidence-checking", "Evidence checking", "v2 body.", source="cli")
     recorded_batches = []
     original_batch = sqlite_store.batch
 
@@ -290,9 +282,7 @@ def test_find_relevant_skills_excludes_disabled_and_superseded(tmp_path):
     store.propose_skill(
         "evidence-checking", "Evidence checking", "Check evidence first, updated.", source="cli"
     )
-    store.propose_skill(
-        "widget-forge", "Widget forge", "Forge widgets carefully.", source="cli"
-    )
+    store.propose_skill("widget-forge", "Widget forge", "Forge widgets carefully.", source="cli")
     store.disable_skill("widget-forge")
 
     assert store.find_relevant_skills("evidence") != []

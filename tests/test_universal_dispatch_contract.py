@@ -231,8 +231,9 @@ def test_widget_forge_discovered_and_dispatched_through_universal_envelope(
     assert after_approval_request is not None
     assert after_approval_request.state == TASK_STATE_WAITING_APPROVAL
     assert after_approval_request.approval_token == "widget-approval-token"
-    assert "Additional clarification from the user: Square widgets, please." in (
-        _ScriptedFakePopen.calls[1]["task"]
+    assert (
+        "Additional clarification from the user: Square widgets, please."
+        in (_ScriptedFakePopen.calls[1]["task"])
     )
 
     # 4. Resume after approval, again through the unmodified generic path.
@@ -265,9 +266,7 @@ def test_widget_forge_discovered_and_dispatched_through_universal_envelope(
     ]
 
 
-def test_widget_forge_resumes_a_generic_pending_decision_via_decide(
-    monkeypatch, tmp_path, caplog
-):
+def test_widget_forge_resumes_a_generic_pending_decision_via_decide(monkeypatch, tmp_path, caplog):
     """A specialist can pause with a structured `pending_decision` (prompt +
     named options) instead of the fixed approval shape, and Hub relays and
     resumes it generically — no widget-forge-specific code exists for this
@@ -302,7 +301,9 @@ def test_widget_forge_resumes_a_generic_pending_decision_via_decide(
     ]
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph())
+    monkeypatch.setattr(
+        HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph()
+    )
 
     orchestrator = HubOrchestrator()
     run = get_task_run_store().create_run(
@@ -371,7 +372,9 @@ def test_widget_forge_only_receives_context_its_manifest_accepts(monkeypatch, tm
     _ScriptedFakePopen.responses = [{"status": "success", "summary": "Forged 3 widgets."}]
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph())
+    monkeypatch.setattr(
+        HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph()
+    )
 
     orchestrator = HubOrchestrator()
     orchestrator.set_current_project(str(working_directory))
@@ -418,9 +421,7 @@ def test_compatible_specialist_receives_resolved_backlog_reference(monkeypatch, 
         },
         source="memory:backlog",
     )
-    registered = get_project_resource_registry().list(
-        context, resource_type="backlog"
-    )
+    registered = get_project_resource_registry().list(context, resource_type="backlog")
     assert len(registered) == 1
     assert "item_id" not in registered[0].location
     assert "item_id" not in registered[0].metadata
@@ -503,7 +504,9 @@ def test_widget_forge_dispatch_fails_clearly_when_required_context_is_missing(
     _ScriptedFakePopen.responses = []
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph())
+    monkeypatch.setattr(
+        HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph()
+    )
 
     orchestrator = HubOrchestrator()
     run = get_task_run_store().create_run(
@@ -523,9 +526,7 @@ def test_widget_forge_dispatch_fails_clearly_when_required_context_is_missing(
     assert final.error_message and "requires project_root" in final.error_message
 
 
-def test_widget_forge_receives_versioned_project_context_when_compatible(
-    monkeypatch, tmp_path
-):
+def test_widget_forge_receives_versioned_project_context_when_compatible(monkeypatch, tmp_path):
     """A specialist that declares project_context_contract.supported_schema_versions
     including a version Hub also supports gets a versioned project_context envelope,
     alongside (not instead of) the legacy flat project_root/references fields."""
@@ -545,7 +546,9 @@ def test_widget_forge_receives_versioned_project_context_when_compatible(
     _ScriptedFakePopen.responses = [{"status": "success", "summary": "Forged 3 widgets."}]
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph())
+    monkeypatch.setattr(
+        HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph()
+    )
 
     orchestrator = HubOrchestrator()
     orchestrator.set_current_project(str(working_directory))
@@ -566,9 +569,7 @@ def test_widget_forge_receives_versioned_project_context_when_compatible(
     }
 
 
-def test_widget_forge_dispatch_fails_clearly_on_incompatible_schema_version(
-    monkeypatch, tmp_path
-):
+def test_widget_forge_dispatch_fails_clearly_on_incompatible_schema_version(monkeypatch, tmp_path):
     """A specialist that declares project_context_contract but shares no
     schema_version with Hub is refused outright — Hub never guesses or falls
     back to a version the specialist hasn't confirmed it understands."""
@@ -588,7 +589,9 @@ def test_widget_forge_dispatch_fails_clearly_on_incompatible_schema_version(
     _ScriptedFakePopen.responses = []
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph())
+    monkeypatch.setattr(
+        HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph()
+    )
 
     orchestrator = HubOrchestrator()
     run = get_task_run_store().create_run(
@@ -625,7 +628,9 @@ def test_widget_forge_dispatch_omits_project_context_when_contract_not_declared(
     _ScriptedFakePopen.responses = [{"status": "success", "summary": "Forged 3 widgets."}]
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph())
+    monkeypatch.setattr(
+        HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph()
+    )
 
     orchestrator = HubOrchestrator()
     orchestrator.set_current_project(str(working_directory))
@@ -641,9 +646,7 @@ def test_widget_forge_dispatch_omits_project_context_when_contract_not_declared(
     assert "project_context" not in call
 
 
-def test_legacy_specialist_without_any_context_declarations_still_dispatches(
-    monkeypatch, tmp_path
-):
+def test_legacy_specialist_without_any_context_declarations_still_dispatches(monkeypatch, tmp_path):
     """A specialist manifest from before accepted_context/required_context or
     project_context_contract existed — no context declarations at all — still
     dispatches normally: no project_context envelope, flat fields sent by the
@@ -656,7 +659,11 @@ def test_legacy_specialist_without_any_context_declarations_still_dispatches(
     manifest = {
         "id": FAKE_SPECIALIST_ID,
         "name": "Widget Forge",
-        "purpose": "Primary responsibility: Forge widgets.\nSelect for: Anything.\nDo not select for: Nothing.",
+        "purpose": (
+            "Primary responsibility: Forge widgets.\n"
+            "Select for: Anything.\n"
+            "Do not select for: Nothing."
+        ),
         "tools": [],
         "version": "0.1.0",
         "input_contract": {
@@ -680,7 +687,9 @@ def test_legacy_specialist_without_any_context_declarations_still_dispatches(
             "output_arg": "--output-json",
             "default_execution_mode": "execute",
         },
-        "output_contract": {"status_values": ["success", "needs_clarification", "approval_required", "failed"]},
+        "output_contract": {
+            "status_values": ["success", "needs_clarification", "approval_required", "failed"]
+        },
     }
     (agent_dir / "agent.json").write_text(json.dumps(manifest), encoding="utf-8")
 
@@ -693,7 +702,9 @@ def test_legacy_specialist_without_any_context_declarations_still_dispatches(
     _ScriptedFakePopen.responses = [{"status": "success", "summary": "Forged 3 widgets."}]
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph())
+    monkeypatch.setattr(
+        HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph()
+    )
 
     orchestrator = HubOrchestrator()
     orchestrator.set_current_project(str(working_directory))

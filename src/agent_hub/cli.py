@@ -136,7 +136,7 @@ def _run_chat(model: str) -> None:
             continue
 
         if text == "/resume" or text.startswith("/resume "):
-            identifier = text[len("/resume"):].strip()
+            identifier = text[len("/resume") :].strip()
             reply = "Usage: /resume <id>" if not identifier else orch.resume_task(identifier)
             print(f"\nHub: {reply}\n")
             continue
@@ -146,7 +146,7 @@ def _run_chat(model: str) -> None:
             continue
 
         if text == "/learn" or text.startswith("/learn "):
-            value = text[len("/learn"):].strip()
+            value = text[len("/learn") :].strip()
             if not value:
                 print("\nHub: Usage: /learn <instruction or fact>\n")
             else:
@@ -158,7 +158,7 @@ def _run_chat(model: str) -> None:
             continue
 
         if text.startswith("/learn-mode"):
-            arg = text[len("/learn-mode"):].strip().lower()
+            arg = text[len("/learn-mode") :].strip().lower()
             if arg == "on":
                 print(f"\nHub: {orch.set_learning_mode(True)}\n")
             elif arg == "off":
@@ -170,12 +170,12 @@ def _run_chat(model: str) -> None:
             continue
 
         if text.startswith("/forget"):
-            identifier = text[len("/forget"):].strip()
+            identifier = text[len("/forget") :].strip()
             print(f"\nHub: {orch.forget_learning(identifier)}\n")
             continue
 
         if text.startswith("/project"):
-            arg = text[len("/project"):].strip()
+            arg = text[len("/project") :].strip()
             if not arg:
                 print(f"\nHub: {orch.current_project_status()}\n")
             elif arg.lower() == "clear":
@@ -185,7 +185,7 @@ def _run_chat(model: str) -> None:
             continue
 
         if text == "/stop" or text.startswith("/stop "):
-            identifier = text[len("/stop"):].strip() or None
+            identifier = text[len("/stop") :].strip() or None
             print(f"\nHub: {orch.stop_current_task(identifier=identifier)}\n")
             continue
 
@@ -201,7 +201,7 @@ def _run_chat(model: str) -> None:
             continue
 
         if text.startswith("/reject"):
-            reason = text[len("/reject"):].strip() or "Rejected by user"
+            reason = text[len("/reject") :].strip() or "Rejected by user"
             try:
                 reply = orch.reject_pending(reason)
                 print(f"\nHub: {reply}\n")

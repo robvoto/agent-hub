@@ -209,9 +209,7 @@ class ProjectContextRegistry:
 
         return self._revalidate(stored)
 
-    def resolve_for_request(
-        self, session_id: str, request_text: str
-    ) -> ProjectContextResolution:
+    def resolve_for_request(self, session_id: str, request_text: str) -> ProjectContextResolution:
         """Resolve a project named by a request, bounded by known contexts.
 
         Exact known aliases (canonical project ID, root, remote, or the
@@ -253,8 +251,7 @@ class ProjectContextRegistry:
             context
             for context in known
             if any(
-                _contains_alias(request_text or "", alias)
-                for alias in _context_aliases(context)
+                _contains_alias(request_text or "", alias) for alias in _context_aliases(context)
             )
         ]
         if len(matches) > 1:

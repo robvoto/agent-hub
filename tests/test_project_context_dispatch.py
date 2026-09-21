@@ -111,7 +111,9 @@ def test_dispatch_sends_canonical_project_context_when_selected(monkeypatch, tmp
     _ScriptedFakePopen.responses = [{"status": "success", "summary": "Done."}]
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph())
+    monkeypatch.setattr(
+        HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph()
+    )
 
     orchestrator = HubOrchestrator()
     orchestrator.set_current_project(str(project))
@@ -136,7 +138,9 @@ def test_dispatch_omits_project_context_for_a_specialist_that_does_not_accept_it
     _ScriptedFakePopen.responses = [{"status": "success", "summary": "Done."}]
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph())
+    monkeypatch.setattr(
+        HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph()
+    )
 
     orchestrator = HubOrchestrator()
     orchestrator.set_current_project(str(project))
@@ -156,7 +160,9 @@ def test_dispatch_stops_when_selected_project_root_no_longer_exists(monkeypatch,
     _ScriptedFakePopen.calls = []
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph())
+    monkeypatch.setattr(
+        HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph()
+    )
 
     orchestrator = HubOrchestrator()
     orchestrator.set_current_project(str(project))
@@ -188,7 +194,9 @@ def test_dispatch_ignores_stale_project_for_a_specialist_that_does_not_accept_it
     _ScriptedFakePopen.responses = [{"status": "success", "summary": "Done."}]
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph())
+    monkeypatch.setattr(
+        HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph()
+    )
 
     orchestrator = HubOrchestrator()
     orchestrator.set_current_project(str(project))
@@ -216,7 +224,9 @@ def test_resumed_dispatch_replays_pinned_project_context(monkeypatch, tmp_path):
     ]
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph())
+    monkeypatch.setattr(
+        HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph()
+    )
 
     orchestrator = HubOrchestrator()
     orchestrator.set_current_project(str(project))
@@ -259,7 +269,9 @@ def test_approval_resume_replays_pinned_project_context(monkeypatch, tmp_path):
     ]
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph())
+    monkeypatch.setattr(
+        HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph()
+    )
 
     orchestrator = HubOrchestrator()
     orchestrator.set_current_project(str(project))

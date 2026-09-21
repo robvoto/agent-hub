@@ -308,7 +308,7 @@ class TelegramGateway:
             return
 
         if text == "/resume" or text.startswith("/resume "):
-            identifier = text[len("/resume"):].strip()
+            identifier = text[len("/resume") :].strip()
             reply = "Usage: /resume <id>" if not identifier else self._orch.resume_task(identifier)
             _send_message(self._token, chat_id, reply, parse_mode=None)
             return
@@ -323,7 +323,7 @@ class TelegramGateway:
             return
 
         if text == "/learn" or text.startswith("/learn "):
-            value = text[len("/learn"):].strip()
+            value = text[len("/learn") :].strip()
             reply = (
                 "Usage: /learn <instruction or fact>"
                 if not value
@@ -337,7 +337,7 @@ class TelegramGateway:
             return
 
         if text.startswith("/learn-mode"):
-            arg = text[len("/learn-mode"):].strip().lower()
+            arg = text[len("/learn-mode") :].strip().lower()
             if arg == "on":
                 reply = self._orch.set_learning_mode(True)
             elif arg == "off":
@@ -350,7 +350,7 @@ class TelegramGateway:
             return
 
         if text.startswith("/forget"):
-            identifier = text[len("/forget"):].strip()
+            identifier = text[len("/forget") :].strip()
             _send_message(
                 self._token,
                 chat_id,
@@ -360,7 +360,7 @@ class TelegramGateway:
             return
 
         if text.startswith("/project"):
-            arg = text[len("/project"):].strip()
+            arg = text[len("/project") :].strip()
             if not arg:
                 reply = self._orch.current_project_status()
             elif arg.lower() == "clear":
@@ -371,7 +371,7 @@ class TelegramGateway:
             return
 
         if text == "/stop" or text.startswith("/stop "):
-            identifier = text[len("/stop"):].strip() or None
+            identifier = text[len("/stop") :].strip() or None
             reply = self._orch.stop_current_task(identifier=identifier)
             _send_message(self._token, chat_id, reply, parse_mode=None)
             return
@@ -388,7 +388,7 @@ class TelegramGateway:
             return
 
         if text.startswith("/reject"):
-            reason = text[len("/reject"):].strip() or "Rejected by user"
+            reason = text[len("/reject") :].strip() or "Rejected by user"
             try:
                 reply = self._orch.reject_pending(reason)
             except Exception as exc:
@@ -438,8 +438,7 @@ class TelegramGateway:
 
         if stale:
             human_logger.info(
-                "Skipping %d queued Telegram update(s) older than %ds on startup; "
-                "next offset=%d",
+                "Skipping %d queued Telegram update(s) older than %ds on startup; next offset=%d",
                 len(stale),
                 int(_STARTUP_STALE_SECONDS),
                 next_offset,
@@ -654,7 +653,9 @@ class TelegramGateway:
         minutes, _ = divmod(seconds, 60)
         hours, minutes = divmod(minutes, 60)
         if hours and minutes:
-            return f"{hours} hour{'s' if hours != 1 else ''} {minutes} minute{'s' if minutes != 1 else ''}"
+            hour_unit = "hour" if hours == 1 else "hours"
+            minute_unit = "minute" if minutes == 1 else "minutes"
+            return f"{hours} {hour_unit} {minutes} {minute_unit}"
         if hours:
             return f"{hours} hour{'s' if hours != 1 else ''}"
         if minutes < 1:

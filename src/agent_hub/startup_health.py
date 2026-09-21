@@ -55,13 +55,8 @@ class StartupHealthReport:
         warning_count = sum(check.status == "WARNING" for check in self.checks)
         fail_count = sum(check.status == "FAIL" for check in self.checks)
         lines = [f"Startup health check ({self.mode})"]
-        lines.extend(
-            f"{check.status:<7} {check.name}: {check.detail}"
-            for check in self.checks
-        )
-        lines.append(
-            f"Summary: {pass_count} PASS, {warning_count} WARNING, {fail_count} FAIL"
-        )
+        lines.extend(f"{check.status:<7} {check.name}: {check.detail}" for check in self.checks)
+        lines.append(f"Summary: {pass_count} PASS, {warning_count} WARNING, {fail_count} FAIL")
         return "\n".join(lines)
 
     def render_human(self) -> str:
@@ -84,7 +79,9 @@ class StartupHealthReport:
         lines.append(f"- {_human_factory_summary(self.checks)}")
         lines.append(f"- {_human_agent_summary(self.checks)}")
         lines.append(f"- {_human_storage_summary(self.checks)}")
-        if any(check.name == "LLM_COST_CATALOG" and check.status == "PASS" for check in self.checks):
+        if any(
+            check.name == "LLM_COST_CATALOG" and check.status == "PASS" for check in self.checks
+        ):
             lines.append("- LLM cost catalog loaded.")
         if warnings:
             lines.append("Warnings:")
@@ -121,7 +118,9 @@ def _human_telegram_summary(checks: tuple[HealthCheckResult, ...]) -> str:
 
 def _human_factory_summary(checks: tuple[HealthCheckResult, ...]) -> str:
     root_ok = any(check.name == "AGENT_FACTORY_ROOT" and check.status == "PASS" for check in checks)
-    registry_ok = any(check.name == "AGENT_REGISTRY_DIR" and check.status == "PASS" for check in checks)
+    registry_ok = any(
+        check.name == "AGENT_REGISTRY_DIR" and check.status == "PASS" for check in checks
+    )
     if root_ok and registry_ok:
         return "Agent Factory project and registry are available."
     return "Agent Factory startup checks ran."

@@ -29,5 +29,8 @@ jobs:
       - name: Sync locked development environment
         run: uv sync --locked --dev
 
+      - name: Run lint
+        run: uv run ruff check .
+
       - name: Run tests
         run: uv run pytest -q

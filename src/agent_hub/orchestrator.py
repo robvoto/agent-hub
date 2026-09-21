@@ -179,10 +179,7 @@ def _learned_references_for_task(task: str, *, max_items: int = 3) -> list[str]:
     for record in HubMemoryManager().list_learnings():
         if record.scope != "operator" or record.status != "active":
             continue
-        urls = [
-            value.rstrip(".,;:!?)]}")
-            for value in _LEARNED_URL_RE.findall(record.value)
-        ]
+        urls = [value.rstrip(".,;:!?)]}") for value in _LEARNED_URL_RE.findall(record.value)]
         if not urls:
             continue
         overlap = task_terms & _reference_terms(record.value)
@@ -210,7 +207,9 @@ def _human_task_log(task_run_id: str | None, message: str, *args: Any) -> None:
 
 
 _NODE_EXPLANATIONS = {
-    "agent": "Understand the request and decide whether Hub should answer directly or call a specialist.",
+    "agent": (
+        "Understand the request and decide whether Hub should answer directly or call a specialist."
+    ),
     "tools": "Execute the selected specialist/tool and return its result to the orchestrator.",
 }
 
@@ -241,9 +240,7 @@ def _resolve_project_context_for_task_run(task_run_id: str | None) -> ProjectCon
     run = get_task_run_store().get_run(task_run_id)
     if run is None:
         return ProjectContextResolution(context=None, error=None)
-    return get_project_context_registry().resolve_for_request(
-        run.session_id, run.user_message
-    )
+    return get_project_context_registry().resolve_for_request(run.session_id, run.user_message)
 
 
 def _project_context_override_from_pending(pending: TaskRun) -> ProjectContext | None:
@@ -372,9 +369,7 @@ def _advertised_task_kinds(registry: list[AgentSpec]) -> set[str]:
 
 def _eligible_agents_for_task_kind(registry: list[AgentSpec], task_kind: str) -> list[AgentSpec]:
     return [
-        spec
-        for spec in registry
-        if task_kind in (spec.task_contract.get("task_kinds", []) or [])
+        spec for spec in registry if task_kind in (spec.task_contract.get("task_kinds", []) or [])
     ]
 
 
@@ -392,7 +387,9 @@ def _classify_routing_request(
     """
     advertised = sorted(_advertised_task_kinds(registry))
     if not advertised:
-        return RoutingDecision(route="direct", task_kind=None, reason="No specialist task kinds are advertised.")
+        return RoutingDecision(
+            route="direct", task_kind=None, reason="No specialist task kinds are advertised."
+        )
 
     cards = []
     for spec in registry:
@@ -401,8 +398,7 @@ def _classify_routing_request(
             continue
         descriptions = spec.task_contract.get("task_kind_descriptions", {}) or {}
         kind_lines = [
-            f"- {kind}: {descriptions.get(kind, 'No description supplied.')}"
-            for kind in kinds
+            f"- {kind}: {descriptions.get(kind, 'No description supplied.')}" for kind in kinds
         ]
         cards.append(
             f"Agent: {spec.name}\n"
@@ -410,10 +406,12 @@ def _classify_routing_request(
         )
     prompt = (
         "Classify the operator request for routing.\n"
-        "Choose route='specialist' only when exactly one advertised task kind clearly describes the requested work. "
+        "Choose route='specialist' only when exactly one advertised task kind clearly "
+        "describes the requested work. "
         "For specialist routing, task_kind MUST be one of the advertised task kinds below. "
         "Use route='direct' for ordinary conversation that does not require a specialist. "
-        "Use route='clarify' when the requested work is ambiguous or no advertised task kind clearly fits. "
+        "Use route='clarify' when the requested work is ambiguous or no advertised task "
+        "kind clearly fits. "
         "Do not choose an agent; choose only the task kind.\n\n"
         f"Advertised task kinds: {', '.join(advertised)}\n\n"
         + "\n\n".join(cards)
@@ -428,12 +426,11 @@ def _classify_routing_request(
             )
         if not _eligible_agents_for_task_kind(registry, decision.task_kind):
             raise RuntimeError(
-                f"Routing classifier selected task kind with no eligible specialist: {decision.task_kind!r}."
+                "Routing classifier selected task kind with no eligible specialist: "
+                f"{decision.task_kind!r}."
             )
     elif decision.task_kind is not None:
-        raise RuntimeError(
-            f"Routing classifier returned task_kind for route {decision.route!r}."
-        )
+        raise RuntimeError(f"Routing classifier returned task_kind for route {decision.route!r}.")
     return decision
 
 
@@ -445,6 +442,7 @@ def _emit_progress_update(update: ProgressUpdate) -> None:
         callback(update)
     except Exception:
         logger.exception("Progress notifier failed for run %s", update.run_id)
+
 
 _SYSTEM_PROMPT = """You are the Agent Hub orchestrator. You coordinate specialist AI agents.
 
@@ -484,9 +482,7 @@ def _build_system_prompt(state: Any) -> list[Any]:
     effect on the very next turn without restarting the hub.
     """
     messages = (
-        state.get("messages", [])
-        if isinstance(state, dict)
-        else getattr(state, "messages", [])
+        state.get("messages", []) if isinstance(state, dict) else getattr(state, "messages", [])
     )
     learnings_block = format_learnings_for_prompt(HubMemoryManager().list_learnings())
     content = f"{_SYSTEM_PROMPT}\n\n{learnings_block}" if learnings_block else _SYSTEM_PROMPT
@@ -496,11 +492,7 @@ def _build_system_prompt(state: Any) -> list[Any]:
 def _message_preview(message: Any) -> str | None:
     tool_calls = getattr(message, "tool_calls", None)
     if tool_calls:
-        names = [
-            call.get("name", "unknown-tool")
-            for call in tool_calls
-            if isinstance(call, dict)
-        ]
+        names = [call.get("name", "unknown-tool") for call in tool_calls if isinstance(call, dict)]
         return f"requested tool call(s): {', '.join(names)}"
 
     content = getattr(message, "content", None)
@@ -606,7 +598,7 @@ def _consume_graph_stream_event(
                     "LangGraph task '%s'%s failed: %s",
                     name,
                     namespace_prefix,
-                    _truncate(str(data['error'])),
+                    _truncate(str(data["error"])),
                 )
             elif data.get("interrupts"):
                 logger.debug(
@@ -750,10 +742,7 @@ def _select_governed_skills(task: str) -> list[dict[str, Any]]:
 
 def _governed_skill_metadata(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Persist only stable skill identity, not duplicated instruction content."""
-    return [
-        {"slug": skill["slug"], "version": skill["version"]}
-        for skill in skills
-    ]
+    return [{"slug": skill["slug"], "version": skill["version"]} for skill in skills]
 
 
 class ProjectContextVersionError(ValueError):
@@ -790,8 +779,7 @@ def _resolve_project_context_schema_version(spec: AgentSpec) -> int | None:
     compatible = sorted(
         version
         for version in supported
-        if isinstance(version, int)
-        and version in HUB_SUPPORTED_PROJECT_CONTEXT_SCHEMA_VERSIONS
+        if isinstance(version, int) and version in HUB_SUPPORTED_PROJECT_CONTEXT_SCHEMA_VERSIONS
     )
     if not compatible:
         raise ProjectContextVersionError(
@@ -914,9 +902,7 @@ def _dispatch_subprocess(
         _human_task_log(
             task_run_id,
             "Applying governed Hub skills: %s",
-            ", ".join(
-                f"{skill['slug']}@v{skill['version']}" for skill in governed_skills
-            ),
+            ", ".join(f"{skill['slug']}@v{skill['version']}" for skill in governed_skills),
         )
 
     if task_run_id:
@@ -1019,9 +1005,8 @@ def _dispatch_subprocess(
         logger.info("Dispatching to %s (request_id=%s): %s", spec.id, request_id, task[:120])
         handle = get_task_control_registry().get_handle(task_run_id)
         cancelled_run = get_task_run_store().get_run(task_run_id) if task_run_id else None
-        if (
-            (handle is not None and handle.cancel_requested)
-            or (cancelled_run is not None and cancelled_run.state == TASK_STATE_CANCELLED)
+        if (handle is not None and handle.cancel_requested) or (
+            cancelled_run is not None and cancelled_run.state == TASK_STATE_CANCELLED
         ):
             reason = "Stopped by user"
             if handle is not None and handle.cancellation_reason:
@@ -1097,9 +1082,7 @@ def _dispatch_subprocess(
                 stdout_progress_seen = False
                 while open_streams:
                     try:
-                        source, line = stream_queue.get(
-                            timeout=PROGRESS_POLL_INTERVAL_SECONDS
-                        )
+                        source, line = stream_queue.get(timeout=PROGRESS_POLL_INTERVAL_SECONDS)
                     except queue.Empty:
                         source = ""
                         line = ""
@@ -1144,10 +1127,14 @@ def _dispatch_subprocess(
             )
 
         output = json.loads(output_file.read_text(encoding="utf-8"))
-        if output.get("status") not in (
-            "needs_clarification",
-            "approval_required",
-        ) and _valid_pending_decision(output.get("pending_decision")) is None:
+        if (
+            output.get("status")
+            not in (
+                "needs_clarification",
+                "approval_required",
+            )
+            and _valid_pending_decision(output.get("pending_decision")) is None
+        ):
             progress_tailer.mark_unavailable_if_silent()
         _human_task_log(
             task_run_id,
@@ -1179,9 +1166,7 @@ def _dispatch_factory_brain(
         _human_task_log(
             task_run_id,
             "Applying governed Hub skills: %s",
-            ", ".join(
-                f"{skill['slug']}@v{skill['version']}" for skill in governed_skills
-            ),
+            ", ".join(f"{skill['slug']}@v{skill['version']}" for skill in governed_skills),
         )
     _human_task_log(
         task_run_id,
@@ -1341,9 +1326,7 @@ def _format_output(spec: AgentSpec, output: dict) -> str:
     if status == "failed":
         return f"[{spec.name}] Failed: {summary or 'no summary provided.'}"
 
-    raise RuntimeError(
-        f"Agent '{spec.id}' returned status '{status}': {summary or output}"
-    )
+    raise RuntimeError(f"Agent '{spec.id}' returned status '{status}': {summary or output}")
 
 
 _RELAY_VERBATIM_MARKERS = (
@@ -1469,9 +1452,7 @@ def _make_agent_tool(spec: AgentSpec, *, task_kind: str | None = None) -> Any:
     @lc_tool(spec.id, description=description)
     def _call_agent(task: str, references: list[str] | None = None) -> str:
         resolved_references = (
-            references
-            if references is not None
-            else _learned_references_for_task(task)
+            references if references is not None else _learned_references_for_task(task)
         )
         if references is None and resolved_references:
             logger.info(
@@ -1688,15 +1669,14 @@ class HubOrchestrator:
     def reset_all(self) -> str:
         store = get_task_run_store()
         active_or_paused = [
-            run for run in store.list_runs()
+            run
+            for run in store.list_runs()
             if is_active_state(run.state) or is_paused_state(run.state)
         ]
 
         cancelled = 0
         for run in active_or_paused:
-            handle = get_task_control_registry().request_cancel(
-                run.id, "Reset all by user"
-            )
+            handle = get_task_control_registry().request_cancel(run.id, "Reset all by user")
             current = store.get_run(run.id)
             if current is not None and not is_terminal_state(current.state):
                 store.transition(
@@ -1749,9 +1729,7 @@ class HubOrchestrator:
     def pending_run(self) -> TaskRun | None:
         project_key = _project_key_for_session(self._session_id)
         store = get_task_run_store()
-        pending = store.get_latest_paused_run(
-            self._session_id, project_key=project_key
-        )
+        pending = store.get_latest_paused_run(self._session_id, project_key=project_key)
         if pending is not None:
             return pending
 
@@ -1889,20 +1867,24 @@ class HubOrchestrator:
                     accepted=False,
                     skill=None,
                     reason=(
-                        "Analysis chose 'skill' but did not provide a complete "
-                        "slug/title/body."
+                        "Analysis chose 'skill' but did not provide a complete slug/title/body."
                     ),
                 )
 
         logger.info(
-            "Learning %s analysed: type=%s action=%s code_change_needed=%s skills=%s docs=%s skill_result=%s",
+            (
+                "Learning %s analysed: type=%s action=%s code_change_needed=%s "
+                "skills=%s docs=%s skill_result=%s"
+            ),
             record.identifier,
             decision.memory_type,
             decision.action_kind,
             decision.code_change_needed,
             [skill.slug for skill in relevant_skills],
             [doc.identifier for doc in relevant_docs],
-            None if skill_result is None else {
+            None
+            if skill_result is None
+            else {
                 "accepted": skill_result.accepted,
                 "reason": skill_result.reason,
                 "skill_id": None if skill_result.skill is None else skill_result.skill.identifier,
@@ -2100,9 +2082,7 @@ class HubOrchestrator:
                     )
                     continue
                 manager.set_status(candidate.supersedes_id, "disabled")
-            record = manager.record_auto_semantic(
-                candidate.value, source=source, evidence=evidence
-            )
+            record = manager.record_auto_semantic(candidate.value, source=source, evidence=evidence)
             human_logger.info("Learning pass: stored %s: %s", record.identifier, record.value)
             messages.append(f"\U0001f9e0 Learned: {record.value}")
             promote_resource(record)
@@ -2270,8 +2250,7 @@ class HubOrchestrator:
             # back to the reconstructed-task shape, which may not even be a
             # request a true-resume specialist knows how to interpret.
             message = (
-                f"[{spec.name}] Cannot resume: no resume state was recorded "
-                "for this paused task."
+                f"[{spec.name}] Cannot resume: no resume state was recorded for this paused task."
             )
             _human_task_log(
                 pending.id,
@@ -2356,7 +2335,8 @@ class HubOrchestrator:
 
         pending_decision = pending.context.get("specialist_pending_decision") or {}
         options = [
-            opt for opt in (pending_decision.get("options") or [])
+            opt
+            for opt in (pending_decision.get("options") or [])
             if isinstance(opt, dict) and str(opt.get("name", "")).strip()
         ]
         option = choice
@@ -2401,11 +2381,11 @@ class HubOrchestrator:
         allowed = {opt["name"] for opt in options if isinstance(opt, dict) and opt.get("name")}
         if option not in allowed:
             valid = ", ".join(sorted(allowed)) or "none"
-            return f"[{spec.name}] '{option}' is not a valid option right now. Valid options: {valid}."
+            return (
+                f"[{spec.name}] '{option}' is not a valid option right now. Valid options: {valid}."
+            )
 
-        _human_task_log(
-            pending.id, "Decision '%s' received. Resuming %s.", option, spec.name
-        )
+        _human_task_log(pending.id, "Decision '%s' received. Resuming %s.", option, spec.name)
         store = get_task_run_store()
         store.transition(
             pending.id,
@@ -2423,9 +2403,7 @@ class HubOrchestrator:
                 project_root_override=pending.context.get("agent_dispatch_project_root"),
                 project_context_override=_project_context_override_from_pending(pending),
                 references=pending.context.get("agent_dispatch_references"),
-                backlog_reference_override=pending.context.get(
-                    "agent_dispatch_backlog_reference"
-                ),
+                backlog_reference_override=pending.context.get("agent_dispatch_backlog_reference"),
                 task_kind=pending.context.get("agent_dispatch_task_kind"),
             )
         return self._finalize_specialist_follow_up(pending.id, spec, output)
@@ -2575,8 +2553,7 @@ class HubOrchestrator:
         )
         if project_resolution.error:
             return (
-                "I cannot safely resolve the project for this request. "
-                f"{project_resolution.error}"
+                f"I cannot safely resolve the project for this request. {project_resolution.error}"
             )
         project_key = (
             project_resolution.context.project_id

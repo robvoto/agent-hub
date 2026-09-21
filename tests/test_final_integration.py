@@ -267,7 +267,9 @@ def test_ai_tech_lead_shaped_full_back_and_forth_workflow_through_hub(monkeypatc
     ]
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
-    monkeypatch.setattr(HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused"))
+    monkeypatch.setattr(
+        HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused")
+    )
 
     orchestrator = HubOrchestrator()
     orchestrator.set_current_project(str(project_dir))
@@ -277,9 +279,7 @@ def test_ai_tech_lead_shaped_full_back_and_forth_workflow_through_hub(monkeypatc
     # Mirrors what HubOrchestrator.invoke() itself records on every new run
     # (see orchestrator.py) — needed here since this test drives the tool
     # call directly instead of going through invoke().
-    get_task_run_store().update_run(
-        run.id, context_updates={"target_project": str(project_dir)}
-    )
+    get_task_run_store().update_run(run.id, context_updates={"target_project": str(project_dir)})
     tool = _make_agent_tool(spec)
     with active_task_run(run.id):
         reply = tool.invoke({"task": "Clean up dead code", "references": ["AGENT-HUB-999"]})

@@ -42,9 +42,11 @@ def test_hub_status_command_reports_summary_without_starting_new_session(monkeyp
 
     calls: list[str] = []
     orch = SimpleNamespace(
-        hub_status=lambda: calls.append("hub_status")
-        or "Agent Hub status\n\nLearning: ON\nProject: agent-hub\n"
-        "Agents available: 2\nActive task: none\nMemory records: 14",
+        hub_status=lambda: (
+            calls.append("hub_status")
+            or "Agent Hub status\n\nLearning: ON\nProject: agent-hub\n"
+            "Agents available: 2\nActive task: none\nMemory records: 14"
+        ),
         registry=[],
         set_learning_notifier=lambda callback: None,
     )
@@ -108,9 +110,11 @@ def test_new_command_resets_session_once_and_sends_one_reply(monkeypatch):
 
     calls: list[str] = []
     orch = SimpleNamespace(
-        new_session=lambda: calls.append("new_session")
-        or "New Agent Hub session\n\nLearning: OFF\nProject: none\n"
-        "Agents available: 0\nActive task: none\nMemory records: 0",
+        new_session=lambda: (
+            calls.append("new_session")
+            or "New Agent Hub session\n\nLearning: OFF\nProject: none\n"
+            "Agents available: 0\nActive task: none\nMemory records: 0"
+        ),
         registry=[],
         set_learning_notifier=lambda callback: None,
     )
@@ -147,8 +151,10 @@ def test_reset_command_stops_active_work_and_sends_one_reply(monkeypatch):
 
     calls: list[str] = []
     orch = SimpleNamespace(
-        reset_session=lambda: calls.append("reset_session")
-        or "Reset complete. Stopped the active task and started a fresh conversation.",
+        reset_session=lambda: (
+            calls.append("reset_session")
+            or "Reset complete. Stopped the active task and started a fresh conversation."
+        ),
         registry=[],
         set_learning_notifier=lambda callback: None,
     )
@@ -192,18 +198,20 @@ def test_prime_offset_skips_only_stale_queued_updates_and_advances_offset(monkey
 
     monkeypatch.setattr(
         "agent_hub.telegram_gateway._get_updates",
-        lambda token, offset: [
-            {
-                "update_id": 100,
-                "message": {"chat": {"id": 42}, "text": "/new", "date": old_timestamp},
-            },
-            {
-                "update_id": 104,
-                "message": {"chat": {"id": 42}, "text": "/status", "date": old_timestamp},
-            },
-        ]
-        if offset == 0
-        else [],
+        lambda token, offset: (
+            [
+                {
+                    "update_id": 100,
+                    "message": {"chat": {"id": 42}, "text": "/new", "date": old_timestamp},
+                },
+                {
+                    "update_id": 104,
+                    "message": {"chat": {"id": 42}, "text": "/status", "date": old_timestamp},
+                },
+            ]
+            if offset == 0
+            else []
+        ),
     )
 
     orch = SimpleNamespace(
@@ -222,14 +230,16 @@ def test_prime_offset_processes_fresh_queued_update_instead_of_dropping_it(monke
     )
     monkeypatch.setattr(
         "agent_hub.telegram_gateway._get_updates",
-        lambda token, offset: [
-            {
-                "update_id": 100,
-                "message": {"chat": {"id": 42}, "text": "/new", "date": time.time()},
-            },
-        ]
-        if offset == 0
-        else [],
+        lambda token, offset: (
+            [
+                {
+                    "update_id": 100,
+                    "message": {"chat": {"id": 42}, "text": "/new", "date": time.time()},
+                },
+            ]
+            if offset == 0
+            else []
+        ),
     )
 
     calls: list[str] = []
@@ -694,8 +704,9 @@ def test_learn_mode_command_toggles_and_reports_status(monkeypatch):
     orch = SimpleNamespace(
         registry=[],
         set_learning_notifier=lambda callback: None,
-        set_learning_mode=lambda enabled: calls.append(enabled)
-        or f"Learning mode is now {'ON' if enabled else 'OFF'}.",
+        set_learning_mode=lambda enabled: (
+            calls.append(enabled) or f"Learning mode is now {'ON' if enabled else 'OFF'}."
+        ),
         learning_mode_status=lambda: "Learning mode is OFF.",
     )
     gateway = TelegramGateway("token-123", orch)
@@ -729,10 +740,10 @@ def test_project_command_sets_shows_and_clears(monkeypatch):
         registry=[],
         set_learning_notifier=lambda callback: None,
         current_project_status=lambda: "No project selected.",
-        set_current_project=lambda path: calls.append(("set", path))
-        or f"Current project set to {path}.",
-        clear_current_project=lambda: calls.append(("clear",))
-        or "Current project cleared.",
+        set_current_project=lambda path: (
+            calls.append(("set", path)) or f"Current project set to {path}."
+        ),
+        clear_current_project=lambda: calls.append(("clear",)) or "Current project cleared.",
     )
     gateway = TelegramGateway("token-123", orch)
 
@@ -788,22 +799,24 @@ def test_progress_notifier_keeps_one_live_message_and_edits_meaningful_updates(m
 
     monkeypatch.setattr(
         "agent_hub.telegram_gateway._send_message",
-        lambda token, chat_id, text, *, parse_mode="Markdown": sent.append(
-            {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
-        )
-        or [next_message_id],
+        lambda token, chat_id, text, *, parse_mode="Markdown": (
+            sent.append({"chat_id": chat_id, "text": text, "parse_mode": parse_mode})
+            or [next_message_id]
+        ),
     )
     monkeypatch.setattr(
         "agent_hub.telegram_gateway._edit_message",
-        lambda token, chat_id, message_id, text, *, parse_mode=None: edited.append(
-            {
-                "chat_id": chat_id,
-                "message_id": message_id,
-                "text": text,
-                "parse_mode": parse_mode,
-            }
-        )
-        or True,
+        lambda token, chat_id, message_id, text, *, parse_mode=None: (
+            edited.append(
+                {
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "text": text,
+                    "parse_mode": parse_mode,
+                }
+            )
+            or True
+        ),
     )
 
     orch = SimpleNamespace(
@@ -853,7 +866,10 @@ def test_progress_notifier_keeps_one_live_message_and_edits_meaningful_updates(m
         {
             "chat_id": 42,
             "message_id": 100,
-            "text": "AI Tech Lead is working\n\nApplying the requested change.\n\nElapsed: under 1 minute",
+            "text": (
+                "AI Tech Lead is working\n\nApplying the requested change.\n\n"
+                "Elapsed: under 1 minute"
+            ),
             "parse_mode": None,
         }
     ]
@@ -867,9 +883,9 @@ def test_live_progress_elapsed_uses_original_request_ingress_time(monkeypatch):
     sent: list[dict] = []
     monkeypatch.setattr(
         "agent_hub.telegram_gateway._send_message",
-        lambda token, chat_id, text, *, parse_mode="Markdown": sent.append(
-            {"text": text, "parse_mode": parse_mode}
-        ) or [1],
+        lambda token, chat_id, text, *, parse_mode="Markdown": (
+            sent.append({"text": text, "parse_mode": parse_mode}) or [1]
+        ),
     )
 
     gateway = TelegramGateway(
@@ -902,22 +918,23 @@ def test_heartbeat_refresh_edits_elapsed_without_inventing_status_text(monkeypat
 
     monkeypatch.setattr(
         "agent_hub.telegram_gateway._send_message",
-        lambda token, chat_id, text, *, parse_mode="Markdown": sent.append(
-            {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
-        )
-        or [200],
+        lambda token, chat_id, text, *, parse_mode="Markdown": (
+            sent.append({"chat_id": chat_id, "text": text, "parse_mode": parse_mode}) or [200]
+        ),
     )
     monkeypatch.setattr(
         "agent_hub.telegram_gateway._edit_message",
-        lambda token, chat_id, message_id, text, *, parse_mode=None: edited.append(
-            {
-                "chat_id": chat_id,
-                "message_id": message_id,
-                "text": text,
-                "parse_mode": parse_mode,
-            }
-        )
-        or True,
+        lambda token, chat_id, message_id, text, *, parse_mode=None: (
+            edited.append(
+                {
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "text": text,
+                    "parse_mode": parse_mode,
+                }
+            )
+            or True
+        ),
     )
 
     orch = SimpleNamespace(
@@ -974,7 +991,10 @@ def test_heartbeat_refresh_edits_elapsed_without_inventing_status_text(monkeypat
     "reply_text",
     [
         "[AI Tech Lead] Clarification needed: Which repo should I change?",
-        "[AI Tech Lead] Approval required: Need permission to apply the patch.\nUse /approve to continue or /reject <reason> to stop.",
+        (
+            "[AI Tech Lead] Approval required: Need permission to apply the patch.\n"
+            "Use /approve to continue or /reject <reason> to stop."
+        ),
         "[AI Tech Lead] Done.",
     ],
 )
@@ -985,17 +1005,16 @@ def test_progress_and_terminal_operator_messages_stay_separate(monkeypatch, repl
 
     monkeypatch.setattr(
         "agent_hub.telegram_gateway._send_message",
-        lambda token, chat_id, text, *, parse_mode="Markdown": sent.append(
-            {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
-        )
-        or [next_message_id + len(sent) - 1],
+        lambda token, chat_id, text, *, parse_mode="Markdown": (
+            sent.append({"chat_id": chat_id, "text": text, "parse_mode": parse_mode})
+            or [next_message_id + len(sent) - 1]
+        ),
     )
     monkeypatch.setattr(
         "agent_hub.telegram_gateway._edit_message",
-        lambda token, chat_id, message_id, text, *, parse_mode=None: edited.append(
-            {"chat_id": chat_id, "message_id": message_id, "text": text}
-        )
-        or True,
+        lambda token, chat_id, message_id, text, *, parse_mode=None: (
+            edited.append({"chat_id": chat_id, "message_id": message_id, "text": text}) or True
+        ),
     )
 
     now = datetime.now(timezone.utc)
@@ -1039,7 +1058,10 @@ def test_progress_and_terminal_operator_messages_stay_separate(monkeypatch, repl
         {
             "chat_id": 42,
             "message_id": 300,
-            "text": "AI Tech Lead is working\n\nApplying the requested change.\n\nElapsed: under 1 minute",
+            "text": (
+                "AI Tech Lead is working\n\nApplying the requested change.\n\n"
+                "Elapsed: under 1 minute"
+            ),
         }
     ]
     assert sent[-1]["text"] == reply_text
@@ -1053,17 +1075,16 @@ def test_failure_sends_only_one_final_failure_message(monkeypatch):
 
     monkeypatch.setattr(
         "agent_hub.telegram_gateway._send_message",
-        lambda token, chat_id, text, *, parse_mode="Markdown": sent.append(
-            {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
-        )
-        or [next_message_id + len(sent) - 1],
+        lambda token, chat_id, text, *, parse_mode="Markdown": (
+            sent.append({"chat_id": chat_id, "text": text, "parse_mode": parse_mode})
+            or [next_message_id + len(sent) - 1]
+        ),
     )
     monkeypatch.setattr(
         "agent_hub.telegram_gateway._edit_message",
-        lambda token, chat_id, message_id, text, *, parse_mode=None: edited.append(
-            {"chat_id": chat_id, "message_id": message_id, "text": text}
-        )
-        or True,
+        lambda token, chat_id, message_id, text, *, parse_mode=None: (
+            edited.append({"chat_id": chat_id, "message_id": message_id, "text": text}) or True
+        ),
     )
 
     now = datetime.now(timezone.utc)
@@ -1117,7 +1138,10 @@ def test_failure_sends_only_one_final_failure_message(monkeypatch):
         {
             "chat_id": 42,
             "message_id": 400,
-            "text": "AI Tech Lead is working\n\nApplying the requested change.\n\nElapsed: under 1 minute",
+            "text": (
+                "AI Tech Lead is working\n\nApplying the requested change.\n\n"
+                "Elapsed: under 1 minute"
+            ),
         }
     ]
     assert [item["text"] for item in sent].count(
@@ -1132,17 +1156,16 @@ def test_concurrent_runs_keep_separate_live_message_ids(monkeypatch):
 
     monkeypatch.setattr(
         "agent_hub.telegram_gateway._send_message",
-        lambda token, chat_id, text, *, parse_mode="Markdown": sent.append(
-            {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
-        )
-        or [next_message_id + len(sent) - 1],
+        lambda token, chat_id, text, *, parse_mode="Markdown": (
+            sent.append({"chat_id": chat_id, "text": text, "parse_mode": parse_mode})
+            or [next_message_id + len(sent) - 1]
+        ),
     )
     monkeypatch.setattr(
         "agent_hub.telegram_gateway._edit_message",
-        lambda token, chat_id, message_id, text, *, parse_mode=None: edited.append(
-            {"chat_id": chat_id, "message_id": message_id, "text": text}
-        )
-        or True,
+        lambda token, chat_id, message_id, text, *, parse_mode=None: (
+            edited.append({"chat_id": chat_id, "message_id": message_id, "text": text}) or True
+        ),
     )
 
     orch = SimpleNamespace(
@@ -1230,12 +1253,8 @@ def test_run_telegram_refuses_a_second_instance(monkeypatch, tmp_path):
 def test_run_telegram_releases_the_lock_after_it_exits(monkeypatch, tmp_path):
     monkeypatch.setattr(singleton_lock, "SINGLETON_LOCKS_DIR", tmp_path / "runtime_locks")
     monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
-    monkeypatch.setattr(
-        "agent_hub.startup_health.ensure_healthy_startup", lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        "agent_hub.telegram_gateway.HubOrchestrator", lambda: SimpleNamespace()
-    )
+    monkeypatch.setattr("agent_hub.startup_health.ensure_healthy_startup", lambda *a, **k: None)
+    monkeypatch.setattr("agent_hub.telegram_gateway.HubOrchestrator", lambda: SimpleNamespace())
     monkeypatch.setattr(TelegramGateway, "__init__", lambda self, token, orch: None)
     monkeypatch.setattr(TelegramGateway, "run", lambda self, registry=None, **kwargs: None)
     monkeypatch.setenv("HUB_BOT_TOKEN", "token-123")
@@ -1256,17 +1275,16 @@ def test_waiting_progress_does_not_duplicate_terminal_decision_in_live_status(mo
 
     monkeypatch.setattr(
         "agent_hub.telegram_gateway._send_message",
-        lambda token, chat_id, text, *, parse_mode="Markdown": sent.append(
-            {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
-        )
-        or [400 + len(sent) - 1],
+        lambda token, chat_id, text, *, parse_mode="Markdown": (
+            sent.append({"chat_id": chat_id, "text": text, "parse_mode": parse_mode})
+            or [400 + len(sent) - 1]
+        ),
     )
     monkeypatch.setattr(
         "agent_hub.telegram_gateway._edit_message",
-        lambda token, chat_id, message_id, text, *, parse_mode=None: edited.append(
-            {"chat_id": chat_id, "message_id": message_id, "text": text}
-        )
-        or True,
+        lambda token, chat_id, message_id, text, *, parse_mode=None: (
+            edited.append({"chat_id": chat_id, "message_id": message_id, "text": text}) or True
+        ),
     )
 
     now = datetime.now(timezone.utc)

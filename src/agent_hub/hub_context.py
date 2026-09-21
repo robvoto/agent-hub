@@ -61,9 +61,7 @@ def _now_iso() -> str:
 
 
 class HubContextService:
-    def __init__(
-        self, project_root: Path | None = None, registry_dir: Path | None = None
-    ) -> None:
+    def __init__(self, project_root: Path | None = None, registry_dir: Path | None = None) -> None:
         self._project_root = project_root or PROJECT_ROOT
         self._registry_dir = registry_dir or AGENT_REGISTRY_DIR
 

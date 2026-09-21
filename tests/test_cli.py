@@ -40,4 +40,3 @@ def test_handle_cli_shutdown_interrupt_is_quiet_when_nothing_active(capsys):
     captured = capsys.readouterr()
     assert "Cancelled" not in captured.out
     assert "Bye." in captured.out
-

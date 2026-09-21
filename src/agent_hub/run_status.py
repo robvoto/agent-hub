@@ -116,9 +116,7 @@ def _format_usage(usage: dict | None) -> str:
     if not all(isinstance(value, int) for value in (total_tokens, input_tokens, output_tokens)):
         return "Not recorded"
 
-    return (
-        f"total={total_tokens}, input={input_tokens}, output={output_tokens}"
-    )
+    return f"total={total_tokens}, input={input_tokens}, output={output_tokens}"
 
 
 def _format_cost(cost: dict | None) -> str:

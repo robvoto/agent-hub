@@ -162,9 +162,7 @@ class ProjectResourceRegistry:
         if resource_type == BACKLOG_RESOURCE_TYPE:
             clean_metadata.pop("item_id", None)
         clean_provenance = tuple(
-            dict.fromkeys(
-                str(value).strip() for value in (provenance or ()) if str(value).strip()
-            )
+            dict.fromkeys(str(value).strip() for value in (provenance or ()) if str(value).strip())
         )
         if source not in clean_provenance:
             clean_provenance = (*clean_provenance, source)
@@ -187,9 +185,7 @@ class ProjectResourceRegistry:
                 provenance=merged_provenance,
                 reinforcement_count=(existing.reinforcement_count + 1) if existing else 0,
             )
-            self._store.batch(
-                [PutOp(namespace=_NAMESPACE, key=key, value=resource.to_dict())]
-            )
+            self._store.batch([PutOp(namespace=_NAMESPACE, key=key, value=resource.to_dict())])
         return resource
 
     def register_backlog(
@@ -290,9 +286,7 @@ class ProjectResourceRegistry:
         item_candidates = _request_item_identifiers(
             search_text,
             excluded=(
-                _resource_source_identifiers(source_matches[0])
-                if len(source_matches) == 1
-                else ()
+                _resource_source_identifiers(source_matches[0]) if len(source_matches) == 1 else ()
             ),
         )
         if len(source_matches) == 1:

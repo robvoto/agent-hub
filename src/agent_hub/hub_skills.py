@@ -124,9 +124,7 @@ class HubSkillStore:
                 memory_id=memory_id,
                 evidence=evidence,
             )
-            return SkillProposalResult(
-                accepted=True, skill=new_skill, reason="Created new skill."
-            )
+            return SkillProposalResult(accepted=True, skill=new_skill, reason="Created new skill.")
 
         new_skill = self._replace_active_skill(
             current=current,
@@ -158,9 +156,7 @@ class HubSkillStore:
             return None
 
         current_value = dict(
-            self._store.batch(
-                [GetOp(namespace=_SKILLS_NAMESPACE, key=current.identifier)]
-            )[0].value
+            self._store.batch([GetOp(namespace=_SKILLS_NAMESPACE, key=current.identifier)])[0].value
             or {}
         )
         previous_value = dict(previous_item.value or {})
@@ -298,9 +294,7 @@ class HubSkillStore:
                 ),
             ]
         )
-        item = self._store.batch(
-            [GetOp(namespace=_SKILLS_NAMESPACE, key=identifier)]
-        )[0]
+        item = self._store.batch([GetOp(namespace=_SKILLS_NAMESPACE, key=identifier)])[0]
         if item is None:
             raise RuntimeError(f"Skill '{current.slug}' update was not persisted.")
         return _item_to_skill(item)

@@ -115,7 +115,10 @@ def build_factory_agent_spec(root: Path | None = None) -> AgentSpec | None:
         task_contract={
             "task_kinds": ["agent_package_lifecycle"],
             "task_kind_descriptions": {
-                "agent_package_lifecycle": "Design, create, configure, validate, stage, approve, reject, or promote a specialist agent package as the requested deliverable."
+                "agent_package_lifecycle": (
+                    "Design, create, configure, validate, stage, approve, reject, or "
+                    "promote a specialist agent package as the requested deliverable."
+                )
             },
             "default_task_kind": "agent_package_lifecycle",
         },
@@ -281,9 +284,7 @@ def _run_bridge(*, working_directory: str, payload: dict[str, Any]) -> dict[str,
         try:
             while open_streams:
                 try:
-                    source, line = stream_queue.get(
-                        timeout=PROGRESS_POLL_INTERVAL_SECONDS
-                    )
+                    source, line = stream_queue.get(timeout=PROGRESS_POLL_INTERVAL_SECONDS)
                 except queue.Empty:
                     source = ""
                     line = ""

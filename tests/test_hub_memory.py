@@ -145,8 +145,7 @@ def test_format_learning_confirmation_for_rejected_skill(tmp_path):
     result = format_learning_confirmation(record, analysis=analysis, skill_result=skill_result)
 
     assert result == (
-        "Learned: Some lesson.\n"
-        "The learning was saved; no reusable skill was changed."
+        "Learned: Some lesson.\nThe learning was saved; no reusable skill was changed."
     )
 
 
@@ -208,8 +207,7 @@ def test_memory_empty_state_is_human_readable(tmp_path):
     manager = HubMemoryManager(SqliteStore(tmp_path / "knowledge.sqlite3"))
 
     assert (
-        format_learning_list(manager.list_learnings())
-        == "No hub learnings have been stored yet."
+        format_learning_list(manager.list_learnings()) == "No hub learnings have been stored yet."
     )
 
 
@@ -382,9 +380,7 @@ def test_format_learnings_for_prompt_keeps_operator_when_budget_favors_recency(t
     """Item budget must not let a newer auto fact push out an older operator one."""
     manager = HubMemoryManager(SqliteStore(tmp_path / "knowledge.sqlite3"))
     manager.learn("Operator fact.", source="cli")
-    manager._store_record(
-        "Auto fact.", source="auto-extraction", type="semantic", scope="auto"
-    )
+    manager._store_record("Auto fact.", source="auto-extraction", type="semantic", scope="auto")
 
     text = format_learnings_for_prompt(manager.list_learnings(), max_items=1)
 
@@ -464,7 +460,10 @@ def test_reinforce_auto_semantic_refuses_operator_memory(tmp_path):
     manager = HubMemoryManager(SqliteStore(tmp_path / "knowledge.sqlite3"))
     operator = manager.learn("Operator fact.", source="telegram")
 
-    assert manager.reinforce_auto_semantic(
-        operator.identifier, source="auto-extraction", evidence=["run-1"]
-    ) is None
+    assert (
+        manager.reinforce_auto_semantic(
+            operator.identifier, source="auto-extraction", evidence=["run-1"]
+        )
+        is None
+    )
     assert manager.list_learnings(types=["semantic"])[0].reinforcement_count == 0

@@ -35,22 +35,28 @@ def test_put_delete(store):
 
 
 def test_search_by_namespace(store):
-    store.batch([
-        PutOp(namespace=("hub", "learnings"), key="k1", value={"text": "apple"}),
-        PutOp(namespace=("hub", "learnings"), key="k2", value={"text": "banana"}),
-        PutOp(namespace=("shared", "docs"), key="k3", value={"text": "cherry"}),
-    ])
+    store.batch(
+        [
+            PutOp(namespace=("hub", "learnings"), key="k1", value={"text": "apple"}),
+            PutOp(namespace=("hub", "learnings"), key="k2", value={"text": "banana"}),
+            PutOp(namespace=("shared", "docs"), key="k3", value={"text": "cherry"}),
+        ]
+    )
     results = store.batch([SearchOp(namespace_prefix=("hub", "learnings"), limit=10, offset=0)])
     keys = {r.key for r in results[0]}
     assert keys == {"k1", "k2"}
 
 
 def test_search_with_query(store):
-    store.batch([
-        PutOp(namespace=("hub", "learnings"), key="a", value={"text": "python rocks"}),
-        PutOp(namespace=("hub", "learnings"), key="b", value={"text": "java is okay"}),
-    ])
-    results = store.batch([SearchOp(namespace_prefix=("hub", "learnings"), query="python", limit=10, offset=0)])
+    store.batch(
+        [
+            PutOp(namespace=("hub", "learnings"), key="a", value={"text": "python rocks"}),
+            PutOp(namespace=("hub", "learnings"), key="b", value={"text": "java is okay"}),
+        ]
+    )
+    results = store.batch(
+        [SearchOp(namespace_prefix=("hub", "learnings"), query="python", limit=10, offset=0)]
+    )
     items = results[0]
     assert len(items) == 1
     assert items[0].key == "a"

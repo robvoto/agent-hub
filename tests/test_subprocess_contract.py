@@ -17,7 +17,6 @@ import time
 from pathlib import Path
 
 import agent_hub.progress_events as progress_events
-import pytest
 from agent_hub.orchestrator import _dispatch_subprocess
 from agent_hub.project_context import get_project_context_registry
 from agent_hub.registry import AgentSpec
@@ -162,6 +161,7 @@ def test_dispatch_subprocess_consumes_stdout_jsonl_progress(tmp_path):
     assert updated.latest_progress_phase == "streaming"
     assert updated.latest_progress_summary == "Streaming progress over stdout."
 
+
 def test_dispatch_subprocess_marks_progress_unavailable_for_legacy_specialist(tmp_path):
     spec = _make_spec(tmp_path)
     run, output = _run(spec, "SCENARIO:no_progress do the thing")
@@ -188,9 +188,7 @@ def test_dispatch_subprocess_records_rejected_progress_events(tmp_path):
         if event.validation_status == "accepted" and event.sequence is not None
     ]
     assert accepted_sequences == [1]
-    rejected = [
-        event for event in events if event.validation_status in {"malformed", "rejected"}
-    ]
+    rejected = [event for event in events if event.validation_status in {"malformed", "rejected"}]
     assert rejected
     assert all(event.raw_json is None for event in rejected)
     assert all(

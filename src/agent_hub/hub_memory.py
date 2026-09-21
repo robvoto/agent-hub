@@ -229,9 +229,7 @@ class HubMemoryManager:
         return _item_to_record(item)
 
     def _compact_if_needed(self) -> None:
-        auto_semantic = [
-            r for r in self.list_learnings(types=["semantic"]) if r.scope == "auto"
-        ]
+        auto_semantic = [r for r in self.list_learnings(types=["semantic"]) if r.scope == "auto"]
         if len(auto_semantic) <= _COMPACTION_TRIGGER_COUNT:
             return
 
@@ -326,9 +324,7 @@ class HubMemoryManager:
             if not text:
                 continue
             source = str(value.get("source", "unknown"))
-            category = (
-                str(value["category"]).strip() if value.get("category") is not None else None
-            )
+            category = str(value["category"]).strip() if value.get("category") is not None else None
             scope: MemoryScope = "auto" if source == "hub-compaction" else "operator"
             payload = {
                 "value": text,
@@ -370,9 +366,7 @@ def _item_to_record(item: object) -> LearningRecord:
         value=str(value.get("value", "")).strip(),
         created_at=item.created_at,
         source=str(value.get("source", "unknown")),
-        category=(
-            str(value["category"]).strip() if value.get("category") is not None else None
-        ),
+        category=(str(value["category"]).strip() if value.get("category") is not None else None),
         type=str(value.get("type", "semantic")),
         scope=str(value.get("scope", "operator")),
         status=str(value.get("status", "active")),
@@ -733,9 +727,7 @@ def analyze_learning(
     skills_block = (
         "\n".join(f"- {s.slug}: {s.title} — {s.body}" for s in relevant_skills) or "(none)"
     )
-    docs_block = (
-        "\n".join(f"- {d.identifier}: {d.content}" for d in relevant_docs) or "(none)"
-    )
+    docs_block = "\n".join(f"- {d.identifier}: {d.content}" for d in relevant_docs) or "(none)"
     human_content = (
         f"Existing operator-established facts:\n{operator_block}\n\n"
         f"Hub's existing relevant skills:\n{skills_block}\n\n"

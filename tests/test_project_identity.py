@@ -7,7 +7,6 @@ from tomllib import loads
 
 from agent_hub.cli import build_parser
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 

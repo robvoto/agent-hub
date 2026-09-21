@@ -115,6 +115,7 @@ def parse_agent_spec(data: dict[str, Any]) -> AgentSpec:
         extensions={key: value for key, value in data.items() if key not in _CORE_FIELDS},
     )
 
+
 def load_registry_report(registry_dir: Path | None = None) -> RegistryLoadResult:
     """Return every enabled agent, plus every agent.json that failed to load.
 
@@ -146,9 +147,7 @@ def load_registry_report(registry_dir: Path | None = None) -> RegistryLoadResult
             logger.warning("Could not load agent spec from %s: %s", spec_file, exc)
             errors.append(RegistryLoadError(source=str(spec_file), message=str(exc)))
 
-    logger.info(
-        "Agent registry: %d enabled agent(s) loaded, %d invalid.", len(specs), len(errors)
-    )
+    logger.info("Agent registry: %d enabled agent(s) loaded, %d invalid.", len(specs), len(errors))
     return RegistryLoadResult(specs=specs, errors=errors)
 
 

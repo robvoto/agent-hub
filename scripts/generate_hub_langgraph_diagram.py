@@ -18,7 +18,6 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
-from agent_hub.registry import load_registry
 
 DIAGRAM_DIR = ROOT / "docs" / "diagrams"
 DIAGRAM_BASE = DIAGRAM_DIR / "07-HUB-LANGGRAPH-TOOLS"
@@ -42,7 +41,7 @@ def render_agent_nodes(registry: Iterable[object]) -> str:
     for spec in registry:
         node_id = sanitize_id("agent", spec.id)
         label = f"Callable tool: {spec.id}<br/>{spec.name} specialist"
-        lines.append(f"    {node_id}[\"{label}\"]")
+        lines.append(f'    {node_id}["{label}"]')
     return "\n".join(lines)
 
 
@@ -55,19 +54,21 @@ def build_mermaid(registry: Iterable[object]) -> str:
     agent_ids = [sanitize_id("agent", spec.id) for spec in registry]
     tool_nodes = get_langgraph_tool_nodes()
     tool_node_ids = [sanitize_id("tool", tool_name) for tool_name, _ in tool_nodes]
-    tool_links = "\n".join(
-        f"    Hub --> {node_id}" for node_id in [*tool_node_ids, *agent_ids]
-    )
+    tool_links = "\n".join(f"    Hub --> {node_id}" for node_id in [*tool_node_ids, *agent_ids])
     rendered_tool_nodes = "\n".join(
-        f"    {sanitize_id('tool', tool_name)}[\"{label}\"]"
-        for tool_name, label in tool_nodes
+        f'    {sanitize_id("tool", tool_name)}["{label}"]' for tool_name, label in tool_nodes
     )
 
     if not agent_ids:
-        agent_nodes = "    no_agents[\"No registered agents\"]"
+        agent_nodes = '    no_agents["No registered agents"]'
         tool_links = "\n".join(
             [f"    Hub --> {node_id}" for node_id in tool_node_ids] + ["    Hub --> no_agents"]
         )
+
+    commands_note = (
+        "This is a callable-tool map, not a LangGraph node map.<br/>"
+        "/learn, /memory, and /forget stay outside the tool list."
+    )
 
     return f"""flowchart TD
     You([You])
@@ -83,7 +84,7 @@ def build_mermaid(registry: Iterable[object]) -> str:
 
     classDef note fill:#fff8dc,stroke:#e6a817;
     note[\"Generated from current registry and HubOrchestrator LangGraph tool wiring\"]:::note
-    commands_note[\"This is a callable-tool map, not a LangGraph node map.<br/>/learn, /memory, and /forget stay outside the tool list.\"]:::note
+    commands_note[\"{commands_note}\"]:::note
     Hub --> note
     Hub -.-> commands_note
 """
@@ -108,6 +109,8 @@ def render_svg() -> None:
 
 
 def main() -> None:
+    from agent_hub.registry import load_registry
+
     if load_dotenv is not None:
         load_dotenv(ROOT / ".env")
 

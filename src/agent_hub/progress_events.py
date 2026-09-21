@@ -14,7 +14,6 @@ from typing import Any
 
 from .task_runs import (
     PROGRESS_MODE_PENDING,
-    PROGRESS_MODE_STREAMING,
     PROGRESS_MODE_UNAVAILABLE,
     get_task_run_store,
 )
@@ -413,17 +412,13 @@ class SpecialistProgressTailer:
         if event is None:
             store.record_progress_event(
                 self._run_id,
-                schema_version=payload.get("schema_version")
-                if isinstance(payload, dict)
-                else None,
+                schema_version=payload.get("schema_version") if isinstance(payload, dict) else None,
                 event_run_id=payload.get("run_id") if isinstance(payload, dict) else None,
                 request_id=payload.get("request_id") if isinstance(payload, dict) else None,
                 sequence=payload.get("sequence") if isinstance(payload, dict) else None,
                 event_type=payload.get("event_type") if isinstance(payload, dict) else None,
                 phase=payload.get("phase") if isinstance(payload, dict) else None,
-                human_summary=payload.get("human_summary")
-                if isinstance(payload, dict)
-                else None,
+                human_summary=payload.get("human_summary") if isinstance(payload, dict) else None,
                 occurred_at=_parse_timestamp(payload.get("occurred_at"))
                 if isinstance(payload, dict)
                 else None,

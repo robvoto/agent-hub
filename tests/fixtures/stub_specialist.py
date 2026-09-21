@@ -122,7 +122,9 @@ def _event_payload(
     }
 
 
-def _append_progress_line(path: str, payload: dict | None = None, *, raw_line: str | None = None) -> None:
+def _append_progress_line(
+    path: str, payload: dict | None = None, *, raw_line: str | None = None
+) -> None:
     with open(path, "a", encoding="utf-8") as fh:
         if raw_line is not None:
             fh.write(raw_line)

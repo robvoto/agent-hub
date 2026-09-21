@@ -611,9 +611,7 @@ class TaskRunStore:
             current = _row_to_task_run(row)
             allowed = _ALLOWED_TRANSITIONS[current.state]
             if to_state not in allowed:
-                raise ValueError(
-                    f"Invalid task transition: {current.state} -> {to_state}"
-                )
+                raise ValueError(f"Invalid task transition: {current.state} -> {to_state}")
 
             now = _utcnow()
             finished_at = now if to_state in _TERMINAL_STATES else current.finished_at
@@ -871,7 +869,11 @@ class TaskRunStore:
                     progress_mode = PROGRESS_MODE_STREAMING
                 latest_phase = current.latest_progress_phase
                 latest_summary = current.latest_progress_summary
-                last_event_at = current.last_progress_event_at.isoformat() if current.last_progress_event_at else None
+                last_event_at = (
+                    current.last_progress_event_at.isoformat()
+                    if current.last_progress_event_at
+                    else None
+                )
                 last_heartbeat_at = (
                     current.last_progress_heartbeat_at.isoformat()
                     if current.last_progress_heartbeat_at
@@ -987,10 +989,7 @@ def is_terminal_state(state: str) -> bool:
 
 
 def _ensure_task_run_columns(conn: sqlite3.Connection) -> None:
-    columns = {
-        row["name"]
-        for row in conn.execute("PRAGMA table_info(task_runs)").fetchall()
-    }
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(task_runs)").fetchall()}
     for name, definition in _TASK_RUN_MIGRATION_COLUMNS.items():
         if name not in columns:
             conn.execute(f"ALTER TABLE task_runs ADD COLUMN {name} {definition}")

@@ -81,11 +81,14 @@ def test_registry_supports_future_resource_types_and_project_scoping(tmp_path):
         metadata={"format": "html"},
     )
 
-    assert registry.get(
-        project_a,
-        resource_type="documentation",
-        location={"uri": "https://example.test/docs"},
-    ) == resource
+    assert (
+        registry.get(
+            project_a,
+            resource_type="documentation",
+            location={"uri": "https://example.test/docs"},
+        )
+        == resource
+    )
     assert registry.list(project_b) == []
 
 
@@ -199,10 +202,14 @@ def test_backlog_item_identity_is_not_persisted_or_used_as_resource_identity(tmp
         source="memory",
     )
 
-    assert first.location == second.location == {
-        "provider": "google_sheets",
-        "spreadsheet_id": "sheet-123",
-        "sheet_name": "Backlog",
-    }
+    assert (
+        first.location
+        == second.location
+        == {
+            "provider": "google_sheets",
+            "spreadsheet_id": "sheet-123",
+            "sheet_name": "Backlog",
+        }
+    )
     assert "item_id" not in second.location
     assert registry.list(context, resource_type=BACKLOG_RESOURCE_TYPE) == [second]

@@ -83,9 +83,7 @@ class ManifestCache:
             manifest_command=manifest_command,
             fetched_at=_utcnow(),
             ttl_seconds=(
-                existing.ttl_seconds
-                if existing is not None
-                else DEFAULT_MANIFEST_TTL_SECONDS
+                existing.ttl_seconds if existing is not None else DEFAULT_MANIFEST_TTL_SECONDS
             ),
             manifest=manifest,
         )

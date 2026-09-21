@@ -44,7 +44,9 @@ def test_searches_specialist_store_that_opts_in(tmp_path):
 
 def test_skips_specialist_without_knowledge_db_declared():
     registry = [
-        AgentSpec(id="ai-tech-lead", name="AI Tech Lead", purpose="Implements code changes.", runtime={})
+        AgentSpec(
+            id="ai-tech-lead", name="AI Tech Lead", purpose="Implements code changes.", runtime={}
+        )
     ]
     tool = make_shared_docs_tool(registry)
 

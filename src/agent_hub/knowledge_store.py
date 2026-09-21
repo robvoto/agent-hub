@@ -131,13 +131,19 @@ class SqliteStore(BaseStore):
             items = [i for i in items if q in json.dumps(i.value).lower()]
         return [
             SearchItem(
-                namespace=i.namespace, key=i.key, value=i.value,
-                created_at=i.created_at, updated_at=i.updated_at, score=1.0,
+                namespace=i.namespace,
+                key=i.key,
+                value=i.value,
+                created_at=i.created_at,
+                updated_at=i.updated_at,
+                score=1.0,
             )
             for i in items
         ]
 
-    def _list_namespaces(self, conn: sqlite3.Connection, op: ListNamespacesOp) -> list[tuple[str, ...]]:
+    def _list_namespaces(
+        self, conn: sqlite3.Connection, op: ListNamespacesOp
+    ) -> list[tuple[str, ...]]:
         rows = conn.execute("SELECT DISTINCT namespace FROM knowledge_items").fetchall()
         return [tuple(r["namespace"].split("/")) for r in rows]
 
