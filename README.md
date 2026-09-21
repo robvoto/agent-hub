@@ -39,6 +39,14 @@ Agent Hub is the operator entry point. It does not own specialist implementation
 
 Changes that belong to a specialist should remain in that specialist repository rather than being duplicated in Agent Hub.
 
+## Engineering highlights
+
+- **Explicit orchestration boundary** — Agent Hub routes work but does not duplicate specialist implementation logic.
+- **Pinned project context** — a task cannot silently drift to another repository during execution.
+- **Human-in-the-loop control** — approvals and clarifications suspend and resume work instead of being bypassed.
+- **Contract-driven specialists** — registered agents are invoked through explicit machine-readable boundaries.
+- **Observable execution** — task state, approvals, failures, and outcomes remain inspectable.
+
 ## Architecture principles
 
 - **Pinned project context** — a task keeps the project identity it started with.
@@ -60,7 +68,7 @@ Do not create duplicate local backlog files unless explicitly requested. Reposit
 
 ## Development status
 
-Active private project. Interfaces between Agent Hub, Agent Factory, and AI Tech Lead are still evolving and should be treated as explicit contracts rather than inferred from implementation details.
+Active development. Interfaces between Agent Hub, Agent Factory, and AI Tech Lead are still evolving and should be treated as explicit contracts rather than inferred from implementation details.
 
 ## Security
 
@@ -68,4 +76,4 @@ See [`SECURITY.md`](SECURITY.md) for secrets, Telegram, subprocess, project-path
 
 ## Licence
 
-This private repository does not grant an open-source licence. A licence should be selected deliberately before any public source release.
+Licensed under the GNU General Public License v3.0. See [`LICENSE`](LICENSE).
