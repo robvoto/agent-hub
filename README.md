@@ -1,5 +1,7 @@
 # Agent Hub
 
+[![CI](https://github.com/robvoto/agent-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/robvoto/agent-hub/actions/workflows/ci.yml)
+
 Agent Hub is the local control plane for a multi-agent delivery platform. It receives work from human-facing channels, resolves project context, applies approval boundaries, and routes bounded tasks to registered specialist agents.
 
 ## Platform role
