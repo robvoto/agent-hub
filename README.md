@@ -41,22 +41,27 @@ Agent Hub is the operator entry point. It does not own specialist implementation
 
 Changes that belong to a specialist should remain in that specialist repository rather than being duplicated in Agent Hub.
 
-## Engineering highlights
-
-- **Explicit orchestration boundary** — Agent Hub routes work but does not duplicate specialist implementation logic.
-- **Pinned project context** — a task cannot silently drift to another repository during execution.
-- **Human-in-the-loop control** — approvals and clarifications suspend and resume work instead of being bypassed.
-- **Contract-driven specialists** — registered agents are invoked through explicit machine-readable boundaries.
-- **Observable execution** — task state, approvals, failures, and outcomes remain inspectable.
-
 ## Architecture principles
 
+- **Explicit orchestration boundary** — Agent Hub routes work but does not duplicate specialist implementation logic.
 - **Pinned project context** — a task keeps the project identity it started with.
 - **Explicit contracts** — specialists are invoked through versioned machine-readable boundaries.
 - **Human approval** — risky or consequential actions pause instead of proceeding silently.
 - **Resumable work** — clarification and approval interruptions preserve enough state to continue safely.
 - **Observable execution** — outcomes, failures, approvals, and rework should be inspectable.
 - **Local-first operation** — credentials, runtime state, and project files remain under operator control.
+
+## Repository map
+
+| Path | Purpose |
+|---|---|
+| `src/agent_hub/` | Orchestration, transports, task state and runtime services |
+| `tests/` | Unit, contract and integration regression coverage |
+| `docs/` | Architecture, commands, validation and diagrams |
+| `config/` | Runtime/project configuration |
+| `scripts/` | Operational and development scripts |
+| `AGENTS.md` | Repository-wide instructions for coding agents |
+| `.agents/skills/` | Focused repository procedures for coding agents |
 
 ## Documentation
 

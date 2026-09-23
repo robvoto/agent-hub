@@ -1,6 +1,6 @@
-# Agent Hub documentation
+# Agent Hub Documentation
 
-This documentation is primarily operational context for coding agents and the Hub runtime. Read only the smallest document needed.
+This is the canonical technical documentation entry point for Agent Hub. It is intended for developers, reviewers and coding agents; read only the smallest document needed for the task.
 
 | Need | Read |
 |---|---|
@@ -8,6 +8,7 @@ This documentation is primarily operational context for coding agents and the Hu
 | Run the Hub or use commands | [`COMMANDS.md`](COMMANDS.md) |
 | Prove a change works through real CLI/Telegram | [`VALIDATION.md`](VALIDATION.md) |
 | Inspect workflow diagrams | [`diagrams/INDEX.md`](diagrams/INDEX.md) |
+| Review security boundaries | [`../SECURITY.md`](../SECURITY.md) |
 | Repository-wide agent rules | [`../AGENTS.md`](../AGENTS.md) |
 
 ## Current code map
@@ -31,4 +32,4 @@ This documentation is primarily operational context for coding agents and the Hu
 - Delivery work: live Google Sheet backlog linked from `README.md`
 - Documentation: this index and its linked files
 
-Delete or replace stale documentation; do not preserve duplicate historical instructions in the active documentation tree.
+Keep active documentation current and concise. Replace stale instructions rather than preserving duplicate historical guidance in the active documentation tree.
