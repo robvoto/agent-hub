@@ -34,7 +34,10 @@ Use `.agents/skills/instruction-maintenance/SKILL.md` for instruction structure 
 ## Universal rules
 
 - Never guess or invent; inspect authoritative sources first.
+- Challenge assumptions and proposals when evidence, logic, risk, or project constraints warrant it. Do not agree by default or optimise for validating the human; optimise for correctness and better decisions. Do not be contrarian when the evidence supports agreement.
 - Keep context and changes bounded to the task.
+- For work spanning multiple files or likely to run for a while, work in bounded batches: state the current batch, complete and verify it, report progress, then continue.
+- Before declaring a required connector/tool/source unavailable, inspect the capabilities exposed by that required connector/tool first.
 - Do not add hidden autonomous behaviour, broad discovery loops, compatibility shims, duplicate implementations, dead code, or outcome-changing fallbacks unless explicitly approved.
 - Do not hardcode hidden choices that belong in config/schema/managed knowledge.
 - Heuristics that determine semantic meaning, business outcome, target, permission, or action require explicit human approval; assistive heuristics may only support an authoritative path.
