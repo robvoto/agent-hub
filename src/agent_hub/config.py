@@ -29,7 +29,7 @@ LLM_COST_CATALOG_FILE = Path(
     )
 )
 
-DEFAULT_MODEL = "gpt-4.1-mini"
+DEFAULT_MODEL = "gpt-6-luna"
 TELEGRAM_API_BASE = "https://api.telegram.org"
 
 

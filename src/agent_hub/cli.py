@@ -7,6 +7,7 @@ import os
 import sys
 
 from .log_config import configure_logging
+from .config import DEFAULT_MODEL
 
 _HELP_TEXT = (
     "Send a plain message to dispatch work.\n"
@@ -286,7 +287,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
 
     chat_parser = sub.add_parser("chat", help="Interactive CLI chat (default)")
-    chat_parser.add_argument("--model", default=os.getenv("HUB_MODEL", "gpt-4.1-mini"))
+    chat_parser.add_argument("--model", default=os.getenv("HUB_MODEL", DEFAULT_MODEL))
 
     sub.add_parser("telegram", help="Run the Telegram bot gateway")
     return parser
@@ -312,7 +313,7 @@ def main(argv: list[str] | None = None) -> None:
     command = args.command or "chat"
 
     if command == "chat":
-        model = getattr(args, "model", os.getenv("HUB_MODEL", "gpt-4.1-mini"))
+        model = getattr(args, "model", os.getenv("HUB_MODEL", DEFAULT_MODEL))
         _run_chat(model)
     elif command == "telegram":
         _run_telegram()

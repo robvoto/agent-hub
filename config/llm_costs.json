@@ -1,9 +1,9 @@
 {
-  "updated_at": "2026-06-15T00:00:00+10:00",
+  "updated_at": "2026-10-01T00:00:00+10:00",
   "source": {
     "name": "OpenAI API Pricing",
-    "url": "https://openai.com/api/pricing/",
-    "verified_at": "2026-06-15",
+    "url": "https://developers.openai.com/api/docs/pricing",
+    "verified_at": "2026-10-01",
     "notes": "Seeded from the official pricing snapshot available in the local platform repos. Models without a verified rate stay marked unknown so logging fails closed."
   },
   "models": {
@@ -26,6 +26,12 @@
       "input_per_1m": 0.2,
       "cached_input_per_1m": 0.02,
       "output_per_1m": 1.25
+    },
+    "gpt-6-luna": {
+      "input_per_1m": 0.1,
+      "cached_input_per_1m": 0.01,
+      "output_per_1m": 0.5,
+      "notes": "Standard short-context pricing verified against the official OpenAI pricing page on 2026-10-01."
     },
     "gpt-4.1-mini": {
       "input_per_1m": 0.4,
