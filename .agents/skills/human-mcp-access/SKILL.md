@@ -1,6 +1,6 @@
 ---
 name: human-mcp-access
-description: Use when Agent Hub work requires Human MCP, especially Google Sheets or Google Docs read/write access. Load this before backlog-management when the live Agent Hub backlog must be inspected or changed.
+description: Use when Agent Hub work uses Human MCP for browser or Telegram interactions, or Google Sheets/Docs read/write access. Load this before backlog-management when the live Agent Hub backlog must be inspected or changed.
 ---
 
 # Skill: Human MCP Access
