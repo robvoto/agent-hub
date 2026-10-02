@@ -34,6 +34,40 @@ Operator request
 
 Hub has bounded tools. It does not gain arbitrary filesystem, code, backlog or Agent Factory write access merely because an LLM recommends an action.
 
+## Human MCP external tools
+
+When `HUB_HUMAN_MCP_ENABLED=true`, Hub opens one persistent local stdio MCP
+session using `config/human_mcp.json`. The current local transport reuses the
+canonical Human MCP implementation through its existing Windows stdio wrapper;
+it does not expose the Windows loopback HTTP port to WSL and does not use the
+legacy public ngrok path.
+
+The config contains an explicit tool allowlist. Hub currently admits bounded
+browser, Google Sheets, Google Docs and read-only Gmail capabilities. Human
+MCP filesystem, repository and arbitrary shell tools are deliberately not
+exposed to the Hub model by this integration.
+
+Tool safety comes from Human MCP's MCP annotations:
+
+- `readOnlyHint=true`: Hub may execute the tool directly;
+- state-changing tools: the LangGraph tool call interrupts and persists the
+  task as `waiting_approval`; `/approve` resumes the same graph checkpoint and
+  `/reject` resumes with a rejection without executing the external action.
+
+An explicit operator request for Human MCP or an allowlisted Human MCP tool is
+routed to Hub directly before specialist classification. This prevents browser
+or Google Workspace work from being misrouted to AI Tech Lead.
+
+Startup health connects to the configured MCP transport and reports the number
+of allowlisted read-only and approval-gated tools. Local deployments fail
+closed when Human MCP is enabled but unavailable. Repository/CI default is
+disabled, so environments without the local bridge do not attempt to launch it.
+
+Human MCP currently advertises no general Google Drive API tool. Hub therefore
+must not claim native Drive listing/search support. Browser automation can
+still operate a workflow-owned signed-in Chrome tab when the operator asks for
+a browser-based Drive workflow.
+
 ## Specialist registry and dispatch
 
 Hub reads staged `agent.json` definitions from Agent Factory. Routing eligibility comes from the specialist's advertised task capabilities in its task contract; purpose is descriptive context only. Runtime, input, interaction and project-context contracts describe how Hub may call the eligible specialist.

@@ -2433,6 +2433,42 @@ def test_invoke_allows_task_for_a_different_project(monkeypatch, tmp_path):
     assert reply == "Done for B"
 
 
+def test_routing_keeps_explicit_human_mcp_request_in_hub(monkeypatch):
+    from agent_hub.orchestrator import _classify_routing_request
+
+    class _Config:
+        allowed_tools = frozenset({"docs_read_text", "browser_status"})
+
+    monkeypatch.setattr("agent_hub.orchestrator.load_human_mcp_config", lambda: _Config())
+
+    decision = _classify_routing_request(
+        "Use Human MCP docs_read_text for this document.",
+        [],
+        model="test",
+    )
+
+    assert decision.route == "direct"
+    assert decision.task_kind is None
+
+
+def test_routing_keeps_named_human_mcp_tool_in_hub(monkeypatch):
+    from agent_hub.orchestrator import _classify_routing_request
+
+    class _Config:
+        allowed_tools = frozenset({"docs_read_text", "browser_status"})
+
+    monkeypatch.setattr("agent_hub.orchestrator.load_human_mcp_config", lambda: _Config())
+
+    decision = _classify_routing_request(
+        "Call docs_read_text and return only the heading.",
+        [],
+        model="test",
+    )
+
+    assert decision.route == "direct"
+    assert decision.task_kind is None
+
+
 def test_pending_run_disambiguates_by_currently_selected_project(monkeypatch, tmp_path):
     monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
     monkeypatch.setattr(

@@ -1,0 +1,47 @@
+{
+  "enabled": false,
+  "transport": {
+    "command": "powershell.exe",
+    "args": [
+      "-NoProfile",
+      "-Command",
+      "uv run --directory 'E:\\Programming\\MCP-server\\claude-human-mcp' server/main.py"
+    ]
+  },
+  "allowed_tools": [
+    "browser_status",
+    "browser_list_pages",
+    "browser_snapshot",
+    "browser_wait_for",
+    "browser_select_page",
+    "browser_navigate",
+    "browser_open_session",
+    "browser_open_tab",
+    "browser_close_tab",
+    "browser_reload",
+    "browser_go_back",
+    "browser_go_forward",
+    "browser_click",
+    "browser_fill",
+    "browser_press_key",
+    "browser_upload_file",
+    "sheets_list_tabs",
+    "sheets_read_rows",
+    "sheets_append_row",
+    "sheets_update_cell",
+    "docs_read_text",
+    "docs_get_hyperlinks",
+    "docs_create",
+    "docs_append_text",
+    "docs_replace_text",
+    "docs_set_hyperlink",
+    "gmail_auth_status",
+    "gmail_search",
+    "gmail_read_message",
+    "gmail_read_attachment",
+    "gmail_read_thread"
+  ],
+  "connect_timeout_seconds": 20,
+  "call_timeout_seconds": 45,
+  "max_result_chars": 30000
+}

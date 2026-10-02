@@ -12,6 +12,9 @@ Human / CLI / Telegram
           ▼
       Agent Hub
           │
+          ├── Human MCP
+          │     Governed browser + Google Workspace tools
+          │
           ├── Agent Factory
           │     Creates and stages agent packages
           │
@@ -30,6 +33,7 @@ Agent Hub is the operator entry point. It does not own specialist implementation
 - record execution outcomes and operational events;
 - prevent a task from silently switching projects during execution;
 - provide a consistent CLI and Telegram-facing control surface.
+- expose a bounded allowlist of Human MCP browser and Google Workspace tools when enabled locally.
 
 ## Repository boundaries
 
@@ -50,6 +54,7 @@ Changes that belong to a specialist should remain in that specialist repository 
 - **Resumable work** — clarification and approval interruptions preserve enough state to continue safely.
 - **Observable execution** — outcomes, failures, approvals, and rework should be inspectable.
 - **Local-first operation** — credentials, runtime state, and project files remain under operator control.
+- **Least-privilege external tools** — Human MCP tools are explicitly allowlisted; read-only calls run directly and state-changing calls pause for operator approval.
 
 ## Repository map
 

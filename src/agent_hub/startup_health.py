@@ -26,6 +26,7 @@ from .config import (
 )
 from .cost_log import canonical_model_name, load_cost_catalog
 from .factory_bridge import build_factory_agent_spec
+from .human_mcp_gateway import HumanMCPError, get_human_mcp_gateway
 from .log_config import get_human_logger
 from .registry import AgentSpec, parse_agent_spec
 from .runtime_policy import derive_manifest_command, validate_runtime_config
@@ -86,6 +87,9 @@ class StartupHealthReport:
             check.name == "LLM_COST_CATALOG" and check.status == "PASS" for check in self.checks
         ):
             lines.append("- LLM cost catalog loaded.")
+        human_mcp = next((check for check in self.checks if check.name == "HUMAN_MCP"), None)
+        if human_mcp is not None and human_mcp.status == "PASS":
+            lines.append(f"- {human_mcp.detail}")
         if warnings:
             lines.append("Warnings:")
             lines.extend(f"- {check.name}: {check.detail}" for check in warnings)
@@ -167,6 +171,7 @@ def run_startup_healthcheck(
     checks.extend(_check_sqlite_paths())
     checks.append(_check_model_config())
     checks.append(_check_cost_catalog())
+    checks.append(_check_human_mcp())
     return StartupHealthReport(mode=mode, checks=tuple(checks))
 
 
@@ -519,5 +524,33 @@ def _check_model_config() -> HealthCheckResult:
         detail=(
             f"Runtime model configured as {model}; reasoning effort "
             f"{reasoning_effort or 'provider default'}."
+        ),
+    )
+
+
+def _check_human_mcp() -> HealthCheckResult:
+    try:
+        gateway = get_human_mcp_gateway()
+        if gateway is None:
+            return HealthCheckResult(
+                name="HUMAN_MCP",
+                status="WARNING",
+                detail="Human MCP external tools are disabled by configuration.",
+            )
+        tools = gateway.list_tools()
+    except (HumanMCPError, OSError, ValueError) as exc:
+        return HealthCheckResult(
+            name="HUMAN_MCP",
+            status="FAIL",
+            detail=f"Configured Human MCP runtime is unavailable: {exc}",
+        )
+    read_only = sum(tool.read_only for tool in tools)
+    approval = len(tools) - read_only
+    return HealthCheckResult(
+        name="HUMAN_MCP",
+        status="PASS",
+        detail=(
+            f"Human MCP connected with {len(tools)} allowlisted tool(s) "
+            f"({read_only} read-only, {approval} approval-gated)."
         ),
     )

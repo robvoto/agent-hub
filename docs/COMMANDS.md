@@ -104,6 +104,7 @@ HUB_BOT_TOKEN=...
 HUB_ALLOWED_CHAT_IDS=...
 HUB_MODEL=<approved-model-id>
 HUB_REASONING_EFFORT=<optional: none|low|medium|high>
+HUB_HUMAN_MCP_ENABLED=<true locally when the configured stdio bridge exists; false in CI>
 ```
 
 `HUB_ALLOWED_CHAT_IDS` is comma-separated. Optional integration settings are documented in `.env.example`; treat that file and `src/agent_hub/config.py` as current truth rather than duplicating every variable here.

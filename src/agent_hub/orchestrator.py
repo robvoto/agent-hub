@@ -21,6 +21,7 @@ from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool as lc_tool
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
+from langgraph.types import Command
 from pydantic import BaseModel
 
 from .checkpointer import get_checkpointer
@@ -46,6 +47,8 @@ from .hub_memory import (
     format_learnings_for_prompt,
 )
 from .hub_skills import HubSkillStore, SkillProposalResult
+from .human_mcp_gateway import get_human_mcp_gateway, load_human_mcp_config
+from .human_mcp_tools import make_human_mcp_tools
 from .knowledge_store import get_knowledge_store
 from .learning_mode import get_learning_mode_registry
 from .log_config import get_human_logger
@@ -385,6 +388,20 @@ def _classify_routing_request(
     specialist task taxonomy is discovered from manifests at runtime; Hub has
     no agent-name or task-keyword mapping.
     """
+    normalized_message = message.casefold()
+    human_mcp_config = load_human_mcp_config()
+    explicit_human_mcp = "human mcp" in normalized_message
+    explicit_tool = any(
+        re.search(rf"(?<!\w){re.escape(name.casefold())}(?!\w)", normalized_message)
+        for name in human_mcp_config.allowed_tools
+    )
+    if explicit_human_mcp or explicit_tool:
+        return RoutingDecision(
+            route="direct",
+            task_kind=None,
+            reason="Operator explicitly requested a Hub-owned Human MCP runtime capability.",
+        )
+
     advertised = sorted(_advertised_task_kinds(registry))
     if not advertised:
         return RoutingDecision(
@@ -410,6 +427,9 @@ def _classify_routing_request(
         "describes the requested work. "
         "For specialist routing, task_kind MUST be one of the advertised task kinds below. "
         "Use route='direct' for ordinary conversation that does not require a specialist. "
+        "Use route='direct' for browser automation, Google Sheets/Docs/Gmail work, or other "
+        "Human MCP operations that Hub can perform with its own runtime tools, unless the "
+        "operator is explicitly asking to change code or specialist implementation. "
         "Use route='clarify' when the requested work is ambiguous or no advertised task "
         "kind clearly fits. "
         "Do not choose an agent; choose only the task kind.\n\n"
@@ -1492,8 +1512,34 @@ def _make_agent_tool(spec: AgentSpec, *, task_kind: str | None = None) -> Any:
     return _call_agent
 
 
-def _build_memory_tools(store: Any, registry: list[AgentSpec]) -> list[Any]:
-    return [make_shared_docs_tool(registry)]
+def _build_support_tools(store: Any, registry: list[AgentSpec]) -> list[Any]:
+    tools = [make_shared_docs_tool(registry)]
+    tools.extend(make_human_mcp_tools(get_human_mcp_gateway()))
+    return tools
+
+
+def _graph_interrupts(graph: Any, config: dict[str, Any]) -> list[Any]:
+    if not hasattr(graph, "get_state"):
+        return []
+    snapshot = graph.get_state(config)
+    interrupts: list[Any] = []
+    for task in getattr(snapshot, "tasks", ()) or ():
+        interrupts.extend(getattr(task, "interrupts", ()) or ())
+    return interrupts
+
+
+def _human_mcp_approval_message(value: Any) -> str:
+    payload = value if isinstance(value, dict) else {}
+    tool = str(payload.get("tool") or "unknown")
+    arguments = payload.get("arguments") if isinstance(payload.get("arguments"), dict) else {}
+    summary = json.dumps(arguments, ensure_ascii=False, default=str)
+    if len(summary) > 1200:
+        summary = summary[:1200] + "…"
+    return (
+        f"Approval required for Human MCP tool `{tool}`.\n"
+        f"Arguments: {summary}\n"
+        "Use /approve to run it or /reject [reason] to cancel it."
+    )
 
 
 def _repair_dangling_tool_calls(graph: Any, thread_id: str, reason: str) -> list[str]:
@@ -1606,8 +1652,8 @@ class HubOrchestrator:
         active_registry = self._registry if registry is None else registry
 
         agent_tools = [_make_agent_tool(s, task_kind=task_kind) for s in active_registry]
-        memory_tools = _build_memory_tools(store, active_registry) if include_memory_tools else []
-        tools = agent_tools + memory_tools
+        support_tools = _build_support_tools(store, active_registry) if include_memory_tools else []
+        tools = agent_tools + support_tools
 
         llm = ChatOpenAI(**chat_model_kwargs(self._model))
 
@@ -1616,7 +1662,7 @@ class HubOrchestrator:
             "Building LangGraph react agent with model=%s, tools=%s, memory_tools=%s",
             self._model,
             agent_names,
-            ["shared_docs"] if include_memory_tools else [],
+            [tool.name for tool in support_tools] if include_memory_tools else [],
         )
         logger.debug("Base system prompt length=%d chars", len(_SYSTEM_PROMPT))
 
@@ -2181,6 +2227,9 @@ class HubOrchestrator:
         if pending is None or pending.state != TASK_STATE_WAITING_APPROVAL:
             return "No task is currently waiting for approval."
 
+        if pending.context.get("hub_graph_interrupt_kind") == "human_mcp_approval":
+            return self._resume_hub_graph_approval(pending, approved=True)
+
         spec = self._require_spec(pending)
         _human_task_log(pending.id, "Approval received. Resuming %s.", spec.name)
         store = get_task_run_store()
@@ -2220,6 +2269,19 @@ class HubOrchestrator:
         if pending is None or pending.state != TASK_STATE_WAITING_APPROVAL:
             return "No task is currently waiting for approval."
 
+        if pending.context.get("hub_graph_interrupt_kind") == "human_mcp_approval":
+            self._resume_hub_graph_approval(pending, approved=False)
+            response_text = f"Human MCP action rejected: {reason}"
+            get_task_run_store().transition(
+                pending.id,
+                TASK_STATE_FAILED,
+                detail=f"Human rejected the pending Human MCP action: {reason}",
+                final_response=response_text,
+                error_message=reason,
+                raw_result={"status": "failed", "summary": reason},
+            )
+            return response_text
+
         spec = self._require_spec(pending)
         _human_task_log(pending.id, "Approval rejected. Stopping %s: %s", spec.name, reason)
         response_text: str
@@ -2246,6 +2308,64 @@ class HubOrchestrator:
             raw_result=raw_result,
         )
         return response_text
+
+    def _resume_hub_graph_approval(self, pending: TaskRun, *, approved: bool) -> str:
+        thread_id = pending.context.get("hub_graph_thread_id")
+        if not isinstance(thread_id, str) or not thread_id:
+            raise RuntimeError("Paused Human MCP task has no graph thread id.")
+        request_graph = self._build_graph([])
+        config = {"configurable": {"thread_id": thread_id}}
+        store = get_task_run_store()
+        store.transition(
+            pending.id,
+            TASK_STATE_IN_PROGRESS,
+            detail=(
+                "Human approved the pending Human MCP action."
+                if approved
+                else "Human rejected the pending Human MCP action."
+            ),
+        )
+        result = None
+        with active_task_run(pending.id):
+            for event in request_graph.stream(
+                Command(resume=approved),
+                config=config,
+                stream_mode=["updates", "values"],
+            ):
+                if (
+                    isinstance(event, tuple)
+                    and len(event) == 2
+                    and event[0] == "values"
+                    and isinstance(event[1], dict)
+                ):
+                    result = event[1]
+        if not approved:
+            return "Human MCP action rejected."
+        interrupts = _graph_interrupts(request_graph, config)
+        if interrupts:
+            value = interrupts[0].value
+            reply = _human_mcp_approval_message(value)
+            store.transition(
+                pending.id,
+                TASK_STATE_WAITING_APPROVAL,
+                detail="Another Human MCP action requires approval.",
+                final_response=reply,
+                context_updates={"hub_graph_interrupt": value},
+            )
+            return reply
+        if not result or not result.get("messages"):
+            raise RuntimeError("Resumed Hub graph returned no final messages.")
+        reply = (
+            _relay_specialist_terminal_message(result["messages"])
+            or result["messages"][-1].content
+        )
+        store.transition(
+            pending.id,
+            TASK_STATE_SUCCEEDED,
+            detail="Hub completed the approved Human MCP action.",
+            final_response=reply,
+        )
+        return reply
 
     def provide_clarification(
         self,
@@ -2637,6 +2757,27 @@ class HubOrchestrator:
                         )
                         if streamed_values is not None:
                             result = streamed_values
+                    interrupts = _graph_interrupts(request_graph, config)
+                    if interrupts:
+                        value = interrupts[0].value
+                        if not isinstance(value, dict) or value.get("kind") != "human_mcp_approval":
+                            raise RuntimeError(f"Unsupported Hub graph interrupt: {value!r}")
+                        reply = _human_mcp_approval_message(value)
+                        task_store.transition(
+                            task_run.id,
+                            TASK_STATE_WAITING_APPROVAL,
+                            detail=(
+                                "Human approval required before executing "
+                                f"Human MCP tool '{value.get('tool', 'unknown')}'."
+                            ),
+                            final_response=reply,
+                            context_updates={
+                                "hub_graph_interrupt_kind": "human_mcp_approval",
+                                "hub_graph_thread_id": thread_id,
+                                "hub_graph_interrupt": value,
+                            },
+                        )
+                        return reply
                     if result is None:
                         raise RuntimeError("Orchestrator stream returned no final state.")
                 else:
