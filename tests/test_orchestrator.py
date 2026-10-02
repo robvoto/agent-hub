@@ -1993,6 +1993,47 @@ def test_stop_current_task_refuses_to_guess_between_multiple_session_tasks(monke
     )
 
 
+def test_stop_fanout_parent_cancels_nonterminal_children(monkeypatch):
+    monkeypatch.setattr(
+        HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused")
+    )
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    orchestrator = HubOrchestrator()
+    store = get_task_run_store()
+    parent = store.create_run(session_id=orchestrator.session_id, user_message="fan out")
+    child_a = store.create_run(session_id=orchestrator.session_id, user_message="child a")
+    child_b = store.create_run(session_id=orchestrator.session_id, user_message="child b")
+    store.transition(child_a.id, TASK_STATE_IN_PROGRESS)
+    store.transition(child_b.id, TASK_STATE_IN_PROGRESS)
+    store.update_context(parent.id, fanout_child_ids=[child_a.id, child_b.id])
+
+    reply = orchestrator.stop_current_task(identifier=parent.id[:8])
+
+    assert "agent 'hub-fanout'" in reply
+    assert "Cancellation requested for 2 fan-out child task(s)" in reply
+    assert store.get_run(parent.id).state == TASK_STATE_CANCELLED
+    assert store.get_run(child_a.id).state == TASK_STATE_CANCELLED
+    assert store.get_run(child_b.id).state == TASK_STATE_CANCELLED
+
+
+def test_tasks_status_labels_fanout_parent_and_child(monkeypatch):
+    monkeypatch.setattr(
+        HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused")
+    )
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+    orchestrator = HubOrchestrator()
+    store = get_task_run_store()
+    parent = store.create_run(session_id=orchestrator.session_id, user_message="fan out")
+    child = store.create_run(session_id=orchestrator.session_id, user_message="child")
+    store.update_context(parent.id, fanout_child_ids=[child.id])
+    store.update_context(child.id, fanout_parent_run_id=parent.id)
+
+    status = orchestrator.tasks_status()
+
+    assert "fanout-parent:1" in status
+    assert f"child-of:{parent.id[:8]}" in status
+
+
 def test_stop_current_task_terminates_active_subprocess(monkeypatch, tmp_path):
     spec = AgentSpec(
         id="ai-tech-lead",
@@ -2467,6 +2508,111 @@ def test_routing_keeps_named_human_mcp_tool_in_hub(monkeypatch):
 
     assert decision.route == "direct"
     assert decision.task_kind is None
+
+
+def test_parallel_fanout_tool_passes_explicit_branches_to_executor(monkeypatch):
+    from agent_hub.orchestrator import _make_parallel_specialist_fanout_tool
+
+    spec = AgentSpec(
+        id="ai-tech-lead",
+        name="AI Tech Lead",
+        purpose="technical work",
+        task_contract={"task_kinds": ["technical_analysis"]},
+        runtime={
+            "mode": "subprocess",
+            "entrypoint": "fake-agent",
+            "working_directory": "/tmp",
+            "input_arg": "--input",
+            "output_arg": "--output",
+            "default_execution_mode": "execute",
+        },
+    )
+    captured = {}
+    store = get_task_run_store()
+    parent = store.create_run(session_id="session-1", user_message="fan out")
+    monkeypatch.setattr("agent_hub.orchestrator.get_current_task_run_id", lambda: parent.id)
+
+    def _run(**kwargs):
+        captured.update(kwargs)
+        return [
+            {
+                "index": 1,
+                "child_run_id": "child-1",
+                "agent_id": "ai-tech-lead",
+                "project_id": "project:a",
+                "state": "succeeded",
+                "response": "done",
+            },
+            {
+                "index": 2,
+                "child_run_id": "child-2",
+                "agent_id": "ai-tech-lead",
+                "project_id": "project:b",
+                "state": "succeeded",
+                "response": "done",
+            },
+        ]
+
+    monkeypatch.setattr("agent_hub.orchestrator.run_specialist_fanout", _run)
+    tool = _make_parallel_specialist_fanout_tool([spec], session_id="session-1")
+
+    result = tool.invoke(
+        {
+            "branches": [
+                {
+                    "agent_id": "ai-tech-lead",
+                    "task_kind": "technical_analysis",
+                    "task": "analyse A",
+                    "project": "a",
+                },
+                {
+                    "agent_id": "ai-tech-lead",
+                    "task_kind": "technical_analysis",
+                    "task": "analyse B",
+                    "project": "b",
+                },
+            ]
+        }
+    )
+
+    payload = json.loads(result)
+    assert payload["branch_count"] == 2
+    assert captured["session_id"] == "session-1"
+    assert captured["parent_run_id"] == parent.id
+    assert captured["branches"][0]["project"] == "a"
+    assert store.get_run(parent.id).state == TASK_STATE_IN_PROGRESS
+
+
+def test_direct_graph_keeps_full_registry_for_fanout_support_tool(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    spec = AgentSpec(
+        id="ai-tech-lead",
+        name="AI Tech Lead",
+        purpose="technical work",
+        task_contract={"task_kinds": ["technical_analysis"]},
+        runtime={
+            "mode": "subprocess",
+            "entrypoint": "fake-agent",
+            "working_directory": "/tmp",
+            "input_arg": "--input",
+            "output_arg": "--output",
+            "default_execution_mode": "execute",
+        },
+    )
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
+    monkeypatch.setattr("agent_hub.orchestrator.get_human_mcp_gateway", lambda: None)
+    captured = {}
+
+    def _support(store, registry, *, session_id):
+        captured["registry"] = [item.id for item in registry]
+        return []
+
+    monkeypatch.setattr("agent_hub.orchestrator._build_support_tools", _support)
+    orchestrator = HubOrchestrator(model="test")
+
+    orchestrator._build_graph([], include_memory_tools=True)
+
+    assert captured["registry"] == ["ai-tech-lead"]
 
 
 def test_pending_run_disambiguates_by_currently_selected_project(monkeypatch, tmp_path):

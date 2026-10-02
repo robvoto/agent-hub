@@ -193,6 +193,53 @@ class ProjectContextRegistry:
             contexts[(context.project_id, context.root, context.fingerprint)] = context
         return sorted(contexts.values(), key=lambda context: (context.project_id, context.root))
 
+    def resolve_known(self, reference: str) -> ProjectContextResolution:
+        """Resolve one explicit project reference without changing session selection.
+
+        Known aliases are preferred. An explicit absolute directory is also
+        accepted and canonicalized exactly like the /project command; specialist
+        authorization remains the specialist's responsibility.
+        """
+        value = (reference or "").strip()
+        if not value:
+            return ProjectContextResolution(
+                context=None,
+                error="Project reference cannot be empty.",
+            )
+        matches = [
+            context
+            for context in self.list_known()
+            if any(_same_alias(value, alias) for alias in _context_aliases(context))
+        ]
+        if len(matches) > 1:
+            return ProjectContextResolution(
+                context=None,
+                error=f"Project '{value}' matches multiple known projects; refusing to choose one.",
+            )
+        if len(matches) == 1:
+            return self._revalidate(matches[0])
+
+        candidate = Path(value).expanduser()
+        if candidate.is_absolute():
+            resolved = candidate.resolve()
+            if not resolved.is_dir():
+                return ProjectContextResolution(
+                    context=None,
+                    error=f"Project path '{value}' is not a directory.",
+                )
+            return ProjectContextResolution(
+                context=_build_project_context(resolved),
+                error=None,
+            )
+
+        return ProjectContextResolution(
+            context=None,
+            error=(
+                f"Unknown project '{value}'. Use an exact known alias or an absolute "
+                "project directory."
+            ),
+        )
+
     def resolve_for_dispatch(self, session_id: str) -> ProjectContextResolution:
         """Revalidate the persisted selection against the filesystem right now.
 

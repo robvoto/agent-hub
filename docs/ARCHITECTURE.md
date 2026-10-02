@@ -68,6 +68,44 @@ must not claim native Drive listing/search support. Browser automation can
 still operate a workflow-owned signed-in Chrome tab when the operator asks for
 a browser-based Drive workflow.
 
+## Bounded specialist fan-out
+
+Hub exposes one orchestration-owned `parallel_specialist_fanout` tool for an
+operator request that explicitly asks it to coordinate independent specialist
+work across projects. The implementation uses LangGraph `Send` branches and a
+reducer/join; it does not create a separate orchestration framework.
+
+Fan-out is bounded by `config/fanout.json` (currently at most four branches
+and at most three concurrent branches). Every branch must explicitly provide:
+
+- a registered specialist id;
+- a task kind advertised by that specialist;
+- a bounded task;
+- a project reference.
+
+Project references may use an exact known alias or an explicit absolute
+directory. The path is canonicalized using the same project-context rules as
+`/project`; the specialist still owns its own project authorization and may
+reject a root that Hub can resolve.
+
+All branches are validated before child runs are created. Parallel branches
+must target distinct canonical project ids. Hub refuses same-project fan-out
+instead of guessing that the work is read-only. This preserves the existing
+one-active-task-per-project safety rule.
+
+The parent and every branch are persisted as normal task runs. Child context
+records the parent id and branch index; the parent records its child ids.
+`/tasks` labels the relationship as `fanout-parent:N` and
+`child-of:<id>`. Branch success, failure and specialist pause states remain
+visible independently. Joined results are deterministic by branch index, and
+one branch failure is surfaced rather than retried automatically.
+
+Stopping a fan-out parent requests cancellation for every child and then
+cancels the parent. A child may also observe cancellation cooperatively while
+the parent stop is executing. The parent invocation checks its persisted
+terminal state before delivering a final reply, so a cancelled fan-out cannot
+emit a late branch summary after the operator has already stopped it.
+
 ## Specialist registry and dispatch
 
 Hub reads staged `agent.json` definitions from Agent Factory. Routing eligibility comes from the specialist's advertised task capabilities in its task contract; purpose is descriptive context only. Runtime, input, interaction and project-context contracts describe how Hub may call the eligible specialist.

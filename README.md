@@ -34,6 +34,7 @@ Agent Hub is the operator entry point. It does not own specialist implementation
 - prevent a task from silently switching projects during execution;
 - provide a consistent CLI and Telegram-facing control surface.
 - expose a bounded allowlist of Human MCP browser and Google Workspace tools when enabled locally.
+- coordinate a bounded fan-out of independent specialist work across distinct projects.
 
 ## Repository boundaries
 
@@ -55,6 +56,7 @@ Changes that belong to a specialist should remain in that specialist repository 
 - **Observable execution** — outcomes, failures, approvals, and rework should be inspectable.
 - **Local-first operation** — credentials, runtime state, and project files remain under operator control.
 - **Least-privilege external tools** — Human MCP tools are explicitly allowlisted; read-only calls run directly and state-changing calls pause for operator approval.
+- **Bounded parallelism** — one request may fan out to a small configured number of specialist branches, but same-project branches are refused and recursive/unbounded spawning is not available.
 
 ## Repository map
 

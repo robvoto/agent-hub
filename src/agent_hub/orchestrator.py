@@ -79,6 +79,7 @@ from .registry import (
 from .run_status import format_current_run_status, format_last_run_status
 from .session_state import load_or_create_session_id, persist_session_id
 from .shared_docs import make_shared_docs_tool
+from .specialist_fanout import FanoutError, run_specialist_fanout
 from .task_control import TaskCancelled, get_task_control_registry, subprocess_popen_kwargs
 from .task_envelope import build_task_envelope
 from .task_runs import (
@@ -430,6 +431,8 @@ def _classify_routing_request(
         "Use route='direct' for browser automation, Google Sheets/Docs/Gmail work, or other "
         "Human MCP operations that Hub can perform with its own runtime tools, unless the "
         "operator is explicitly asking to change code or specialist implementation. "
+        "Use route='direct' when the operator explicitly asks Hub to fan out or run multiple "
+        "independent specialist tasks in parallel across projects; Hub owns that coordination. "
         "Use route='clarify' when the requested work is ambiguous or no advertised task "
         "kind clearly fits. "
         "Do not choose an agent; choose only the task kind.\n\n"
@@ -1512,9 +1515,90 @@ def _make_agent_tool(spec: AgentSpec, *, task_kind: str | None = None) -> Any:
     return _call_agent
 
 
-def _build_support_tools(store: Any, registry: list[AgentSpec]) -> list[Any]:
+class FanoutBranchRequest(BaseModel):
+    agent_id: str
+    task_kind: str
+    task: str
+    project: str
+
+
+def _make_parallel_specialist_fanout_tool(
+    registry: list[AgentSpec],
+    *,
+    session_id: str,
+) -> Any:
+    @lc_tool(
+        "parallel_specialist_fanout",
+        description=(
+            "Run 2-4 explicit specialist branches in parallel and join their results. "
+            "Each branch must name agent_id, one task_kind advertised by that specialist, "
+            "a task, and a distinct known project. Use only when the operator explicitly "
+            "asks Hub to coordinate independent work across multiple projects. "
+            "Same-project parallel branches are refused."
+        ),
+    )
+    def _fanout(branches: list[FanoutBranchRequest]) -> str:
+        parent_run_id = get_current_task_run_id()
+        if not parent_run_id:
+            raise FanoutError("Fan-out requires an active Hub task run.")
+        parent = get_task_run_store().get_run(parent_run_id)
+        if parent is None:
+            raise FanoutError(f"Fan-out parent run disappeared: {parent_run_id}")
+        if parent.state != TASK_STATE_IN_PROGRESS:
+            get_task_run_store().transition(
+                parent_run_id,
+                TASK_STATE_IN_PROGRESS,
+                detail=f"Hub fan-out is coordinating {len(branches)} specialist branch(es).",
+                human_log=False,
+            )
+
+        def _dispatch(
+            spec: AgentSpec,
+            task: str,
+            task_kind: str,
+            project: ProjectContext,
+        ) -> dict[str, Any]:
+            mode = spec.runtime["mode"]
+            if mode == "subprocess":
+                return _dispatch_subprocess(
+                    spec,
+                    task,
+                    task_kind=task_kind,
+                    project_root_override=project.root,
+                    project_context_override=project,
+                )
+            if mode == "factory_brain":
+                return _dispatch_factory_brain(spec, task)
+            raise RuntimeError(f"Unsupported runtime mode: {mode}")
+
+        results = run_specialist_fanout(
+            session_id=session_id,
+            parent_run_id=parent_run_id,
+            registry=registry,
+            branches=[branch.model_dump() for branch in branches],
+            dispatch=_dispatch,
+            format_output=_format_output,
+        )
+        return json.dumps(
+            {
+                "branch_count": len(results),
+                "results": results,
+            },
+            ensure_ascii=False,
+        )
+
+    return _fanout
+
+
+def _build_support_tools(
+    store: Any,
+    registry: list[AgentSpec],
+    *,
+    session_id: str,
+) -> list[Any]:
     tools = [make_shared_docs_tool(registry)]
     tools.extend(make_human_mcp_tools(get_human_mcp_gateway()))
+    tools.append(_make_parallel_specialist_fanout_tool(registry, session_id=session_id))
     return tools
 
 
@@ -1652,7 +1736,11 @@ class HubOrchestrator:
         active_registry = self._registry if registry is None else registry
 
         agent_tools = [_make_agent_tool(s, task_kind=task_kind) for s in active_registry]
-        support_tools = _build_support_tools(store, active_registry) if include_memory_tools else []
+        support_tools = (
+            _build_support_tools(store, self._registry, session_id=self._session_id)
+            if include_memory_tools
+            else []
+        )
         tools = agent_tools + support_tools
 
         llm = ChatOpenAI(**chat_model_kwargs(self._model))
@@ -1820,8 +1908,16 @@ class HubOrchestrator:
             identifier = backlog_reference.get("item_id") or run.id[:8]
             project_key = run.context.get("target_project") or DEFAULT_PROJECT_KEY
             summary = _truncate(run.user_message, 80)
+            relation = ""
+            parent_id = run.context.get("fanout_parent_run_id")
+            child_ids = run.context.get("fanout_child_ids")
+            if isinstance(parent_id, str) and parent_id:
+                relation = f" | child-of:{parent_id[:8]}"
+            elif isinstance(child_ids, list) and child_ids:
+                relation = f" | fanout-parent:{len(child_ids)}"
             lines.append(
-                f"{identifier} | {_friendly_project_label(project_key)} | {run.state} | {summary}"
+                f"{identifier} | {_friendly_project_label(project_key)} | {run.state}"
+                f"{relation} | {summary}"
             )
         return "\n".join(lines)
 
@@ -2196,8 +2292,33 @@ class HubOrchestrator:
             return "No task is currently active."
         project_key = run.context.get("target_project") or DEFAULT_PROJECT_KEY
 
-        agent_id = run.selected_agent_id or "unknown-agent"
+        child_ids = run.context.get("fanout_child_ids")
+        agent_id = run.selected_agent_id or (
+            "hub-fanout" if isinstance(child_ids, list) and child_ids else "unknown-agent"
+        )
+        fanout_children = 0
+        if isinstance(child_ids, list):
+            for child_id in child_ids:
+                if not isinstance(child_id, str):
+                    continue
+                fanout_children += 1
+                get_task_control_registry().request_cancel(child_id, reason)
+                child = store.get_run(child_id)
+                if child is not None and not is_terminal_state(child.state):
+                    store.transition(
+                        child.id,
+                        TASK_STATE_CANCELLED,
+                        detail=f"Parent fan-out task was cancelled: {reason}",
+                        selected_agent_id=child.selected_agent_id,
+                        final_response=f"Cancelled because parent run {run.id[:8]} was stopped.",
+                        cancellation_reason=reason,
+                        raw_result={"status": "cancelled", "summary": reason},
+                    )
         confirmation = f"Stopped run {run.id} for agent '{agent_id}'. State is now cancelled."
+        if fanout_children:
+            confirmation += (
+                f" Cancellation requested for {fanout_children} fan-out child task(s)."
+            )
         _human_task_log(
             run.id,
             "Operator requested stop for agent '%s' in project '%s'.",
@@ -2806,6 +2927,8 @@ class HubOrchestrator:
             current = task_store.get_run(task_run.id)
             if current is None:
                 raise RuntimeError(f"Task run disappeared: {task_run.id}")
+            if current.state == TASK_STATE_CANCELLED:
+                raise TaskCancelled(current.cancellation_reason or "Stopped by user")
 
             if is_active_state(current.state):
                 _human_task_log(task_run.id, "Hub has a final answer ready for the operator.")
