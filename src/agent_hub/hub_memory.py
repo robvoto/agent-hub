@@ -388,13 +388,13 @@ def _summarize_learnings(records: list[LearningRecord]) -> str:
     from langchain_core.messages import HumanMessage, SystemMessage
     from langchain_openai import ChatOpenAI
 
-    from .config import configured_model
+    from .config import chat_model_kwargs, configured_model
     from .cost_log import extract_usage_metadata, record_llm_run
 
     model = configured_model()
 
     bullet_list = "\n".join(f"- {r.value} (source: {r.source})" for r in records)
-    llm = ChatOpenAI(model=model, temperature=0)
+    llm = ChatOpenAI(**chat_model_kwargs(model))
     usage_cb = UsageMetadataCallbackHandler()
     started = time.perf_counter()
     try:
@@ -522,7 +522,7 @@ def extract_semantic_candidates(
     from langchain_core.messages import HumanMessage, SystemMessage
     from langchain_openai import ChatOpenAI
 
-    from .config import configured_model
+    from .config import chat_model_kwargs, configured_model
     from .cost_log import extract_usage_metadata, record_llm_run
 
     model = configured_model()
@@ -540,7 +540,7 @@ def extract_semantic_candidates(
         f"Recent conversation:\n{conversation_text}"
     )
 
-    llm = ChatOpenAI(model=model, temperature=0)
+    llm = ChatOpenAI(**chat_model_kwargs(model))
     structured_llm = llm.with_structured_output(_ExtractionResponse)
     usage_cb = UsageMetadataCallbackHandler()
     started = time.perf_counter()
@@ -724,7 +724,7 @@ def analyze_learning(
     from langchain_core.messages import HumanMessage, SystemMessage
     from langchain_openai import ChatOpenAI
 
-    from .config import configured_model
+    from .config import chat_model_kwargs, configured_model
     from .cost_log import extract_usage_metadata, record_llm_run
 
     model = configured_model()
@@ -741,7 +741,7 @@ def analyze_learning(
         f"New lesson:\n{value}"
     )
 
-    llm = ChatOpenAI(model=model, temperature=0)
+    llm = ChatOpenAI(**chat_model_kwargs(model))
     structured_llm = llm.with_structured_output(_LearningAnalysisModel)
     usage_cb = UsageMetadataCallbackHandler()
     started = time.perf_counter()

@@ -15,6 +15,7 @@ _OPEN_STATES = {
     "in_progress",
     "waiting_clarification",
     "waiting_approval",
+    "waiting_decision",
 }
 
 
@@ -84,6 +85,13 @@ def _format_last_activity(run: TaskRun) -> str:
 
 
 def _format_live_progress(run: TaskRun) -> str:
+    paused_labels = {
+        "waiting_clarification": "Paused — waiting for clarification",
+        "waiting_approval": "Paused — waiting for approval",
+        "waiting_decision": "Paused — waiting for decision",
+    }
+    if run.state in paused_labels:
+        return paused_labels[run.state]
     if run.progress_mode == "pending":
         return "Waiting for first streamed update"
     if run.progress_mode == "unavailable":

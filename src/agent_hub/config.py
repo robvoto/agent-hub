@@ -28,6 +28,28 @@ def configured_model() -> str:
         )
     return model
 
+
+def configured_reasoning_effort() -> str | None:
+    """Return the optional provider-neutral reasoning effort override."""
+    value = os.getenv("HUB_REASONING_EFFORT", "").strip().lower()
+    if not value:
+        return None
+    allowed = {"none", "low", "medium", "high"}
+    if value not in allowed:
+        raise ConfigurationError(
+            "HUB_REASONING_EFFORT must be one of: none, low, medium, high."
+        )
+    return value
+
+
+def chat_model_kwargs(model: str) -> dict[str, str]:
+    """Build shared ChatOpenAI kwargs from explicit runtime configuration."""
+    kwargs = {"model": model}
+    reasoning_effort = configured_reasoning_effort()
+    if reasoning_effort is not None:
+        kwargs["reasoning_effort"] = reasoning_effort
+    return kwargs
+
 # Agent Factory — hub reads the agent registry from here.
 # Override with AGENT_FACTORY_ROOT env var if agent-factory lives elsewhere.
 AGENT_FACTORY_ROOT = Path(

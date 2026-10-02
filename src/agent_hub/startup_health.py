@@ -22,6 +22,7 @@ from .config import (
     TASK_RUN_DB,
     ConfigurationError,
     configured_model,
+    configured_reasoning_effort,
 )
 from .cost_log import canonical_model_name, load_cost_catalog
 from .factory_bridge import build_factory_agent_spec
@@ -496,6 +497,7 @@ def _check_cost_catalog() -> HealthCheckResult:
 def _check_model_config() -> HealthCheckResult:
     try:
         model = configured_model()
+        reasoning_effort = configured_reasoning_effort()
         if not LLM_COST_CATALOG_FILE.exists():
             raise FileNotFoundError(f"Cost catalog file does not exist: {LLM_COST_CATALOG_FILE}")
         catalog = load_cost_catalog(LLM_COST_CATALOG_FILE)
@@ -514,5 +516,8 @@ def _check_model_config() -> HealthCheckResult:
     return HealthCheckResult(
         name="HUB_MODEL",
         status="PASS",
-        detail=f"Runtime model configured as {model}.",
+        detail=(
+            f"Runtime model configured as {model}; reasoning effort "
+            f"{reasoning_effort or 'provider default'}."
+        ),
     )

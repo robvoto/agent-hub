@@ -8,6 +8,7 @@ from agent_hub.task_runs import (
     TASK_STATE_FAILED,
     TASK_STATE_IN_PROGRESS,
     TASK_STATE_WAITING_APPROVAL,
+    TASK_STATE_WAITING_DECISION,
     TaskRunStore,
 )
 
@@ -55,6 +56,24 @@ def test_format_current_run_status_for_paused_run(tmp_path):
     assert "State: waiting_approval" in message
     assert "Selected agent: release-agent" in message
     assert "Result or error: Waiting for approval" in message
+    assert "Live progress: Paused — waiting for approval" in message
+
+
+def test_format_current_run_status_never_calls_waiting_decision_active(tmp_path):
+    store = TaskRunStore(tmp_path / "task_runs.sqlite3")
+    run = store.create_run(session_id="session-1", user_message="Choose")
+    store.set_progress_mode(run.id, PROGRESS_MODE_STREAMING)
+    paused = store.transition(
+        run.id,
+        TASK_STATE_WAITING_DECISION,
+        selected_agent_id="ai-tech-lead",
+        final_response="Choose an option",
+    )
+
+    message = format_current_run_status(paused)
+
+    assert "Live progress: Paused — waiting for decision" in message
+    assert "Live progress: Active" not in message
 
 
 def test_format_current_run_status_shows_streaming_progress(tmp_path):

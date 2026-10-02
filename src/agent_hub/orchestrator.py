@@ -24,7 +24,7 @@ from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel
 
 from .checkpointer import get_checkpointer
-from .config import configured_model
+from .config import chat_model_kwargs, configured_model
 from .cost_log import extract_usage_metadata, record_llm_run
 from .factory_bridge import (
     build_factory_agent_spec,
@@ -417,7 +417,10 @@ def _classify_routing_request(
         + "\n\n".join(cards)
         + f"\n\nOperator request:\n{message}"
     )
-    llm = ChatOpenAI(model=model, temperature=0).with_structured_output(RoutingDecision)
+    # Do not force optional sampling parameters here. Some approved models
+    # accept only provider defaults, so shared Hub code must stay compatible
+    # with every model admitted by runtime configuration.
+    llm = ChatOpenAI(**chat_model_kwargs(model)).with_structured_output(RoutingDecision)
     decision = llm.invoke([HumanMessage(content=prompt)])
     if decision.route == "specialist":
         if decision.task_kind not in advertised:
@@ -1606,7 +1609,7 @@ class HubOrchestrator:
         memory_tools = _build_memory_tools(store, active_registry) if include_memory_tools else []
         tools = agent_tools + memory_tools
 
-        llm = ChatOpenAI(model=self._model, temperature=0)
+        llm = ChatOpenAI(**chat_model_kwargs(self._model))
 
         agent_names = [spec.id for spec in active_registry]
         logger.info(
@@ -2122,7 +2125,23 @@ class HubOrchestrator:
             if error:
                 return error
         else:
-            run = store.get_active_or_paused_run_for_project(project_key)
+            run = store.get_latest_active_or_paused_run(
+                self._session_id,
+                project_key=project_key,
+            )
+            if run is None:
+                session_runs = [
+                    candidate
+                    for candidate in store.list_runs(self._session_id)
+                    if is_active_state(candidate.state) or is_paused_state(candidate.state)
+                ]
+                if len(session_runs) == 1:
+                    run = session_runs[0]
+                elif len(session_runs) > 1:
+                    return (
+                        "Multiple tasks are active or paused in this conversation. "
+                        "Use /tasks, then /stop <id>."
+                    )
         if run is None:
             human_logger.info(
                 "Stop requested for project '%s', but no active or paused task was found.",
@@ -2332,6 +2351,8 @@ class HubOrchestrator:
         choice, _, decision_text = reply.strip().partition(" ")
         if not choice:
             return "Reply with the option number or name."
+        if choice.endswith((".", ")")) and choice[:-1].isdigit():
+            choice = choice[:-1]
 
         pending_decision = pending.context.get("specialist_pending_decision") or {}
         options = [

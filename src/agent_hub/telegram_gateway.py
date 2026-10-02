@@ -63,12 +63,20 @@ def _api(token: str, method: str, **kwargs: Any) -> dict:
     return resp.json()
 
 
+def _safe_transport_error(exc: Exception, token: str) -> str:
+    """Render a transport exception without ever logging the bot token."""
+    rendered = str(exc)
+    if token:
+        rendered = rendered.replace(token, "<redacted-telegram-bot-token>")
+    return rendered
+
+
 def _get_updates(token: str, offset: int) -> list[dict]:
     try:
         data = _api(token, "getUpdates", offset=offset, timeout=_POLL_TIMEOUT)
         return data.get("result", [])
     except Exception as exc:
-        logger.warning("getUpdates failed: %s", exc)
+        logger.warning("getUpdates failed: %s", _safe_transport_error(exc, token))
         return []
 
 
@@ -92,7 +100,7 @@ def _send_message(
                 sent_ids.append(message_id)
         human_logger.info("Telegram reply to chat %d: %s", chat_id, _truncate(text))
     except Exception as exc:
-        logger.error("sendMessage failed: %s", exc)
+        logger.error("sendMessage failed: %s", _safe_transport_error(exc, token))
     return sent_ids
 
 
@@ -127,10 +135,10 @@ def _edit_message(
         response_text = exc.response.text if exc.response is not None else ""
         if "message is not modified" in response_text:
             return False
-        logger.error("editMessageText failed: %s", exc)
+        logger.error("editMessageText failed: %s", _safe_transport_error(exc, token))
         return False
     except Exception as exc:
-        logger.error("editMessageText failed: %s", exc)
+        logger.error("editMessageText failed: %s", _safe_transport_error(exc, token))
         return False
 
 
@@ -476,6 +484,8 @@ class TelegramGateway:
         except Exception as exc:
             logger.exception("Orchestrator error")
             reply = f"Error: {exc}"
+            _send_message(self._token, chat_id, reply, parse_mode=None)
+            return
 
         _send_message(self._token, chat_id, reply)
 

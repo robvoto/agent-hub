@@ -10,11 +10,50 @@ from types import SimpleNamespace
 import pytest
 
 import agent_hub.singleton_lock as singleton_lock
+import agent_hub.telegram_gateway as telegram_gateway
 from agent_hub.progress_events import ProgressUpdate
 from agent_hub.singleton_lock import SingletonLockBusyError
 from agent_hub.task_control import get_task_control_registry
 from agent_hub.task_runs import TASK_STATE_CANCELLED, get_task_run_store
 from agent_hub.telegram_gateway import TelegramGateway, _raise_keyboard_interrupt, run_telegram
+
+
+def test_transport_error_redacts_bot_token() -> None:
+    token = "123456:super-secret-token"
+    exc = RuntimeError(
+        "Client error '400 Bad Request' for url "
+        f"'https://api.telegram.org/bot{token}/sendMessage'"
+    )
+
+    rendered = telegram_gateway._safe_transport_error(exc, token)
+
+    assert token not in rendered
+    assert "<redacted-telegram-bot-token>" in rendered
+
+
+def test_orchestrator_error_is_sent_as_plain_text(monkeypatch) -> None:
+    sent: list[dict] = []
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway._send_message",
+        lambda token, chat_id, text, *, parse_mode="Markdown": sent.append(
+            {"text": text, "parse_mode": parse_mode}
+        ),
+    )
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError("invalid_request_error")
+
+    orch = SimpleNamespace(
+        pending_run=lambda: None,
+        invoke=_raise,
+        registry=[],
+        set_learning_notifier=lambda callback: None,
+    )
+    gateway = TelegramGateway("token-123", orch)
+
+    gateway._process_user_message(42, "do work")
+
+    assert sent == [{"text": "Error: invalid_request_error", "parse_mode": None}]
 
 
 def test_help_text_explains_task_controls() -> None:

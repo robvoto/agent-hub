@@ -1488,6 +1488,28 @@ def test_provide_decision_reply_maps_number_to_specialist_option(monkeypatch):
     }
 
 
+def test_provide_decision_reply_accepts_number_with_punctuation(monkeypatch):
+    monkeypatch.setattr(
+        HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused")
+    )
+    orchestrator = HubOrchestrator(model="test")
+    pending = SimpleNamespace(
+        state="waiting_decision",
+        context={"specialist_pending_decision": {"options": [{"name": "answer"}]}},
+    )
+    monkeypatch.setattr(orchestrator, "pending_run", lambda: pending)
+    captured = {}
+
+    def _provide(option, text="", *, actor="human", progress_notify=None):
+        captured.update(option=option, text=text)
+        return "resumed"
+
+    monkeypatch.setattr(orchestrator, "provide_decision", _provide)
+
+    assert orchestrator.provide_decision_reply("1. Keep it read-only") == "resumed"
+    assert captured == {"option": "answer", "text": "Keep it read-only"}
+
+
 def test_provide_decision_reply_rejects_invalid_number(monkeypatch):
     monkeypatch.setattr(
         HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused")
@@ -1918,6 +1940,57 @@ def test_stop_current_task_cancels_waiting_approval_run(monkeypatch, tmp_path):
     assert updated is not None
     assert updated.state == TASK_STATE_CANCELLED
     assert updated.cancellation_reason == "Stopped by user"
+
+
+def test_stop_current_task_falls_back_to_only_session_task_after_project_change(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused")
+    )
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+
+    orchestrator = HubOrchestrator()
+    store = get_task_run_store()
+    run = store.create_run(session_id=orchestrator.session_id, user_message="task for project A")
+    store.update_run(run.id, context_updates={"target_project": "/repo/a"})
+    store.transition(run.id, TASK_STATE_WAITING_APPROVAL, approval_token="approve-123")
+
+    project_b = tmp_path / "repo-b"
+    project_b.mkdir()
+    orchestrator.set_current_project(str(project_b))
+
+    reply = orchestrator.stop_current_task()
+
+    assert f"Stopped run {run.id}" in reply
+    updated = store.get_run(run.id)
+    assert updated is not None
+    assert updated.state == TASK_STATE_CANCELLED
+
+
+def test_stop_current_task_refuses_to_guess_between_multiple_session_tasks(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused")
+    )
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [])
+
+    orchestrator = HubOrchestrator()
+    store = get_task_run_store()
+    for project in ("/repo/a", "/repo/b"):
+        run = store.create_run(session_id=orchestrator.session_id, user_message=f"task {project}")
+        store.update_run(run.id, context_updates={"target_project": project})
+        store.transition(run.id, TASK_STATE_IN_PROGRESS)
+
+    project_c = tmp_path / "repo-c"
+    project_c.mkdir()
+    orchestrator.set_current_project(str(project_c))
+
+    reply = orchestrator.stop_current_task()
+
+    assert reply == (
+        "Multiple tasks are active or paused in this conversation. "
+        "Use /tasks, then /stop <id>."
+    )
 
 
 def test_stop_current_task_terminates_active_subprocess(monkeypatch, tmp_path):
