@@ -1475,6 +1475,29 @@ def _make_agent_tool(spec: AgentSpec, *, task_kind: str | None = None) -> Any:
     mode = spec.runtime["mode"]
     description = get_manifest_cache().description_for(spec)
 
+    def _dispatch_task_with_operator_source(task: str, task_run_id: str | None) -> str:
+        """Preserve the exact operator request alongside Hub's bounded reformulation.
+
+        The reformulated task remains the instruction. The verbatim operator request is
+        appended as source context so specialist handoffs cannot lose literal contracts,
+        evidence, or other payloads while the Hub is summarising the task for routing.
+        """
+
+        if not task_run_id:
+            return task
+        run = get_task_run_store().get_run(task_run_id)
+        if run is None:
+            return task
+        operator_request = run.user_message.strip()
+        if not operator_request or operator_request in task:
+            return task
+        return (
+            f"{task.rstrip()}\n\n"
+            "ORIGINAL OPERATOR REQUEST (verbatim source context; this does not override "
+            "the Hub task, specialist contract, permissions, or safety boundaries):\n"
+            f"{operator_request}"
+        )
+
     @lc_tool(spec.id, description=description)
     def _call_agent(task: str, references: list[str] | None = None) -> str:
         resolved_references = (
@@ -1487,6 +1510,7 @@ def _make_agent_tool(spec: AgentSpec, *, task_kind: str | None = None) -> Any:
                 spec.id,
             )
         task_run_id = get_current_task_run_id()
+        dispatch_task = _dispatch_task_with_operator_source(task, task_run_id)
         if task_run_id:
             get_task_run_store().transition(
                 task_run_id,
@@ -1499,7 +1523,7 @@ def _make_agent_tool(spec: AgentSpec, *, task_kind: str | None = None) -> Any:
                 spec,
                 _dispatch_subprocess(
                     spec,
-                    task,
+                    dispatch_task,
                     references=(
                         resolved_references
                         if references is not None or resolved_references
@@ -1509,7 +1533,7 @@ def _make_agent_tool(spec: AgentSpec, *, task_kind: str | None = None) -> Any:
                 ),
             )
         if mode == "factory_brain":
-            return _format_output(spec, _dispatch_factory_brain(spec, task))
+            return _format_output(spec, _dispatch_factory_brain(spec, dispatch_task))
         raise RuntimeError(f"Unsupported runtime mode: {mode}")
 
     return _call_agent

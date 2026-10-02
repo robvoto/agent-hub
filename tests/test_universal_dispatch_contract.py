@@ -350,6 +350,69 @@ def test_widget_forge_resumes_a_generic_pending_decision_via_decide(monkeypatch,
     }
 
 
+def test_specialist_dispatch_preserves_verbatim_operator_request(monkeypatch, tmp_path):
+    registry_dir = tmp_path / "agents"
+    working_directory = tmp_path / "workdir"
+    working_directory.mkdir()
+    _write_fake_specialist_manifest(registry_dir, working_directory)
+    spec = load_registry(registry_dir)[0]
+
+    captured: dict[str, object] = {}
+
+    def fake_dispatch(spec, task, *, references=None, task_kind=None, **kwargs):
+        captured["task"] = task
+        return {"status": "success", "summary": "Reviewed."}
+
+    monkeypatch.setattr("agent_hub.orchestrator._dispatch_subprocess", fake_dispatch)
+    operator_request = (
+        "Review the implementation contract.\n\n"
+        "FACTORY HANDOFF:\n"
+        "must_preserve=exact variant, delivered price, and budget limits"
+    )
+    run = get_task_run_store().create_run(
+        session_id="operator-source-preservation",
+        user_message=operator_request,
+    )
+
+    with active_task_run(run.id):
+        _make_agent_tool(spec).invoke(
+            {"task": "Review the supplied Factory handoff as an implementation contract."}
+        )
+
+    dispatched = str(captured["task"])
+    assert dispatched.startswith("Review the supplied Factory handoff")
+    assert "ORIGINAL OPERATOR REQUEST (verbatim source context" in dispatched
+    assert operator_request in dispatched
+
+
+def test_specialist_dispatch_does_not_duplicate_identical_operator_request(
+    monkeypatch, tmp_path
+):
+    registry_dir = tmp_path / "agents"
+    working_directory = tmp_path / "workdir"
+    working_directory.mkdir()
+    _write_fake_specialist_manifest(registry_dir, working_directory)
+    spec = load_registry(registry_dir)[0]
+
+    captured: dict[str, object] = {}
+
+    def fake_dispatch(spec, task, *, references=None, task_kind=None, **kwargs):
+        captured["task"] = task
+        return {"status": "success", "summary": "Reviewed."}
+
+    monkeypatch.setattr("agent_hub.orchestrator._dispatch_subprocess", fake_dispatch)
+    operator_request = "Review this exact contract."
+    run = get_task_run_store().create_run(
+        session_id="operator-source-no-duplication",
+        user_message=operator_request,
+    )
+
+    with active_task_run(run.id):
+        _make_agent_tool(spec).invoke({"task": operator_request})
+
+    assert captured["task"] == operator_request
+
+
 def test_widget_forge_only_receives_context_its_manifest_accepts(monkeypatch, tmp_path):
     """A specialist that narrows `input_contract.accepted_context` to just
     `project_root` never receives `references` in its envelope, even when the

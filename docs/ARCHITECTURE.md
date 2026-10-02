@@ -116,6 +116,12 @@ Every dispatched run pins the selected specialist definition and fingerprint. A 
 
 Hub sends one universal task envelope. It adds the classified `task_kind` and resolves project resources only when the specialist's input contract advertises the corresponding envelope field. A persisted backlog resource is the reusable source (provider, spreadsheet ID, sheet name and optional source metadata), not an individual backlog item. When the request contains one explicit item identifier, Hub composes the existing structured `backlog_reference` from that request item and the selected source. Required missing, stale, conflicting, or ambiguous context causes a clear stop; Hub does not guess or silently fall back.
 
+When Hub reformulates an operator request into a shorter specialist task, dispatch also includes
+the exact original operator request as clearly labelled verbatim source context. The reformulated
+task remains authoritative for scope, and the source block cannot expand permissions or override
+the specialist contract. This prevents literal handoff contracts or evidence from being lost during
+LLM task reformulation.
+
 ## Project context
 
 `/project <path>` resolves a canonical project context containing the root, stable project identity, contract version and fingerprint. A request may explicitly name one already-known project alias; otherwise a valid current `/project` selection is used. Unknown or ambiguous project references stop safely. Fresh dispatches revalidate the resolved context. Paused runs replay the project context pinned at original dispatch, even if the operator changes `/project` before resuming.

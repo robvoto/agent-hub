@@ -1612,7 +1612,10 @@ def test_agent_tool_records_routed_dispatched_and_waiting_approval(monkeypatch, 
     assert updated is not None
     assert updated.state == TASK_STATE_WAITING_APPROVAL
     assert updated.selected_agent_id == "ai-tech-lead"
-    assert updated.dispatched_task == "Delete the generated files"
+    assert updated.dispatched_task is not None
+    assert updated.dispatched_task.startswith("Delete the generated files")
+    assert "ORIGINAL OPERATOR REQUEST (verbatim source context" in updated.dispatched_task
+    assert updated.dispatched_task.endswith("Clean this up")
     assert updated.approval_token == "approve-123"
 
     events = get_task_run_store().list_events(run.id)
