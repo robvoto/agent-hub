@@ -88,19 +88,34 @@ def _send_message(
     parse_mode: str | None = "Markdown",
 ) -> list[int]:
     sent_ids: list[int] = []
-    try:
-        chunks = [text[i : i + 4096] for i in range(0, len(text), 4096)]
-        for chunk in chunks:
+    chunks = [text[i : i + 4096] for i in range(0, len(text), 4096)]
+    for chunk in chunks:
+        try:
             payload: dict[str, Any] = {"chat_id": chat_id, "text": chunk}
             if parse_mode is not None:
                 payload["parse_mode"] = parse_mode
-            result = _api(token, "sendMessage", **payload).get("result", {})
+            try:
+                result = _api(token, "sendMessage", **payload).get("result", {})
+            except httpx.HTTPStatusError as exc:
+                if parse_mode is None or exc.response is None or exc.response.status_code != 400:
+                    raise
+                logger.warning(
+                    "Telegram rejected formatted message; retrying chunk as plain text."
+                )
+                result = _api(
+                    token,
+                    "sendMessage",
+                    chat_id=chat_id,
+                    text=chunk,
+                ).get("result", {})
             message_id = result.get("message_id")
             if isinstance(message_id, int):
                 sent_ids.append(message_id)
+        except Exception as exc:
+            logger.error("sendMessage failed: %s", _safe_transport_error(exc, token))
+            break
+    if sent_ids:
         human_logger.info("Telegram reply to chat %d: %s", chat_id, _truncate(text))
-    except Exception as exc:
-        logger.error("sendMessage failed: %s", _safe_transport_error(exc, token))
     return sent_ids
 
 

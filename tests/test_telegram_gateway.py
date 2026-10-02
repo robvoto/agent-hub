@@ -7,6 +7,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 import agent_hub.singleton_lock as singleton_lock
@@ -16,6 +17,46 @@ from agent_hub.singleton_lock import SingletonLockBusyError
 from agent_hub.task_control import get_task_control_registry
 from agent_hub.task_runs import TASK_STATE_CANCELLED, get_task_run_store
 from agent_hub.telegram_gateway import TelegramGateway, _raise_keyboard_interrupt, run_telegram
+
+
+def test_send_message_retries_markdown_400_as_plain_text(monkeypatch) -> None:
+    calls: list[dict] = []
+
+    response = httpx.Response(
+        400,
+        request=httpx.Request("POST", "https://api.telegram.org/sendMessage"),
+    )
+
+    def fake_api(token: str, method: str, **kwargs):
+        calls.append(kwargs)
+        if kwargs.get("parse_mode") == "Markdown":
+            raise httpx.HTTPStatusError(
+                "400 Bad Request",
+                request=response.request,
+                response=response,
+            )
+        return {"result": {"message_id": 123}}
+
+    monkeypatch.setattr(telegram_gateway, "_api", fake_api)
+
+    sent = telegram_gateway._send_message(
+        "token",
+        42,
+        "- requested_task_kind: coding_task",
+    )
+
+    assert sent == [123]
+    assert calls == [
+        {
+            "chat_id": 42,
+            "text": "- requested_task_kind: coding_task",
+            "parse_mode": "Markdown",
+        },
+        {
+            "chat_id": 42,
+            "text": "- requested_task_kind: coding_task",
+        },
+    ]
 
 
 def test_transport_error_redacts_bot_token() -> None:
