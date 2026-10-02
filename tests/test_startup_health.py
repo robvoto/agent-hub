@@ -148,6 +148,27 @@ def test_chat_healthcheck_passes_for_valid_configuration(monkeypatch, tmp_path):
     assert all(check.status != "FAIL" for check in report.checks)
 
 
+def test_startup_healthcheck_rejects_missing_runtime_model(monkeypatch, tmp_path):
+    _configure_valid_startup(monkeypatch, tmp_path)
+    monkeypatch.delenv("HUB_MODEL", raising=False)
+
+    report = run_startup_healthcheck("chat")
+
+    assert report.has_failures
+    assert _failure_detail(report, "HUB_MODEL")
+    assert "HUB_MODEL is required" in _failure_detail(report, "HUB_MODEL")
+
+
+def test_startup_healthcheck_rejects_model_missing_from_cost_catalog(monkeypatch, tmp_path):
+    _configure_valid_startup(monkeypatch, tmp_path)
+    monkeypatch.setenv("HUB_MODEL", "unapproved-model")
+
+    report = run_startup_healthcheck("chat")
+
+    assert report.has_failures
+    assert "not listed in the LLM cost catalog" in _failure_detail(report, "HUB_MODEL")
+
+
 def test_telegram_healthcheck_warns_without_allowlist(monkeypatch, tmp_path):
     _configure_valid_startup(monkeypatch, tmp_path)
     monkeypatch.delenv("HUB_ALLOWED_CHAT_IDS", raising=False)

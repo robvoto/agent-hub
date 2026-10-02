@@ -1,4 +1,4 @@
-"""Paths and constants for the Agent Hub."""
+"""Paths and runtime configuration for the Agent Hub."""
 
 from __future__ import annotations
 
@@ -8,6 +8,25 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
 CONFIG_DIR = PROJECT_ROOT / "config"
+
+
+class ConfigurationError(RuntimeError):
+    """Raised when required runtime configuration is missing or invalid."""
+
+
+def configured_model() -> str:
+    """Return the model selected by deployment configuration.
+
+    Model choice is deliberately not embedded in source code. A missing
+    value must fail closed so a deployment cannot silently use an unapproved
+    or stale model.
+    """
+    model = os.getenv("HUB_MODEL", "").strip()
+    if not model:
+        raise ConfigurationError(
+            "HUB_MODEL is required; set it to an approved model before starting Agent Hub."
+        )
+    return model
 
 # Agent Factory — hub reads the agent registry from here.
 # Override with AGENT_FACTORY_ROOT env var if agent-factory lives elsewhere.
@@ -29,7 +48,6 @@ LLM_COST_CATALOG_FILE = Path(
     )
 )
 
-DEFAULT_MODEL = "gpt-6-luna"
 TELEGRAM_API_BASE = "https://api.telegram.org"
 
 

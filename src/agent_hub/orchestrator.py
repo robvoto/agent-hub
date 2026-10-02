@@ -24,7 +24,7 @@ from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel
 
 from .checkpointer import get_checkpointer
-from .config import DEFAULT_MODEL
+from .config import configured_model
 from .cost_log import extract_usage_metadata, record_llm_run
 from .factory_bridge import (
     build_factory_agent_spec,
@@ -1560,7 +1560,7 @@ class HubOrchestrator:
 
     def __init__(
         self,
-        model: str = DEFAULT_MODEL,
+        model: str | None = None,
         *,
         semantic_extractor: Any = None,
         learning_analyzer: Any = None,
@@ -1568,7 +1568,7 @@ class HubOrchestrator:
         context_service: Any = None,
         routing_classifier: Any = None,
     ) -> None:
-        self._model = model
+        self._model = model or configured_model()
         self._registry = _load_specialists()
         self._registry_errors: list[RegistryLoadError] = _load_registry_errors()
         self._registry_last_refreshed = _utcnow_iso()

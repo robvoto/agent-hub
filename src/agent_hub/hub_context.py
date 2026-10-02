@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from .config import AGENT_REGISTRY_DIR, DEFAULT_MODEL, PROJECT_ROOT
+from .config import AGENT_REGISTRY_DIR, PROJECT_ROOT, configured_model
 from .registry import load_registry_report, spec_fingerprint
 
 ContextSourceKind = Literal["documentation", "manifest", "runtime_metadata"]
@@ -173,7 +173,7 @@ class HubContextService:
         report = load_registry_report(self._registry_dir)
         error_lines = "; ".join(f"{e.source}: {e.message}" for e in report.errors) or "none"
         content = (
-            f"default_model={DEFAULT_MODEL}; registry_dir={self._registry_dir}; "
+            f"configured_model={configured_model()}; registry_dir={self._registry_dir}; "
             f"loaded_agents={len(report.specs)}; invalid_manifests={len(report.errors)} "
             f"({error_lines})"
         )

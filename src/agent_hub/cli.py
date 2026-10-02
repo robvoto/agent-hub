@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 
+from .config import configured_model
 from .log_config import configure_logging
-from .config import DEFAULT_MODEL
 
 _HELP_TEXT = (
     "Send a plain message to dispatch work.\n"
@@ -287,7 +286,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
 
     chat_parser = sub.add_parser("chat", help="Interactive CLI chat (default)")
-    chat_parser.add_argument("--model", default=os.getenv("HUB_MODEL", DEFAULT_MODEL))
+    chat_parser.add_argument(
+        "--model",
+        default=None,
+        help="Explicit model override; otherwise HUB_MODEL from runtime configuration is used.",
+    )
 
     sub.add_parser("telegram", help="Run the Telegram bot gateway")
     return parser
@@ -313,7 +316,7 @@ def main(argv: list[str] | None = None) -> None:
     command = args.command or "chat"
 
     if command == "chat":
-        model = getattr(args, "model", os.getenv("HUB_MODEL", DEFAULT_MODEL))
+        model = getattr(args, "model", None) or configured_model()
         _run_chat(model)
     elif command == "telegram":
         _run_telegram()

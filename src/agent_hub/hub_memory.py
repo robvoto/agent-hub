@@ -388,11 +388,13 @@ def _summarize_learnings(records: list[LearningRecord]) -> str:
     from langchain_core.messages import HumanMessage, SystemMessage
     from langchain_openai import ChatOpenAI
 
-    from .config import DEFAULT_MODEL
+    from .config import configured_model
     from .cost_log import extract_usage_metadata, record_llm_run
 
+    model = configured_model()
+
     bullet_list = "\n".join(f"- {r.value} (source: {r.source})" for r in records)
-    llm = ChatOpenAI(model=DEFAULT_MODEL, temperature=0)
+    llm = ChatOpenAI(model=model, temperature=0)
     usage_cb = UsageMetadataCallbackHandler()
     started = time.perf_counter()
     try:
@@ -406,8 +408,8 @@ def _summarize_learnings(records: list[LearningRecord]) -> str:
         record_llm_run(
             operation="hub_memory_compaction",
             request_kind="compaction",
-            requested_model=DEFAULT_MODEL,
-            effective_model=DEFAULT_MODEL,
+            requested_model=model,
+            effective_model=model,
             status="ok",
             duration_seconds=time.perf_counter() - started,
             usage_by_model=extract_usage_metadata(usage_cb),
@@ -418,8 +420,8 @@ def _summarize_learnings(records: list[LearningRecord]) -> str:
         record_llm_run(
             operation="hub_memory_compaction",
             request_kind="compaction",
-            requested_model=DEFAULT_MODEL,
-            effective_model=DEFAULT_MODEL,
+            requested_model=model,
+            effective_model=model,
             status="error",
             duration_seconds=time.perf_counter() - started,
             usage_by_model=extract_usage_metadata(usage_cb),
@@ -520,8 +522,10 @@ def extract_semantic_candidates(
     from langchain_core.messages import HumanMessage, SystemMessage
     from langchain_openai import ChatOpenAI
 
-    from .config import DEFAULT_MODEL
+    from .config import configured_model
     from .cost_log import extract_usage_metadata, record_llm_run
+
+    model = configured_model()
 
     operator_block = (
         "\n".join(f"- {r.identifier}: {r.value}" for r in existing_active_operator) or "(none)"
@@ -536,7 +540,7 @@ def extract_semantic_candidates(
         f"Recent conversation:\n{conversation_text}"
     )
 
-    llm = ChatOpenAI(model=DEFAULT_MODEL, temperature=0)
+    llm = ChatOpenAI(model=model, temperature=0)
     structured_llm = llm.with_structured_output(_ExtractionResponse)
     usage_cb = UsageMetadataCallbackHandler()
     started = time.perf_counter()
@@ -551,8 +555,8 @@ def extract_semantic_candidates(
         record_llm_run(
             operation="hub_memory_extraction",
             request_kind="semantic_extraction",
-            requested_model=DEFAULT_MODEL,
-            effective_model=DEFAULT_MODEL,
+            requested_model=model,
+            effective_model=model,
             status="ok",
             duration_seconds=time.perf_counter() - started,
             usage_by_model=extract_usage_metadata(usage_cb),
@@ -562,8 +566,8 @@ def extract_semantic_candidates(
         record_llm_run(
             operation="hub_memory_extraction",
             request_kind="semantic_extraction",
-            requested_model=DEFAULT_MODEL,
-            effective_model=DEFAULT_MODEL,
+            requested_model=model,
+            effective_model=model,
             status="error",
             duration_seconds=time.perf_counter() - started,
             usage_by_model=extract_usage_metadata(usage_cb),
@@ -720,8 +724,10 @@ def analyze_learning(
     from langchain_core.messages import HumanMessage, SystemMessage
     from langchain_openai import ChatOpenAI
 
-    from .config import DEFAULT_MODEL
+    from .config import configured_model
     from .cost_log import extract_usage_metadata, record_llm_run
+
+    model = configured_model()
 
     operator_block = "\n".join(f"- {r.value}" for r in existing_operator) or "(none)"
     skills_block = (
@@ -735,7 +741,7 @@ def analyze_learning(
         f"New lesson:\n{value}"
     )
 
-    llm = ChatOpenAI(model=DEFAULT_MODEL, temperature=0)
+    llm = ChatOpenAI(model=model, temperature=0)
     structured_llm = llm.with_structured_output(_LearningAnalysisModel)
     usage_cb = UsageMetadataCallbackHandler()
     started = time.perf_counter()
@@ -750,8 +756,8 @@ def analyze_learning(
         record_llm_run(
             operation="hub_memory_learning_analysis",
             request_kind="learning_analysis",
-            requested_model=DEFAULT_MODEL,
-            effective_model=DEFAULT_MODEL,
+            requested_model=model,
+            effective_model=model,
             status="ok",
             duration_seconds=time.perf_counter() - started,
             usage_by_model=extract_usage_metadata(usage_cb),
@@ -761,8 +767,8 @@ def analyze_learning(
         record_llm_run(
             operation="hub_memory_learning_analysis",
             request_kind="learning_analysis",
-            requested_model=DEFAULT_MODEL,
-            effective_model=DEFAULT_MODEL,
+            requested_model=model,
+            effective_model=model,
             status="error",
             duration_seconds=time.perf_counter() - started,
             usage_by_model=extract_usage_metadata(usage_cb),

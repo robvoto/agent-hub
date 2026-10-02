@@ -20,8 +20,10 @@ from .config import (
     KNOWLEDGE_DB,
     LLM_COST_CATALOG_FILE,
     TASK_RUN_DB,
+    ConfigurationError,
+    configured_model,
 )
-from .cost_log import load_cost_catalog
+from .cost_log import canonical_model_name, load_cost_catalog
 from .factory_bridge import build_factory_agent_spec
 from .log_config import get_human_logger
 from .registry import AgentSpec, parse_agent_spec
@@ -162,6 +164,7 @@ def run_startup_healthcheck(
     checks.extend(_check_agent_specs())
     checks.append(_check_data_dir())
     checks.extend(_check_sqlite_paths())
+    checks.append(_check_model_config())
     checks.append(_check_cost_catalog())
     return StartupHealthReport(mode=mode, checks=tuple(checks))
 
@@ -487,4 +490,29 @@ def _check_cost_catalog() -> HealthCheckResult:
         name="LLM_COST_CATALOG",
         status="PASS",
         detail=f"Loaded cost catalog from {LLM_COST_CATALOG_FILE}.",
+    )
+
+
+def _check_model_config() -> HealthCheckResult:
+    try:
+        model = configured_model()
+        if not LLM_COST_CATALOG_FILE.exists():
+            raise FileNotFoundError(f"Cost catalog file does not exist: {LLM_COST_CATALOG_FILE}")
+        catalog = load_cost_catalog(LLM_COST_CATALOG_FILE)
+        models = catalog.get("models", {})
+        canonical = canonical_model_name(model)
+        if model not in models and canonical not in models:
+            raise ValueError(
+                f"HUB_MODEL={model!r} is not listed in the LLM cost catalog; refusing to start."
+            )
+    except (ConfigurationError, FileNotFoundError, ValueError, TypeError) as exc:
+        return HealthCheckResult(
+            name="HUB_MODEL",
+            status="FAIL",
+            detail=str(exc),
+        )
+    return HealthCheckResult(
+        name="HUB_MODEL",
+        status="PASS",
+        detail=f"Runtime model configured as {model}.",
     )

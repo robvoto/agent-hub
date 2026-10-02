@@ -4,6 +4,11 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def _configure_test_model(monkeypatch):
+    monkeypatch.setenv("HUB_MODEL", "gpt-4.1-mini")
+
+
+@pytest.fixture(autouse=True)
 def _isolate_checkpointer(tmp_path, monkeypatch):
     import agent_hub.checkpointer as cp_mod
 
