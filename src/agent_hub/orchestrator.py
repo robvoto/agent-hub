@@ -1322,6 +1322,12 @@ def _format_output(spec: AgentSpec, output: dict) -> str:
     summary = str(output.get("summary", "")).strip()
 
     if status == "success":
+        result_kind = str(output.get("result_kind", "")).strip()
+        if result_kind == "technical_analysis":
+            analysis = str(output.get("brief", "")).strip()
+            if analysis:
+                return f"[{spec.name}] {analysis}".strip()
+
         instruction = str(output.get("coding_agent_instruction", "")).strip()
         if summary and instruction:
             return f"[{spec.name}] {summary}\n\n{instruction}".strip()

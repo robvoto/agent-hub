@@ -27,6 +27,7 @@ from agent_hub.orchestrator import (
     HubOrchestrator,
     _build_system_prompt,
     _dispatch_subprocess,
+    _format_output,
     _make_agent_tool,
     _repair_dangling_tool_calls,
     cancel_all_active_tasks,
@@ -48,6 +49,65 @@ from agent_hub.task_runs import (
     active_task_run,
     get_task_run_store,
 )
+
+
+def test_format_output_returns_technical_analysis_brief() -> None:
+    spec = AgentSpec(
+        id="ai-tech-lead",
+        name="AI Tech Lead",
+        purpose="technical analysis",
+        runtime={
+            "mode": "subprocess",
+            "entrypoint": "fake-agent",
+            "working_directory": "/tmp",
+            "input_arg": "--input-json",
+            "output_arg": "--output-json",
+            "default_execution_mode": "instruction_only",
+        },
+    )
+
+    result = _format_output(
+        spec,
+        {
+            "status": "success",
+            "result_kind": "technical_analysis",
+            "summary": "Technical analysis completed.",
+            "brief": "HUB015-ATL-20261004 — persisted lifecycle and Telegram progress verified.",
+            "coding_agent_instruction": "",
+        },
+    )
+
+    assert result == (
+        "[AI Tech Lead] HUB015-ATL-20261004 — persisted lifecycle and Telegram progress verified."
+    )
+
+
+def test_format_output_keeps_existing_success_instruction_behavior() -> None:
+    spec = AgentSpec(
+        id="ai-tech-lead",
+        name="AI Tech Lead",
+        purpose="technical work",
+        runtime={
+            "mode": "subprocess",
+            "entrypoint": "fake-agent",
+            "working_directory": "/tmp",
+            "input_arg": "--input-json",
+            "output_arg": "--output-json",
+            "default_execution_mode": "instruction_only",
+        },
+    )
+
+    result = _format_output(
+        spec,
+        {
+            "status": "success",
+            "result_kind": "instruction_package",
+            "summary": "Instruction package ready.",
+            "coding_agent_instruction": "Do the bounded change.",
+        },
+    )
+
+    assert result == "[AI Tech Lead] Instruction package ready.\n\nDo the bounded change."
 
 
 class _FakeGraph:
