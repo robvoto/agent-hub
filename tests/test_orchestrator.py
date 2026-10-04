@@ -45,6 +45,8 @@ from agent_hub.task_runs import (
     TASK_STATE_ROUTED,
     TASK_STATE_SUCCEEDED,
     TASK_STATE_WAITING_APPROVAL,
+    TASK_STATE_WAITING_CLARIFICATION,
+    TASK_STATE_WAITING_DECISION,
     active_task_run,
     get_task_run_store,
 )
@@ -1991,8 +1993,7 @@ def test_stop_current_task_refuses_to_guess_between_multiple_session_tasks(monke
     reply = orchestrator.stop_current_task()
 
     assert reply == (
-        "Multiple tasks are active or paused in this conversation. "
-        "Use /tasks, then /stop <id>."
+        "Multiple tasks are active or paused in this conversation. Use /tasks, then /stop <id>."
     )
 
 
@@ -2983,3 +2984,175 @@ def test_run_learning_pass_invalid_reinforce_target_fails_closed(monkeypatch):
 
     assert orchestrator.run_learning_pass(orchestrator.session_id) == []
     assert HubMemoryManager().list_learnings(types=["semantic"]) == []
+
+
+def _resume_cancel_spec(tmp_path):
+    return AgentSpec(
+        id="ai-tech-lead",
+        name="AI Tech Lead",
+        purpose="Implements code changes",
+        runtime={
+            "mode": "subprocess",
+            "entrypoint": "fake-agent",
+            "working_directory": str(tmp_path),
+            "input_arg": "--input-json",
+            "output_arg": "--output-json",
+            "default_execution_mode": "execute",
+        },
+    )
+
+
+def test_stop_current_task_terminates_resumed_clarification_subprocess(monkeypatch, tmp_path):
+    spec = _resume_cancel_spec(tmp_path)
+    started = threading.Event()
+    terminated = threading.Event()
+    result = {}
+
+    class _FakePopen:
+        def __init__(self, cmd, cwd, stdout, stderr, text, **kwargs):
+            self.returncode = None
+            started.set()
+
+        def poll(self):
+            return self.returncode
+
+        def communicate(self):
+            return ("", "terminated")
+
+        def terminate(self):
+            self.returncode = -15
+            terminated.set()
+
+        def wait(self, timeout=None):
+            self.returncode = -15
+            terminated.set()
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+            terminated.set()
+
+    monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _FakePopen)
+    monkeypatch.setattr(
+        HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused")
+    )
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
+    orchestrator = HubOrchestrator()
+    run = get_task_run_store().create_run(
+        session_id=orchestrator.session_id, user_message="Clarify"
+    )
+    get_task_run_store().transition(
+        run.id,
+        TASK_STATE_WAITING_CLARIFICATION,
+        selected_agent_id=spec.id,
+        dispatched_task="Continue after clarification",
+        context_updates={"agent_request_id": "req-resume-cancel"},
+    )
+
+    def _resume():
+        try:
+            orchestrator.provide_clarification("Use the Hub project")
+        except TaskCancelled as exc:
+            result["cancelled"] = exc.reason
+
+    worker = threading.Thread(target=_resume)
+    worker.start()
+    assert started.wait(timeout=2)
+    deadline = time.time() + 2
+    while time.time() < deadline:
+        handle = get_task_control_registry().get_handle(run.id)
+        if handle is not None and handle.process is not None:
+            break
+        time.sleep(0.01)
+
+    assert get_task_control_registry().get_handle(run.id).process is not None
+    reply = orchestrator.stop_current_task(identifier=run.id[:8])
+    worker.join(timeout=2)
+
+    assert terminated.is_set()
+    assert not worker.is_alive()
+    assert "Stopped run" in reply
+    assert result["cancelled"] == "Stopped by user"
+    assert get_task_run_store().get_run(run.id).state == TASK_STATE_CANCELLED
+    assert get_task_control_registry().get_handle(run.id) is None
+
+
+@pytest.mark.parametrize(
+    ("state", "method_name", "context_updates"),
+    [
+        (
+            TASK_STATE_WAITING_APPROVAL,
+            "approve_pending",
+            {"agent_request_id": "req-approve"},
+        ),
+        (
+            TASK_STATE_WAITING_DECISION,
+            "provide_decision",
+            {
+                "agent_request_id": "req-decision",
+                "specialist_pending_decision": {
+                    "options": [{"name": "continue", "requires_text": False}]
+                },
+            },
+        ),
+    ],
+)
+def test_resumed_dispatch_registers_run_for_cancellation(
+    monkeypatch, tmp_path, state, method_name, context_updates
+):
+    spec = _resume_cancel_spec(tmp_path)
+    monkeypatch.setattr(
+        HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused")
+    )
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
+    orchestrator = HubOrchestrator()
+    run = get_task_run_store().create_run(session_id=orchestrator.session_id, user_message="Resume")
+    kwargs = {
+        "selected_agent_id": spec.id,
+        "dispatched_task": "Resume work",
+        "context_updates": context_updates,
+    }
+    if state == TASK_STATE_WAITING_APPROVAL:
+        kwargs["approval_token"] = "approve-1"
+    get_task_run_store().transition(run.id, state, **kwargs)
+
+    def _dispatch(*args, **kwargs):
+        assert get_task_control_registry().get_handle(run.id) is not None
+        return {"status": "success", "summary": "Done."}
+
+    monkeypatch.setattr("agent_hub.orchestrator._dispatch_subprocess", _dispatch)
+    if method_name == "approve_pending":
+        reply = orchestrator.approve_pending()
+    else:
+        reply = orchestrator.provide_decision("continue")
+
+    assert "Done." in reply
+    assert get_task_control_registry().get_handle(run.id) is None
+    assert get_task_run_store().get_run(run.id).state == TASK_STATE_SUCCEEDED
+
+
+def test_cancelled_follow_up_suppresses_late_specialist_reply(monkeypatch, tmp_path):
+    spec = _resume_cancel_spec(tmp_path)
+    monkeypatch.setattr(
+        HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _FakeGraph("unused")
+    )
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
+    orchestrator = HubOrchestrator()
+    run = get_task_run_store().create_run(
+        session_id=orchestrator.session_id, user_message="Cancelled"
+    )
+    get_task_run_store().transition(
+        run.id,
+        TASK_STATE_CANCELLED,
+        selected_agent_id=spec.id,
+        cancellation_reason="Stopped by user",
+    )
+
+    with pytest.raises(TaskCancelled, match="Stopped by user"):
+        orchestrator._finalize_specialist_follow_up(
+            run.id, spec, {"status": "success", "summary": "Late success"}
+        )
+
+    updated = get_task_run_store().get_run(run.id)
+    assert updated.state == TASK_STATE_CANCELLED
+    assert updated.final_response is None

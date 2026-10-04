@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -114,6 +115,24 @@ def _truncate(text: str, limit: int = 200) -> str:
 
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+@contextmanager
+def _registered_resumed_run(run_id: str):
+    """Keep resumed specialist work cancellable through the normal run handle.
+
+    The initial Hub graph invocation registers its run before dispatch, but a
+    paused task returns from that invocation and unregisters the handle. Any
+    later clarification/decision/approval resume therefore needs a fresh
+    handle for the duration of the resumed dispatch so /stop can attach to
+    and terminate the live specialist subprocess tree.
+    """
+    registry = get_task_control_registry()
+    registry.register_run(run_id)
+    try:
+        yield
+    finally:
+        registry.unregister_run(run_id)
 
 
 def _project_key_for_session(session_id: str) -> str:
@@ -2384,7 +2403,10 @@ class HubOrchestrator:
             detail="Human approved the pending task.",
             selected_agent_id=spec.id,
         )
-        with active_task_run(pending.id, progress_callback=progress_notify):
+        with (
+            _registered_resumed_run(pending.id),
+            active_task_run(pending.id, progress_callback=progress_notify),
+        ):
             if spec.runtime["mode"] == "factory_brain":
                 output = _dispatch_factory_brain(
                     spec,
@@ -2560,7 +2582,10 @@ class HubOrchestrator:
             detail="User provided clarification for the paused task.",
             selected_agent_id=spec.id,
         )
-        with active_task_run(pending.id, progress_callback=progress_notify):
+        with (
+            _registered_resumed_run(pending.id),
+            active_task_run(pending.id, progress_callback=progress_notify),
+        ):
             if spec.runtime["mode"] == "factory_brain":
                 output = _dispatch_factory_brain(
                     spec,
@@ -2680,7 +2705,10 @@ class HubOrchestrator:
             selected_agent_id=spec.id,
         )
         decision = {"option": option, "text": text, "actor": actor}
-        with active_task_run(pending.id, progress_callback=progress_notify):
+        with (
+            _registered_resumed_run(pending.id),
+            active_task_run(pending.id, progress_callback=progress_notify),
+        ):
             output = _dispatch_subprocess(
                 spec,
                 "",
@@ -3035,6 +3063,8 @@ class HubOrchestrator:
         current = store.get_run(run_id)
         if current is None:
             raise RuntimeError(f"Task run disappeared: {run_id}")
+        if current.state == TASK_STATE_CANCELLED:
+            raise TaskCancelled(current.cancellation_reason or "Stopped by user")
         if is_active_state(current.state):
             _human_task_log(run_id, "Hub is sending %s's reply back to the operator.", spec.name)
             store.transition(
