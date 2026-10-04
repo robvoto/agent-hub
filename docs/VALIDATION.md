@@ -27,13 +27,13 @@ Stop if startup health fails or the required specialist is unavailable.
 
 ## Pause, resume and cancellation
 
-Exercise only paths supported by the selected specialist:
+Exercise only paths supported by the selected specialist. Treat the specialist protocol as authoritative: `approval_required` / `waiting_approval` uses `/approve` and `/reject`; `waiting_decision` uses the reported option number or name, even when the prompt itself says "approval". Do not infer approval semantics from wording.
 
 - clarification: reply normally and confirm the same run resumes;
-- approval: `/approve` resumes the same run;
-- rejection: `/reject <reason>` closes it safely;
-- decision: a normal reply with the option number or name resumes the same run;
-- cancellation: `/stop` marks active work cancelled;
+- approval: `/approve` resumes the same `waiting_approval` run;
+- rejection: `/reject <reason>` closes the same `waiting_approval` run safely;
+- decision: reply with the reported option number or name and confirm the same `waiting_decision` run resumes;
+- cancellation: `/stop` persists `cancelled`, terminates any live specialist child process tree, and produces no late final reply;
 - reset: `/reset` cancels active work and rotates to a fresh thread.
 
 Changing `/project` while a task is paused must not change the project context pinned to that task.
