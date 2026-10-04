@@ -41,7 +41,7 @@
     "gmail_read_attachment",
     "gmail_read_thread"
   ],
-  "connect_timeout_seconds": 20,
+  "connect_timeout_seconds": 30,
   "call_timeout_seconds": 45,
   "max_result_chars": 30000
 }

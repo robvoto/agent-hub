@@ -82,7 +82,7 @@ def load_human_mcp_config(path: Path = HUMAN_MCP_CONFIG_FILE) -> HumanMCPConfig:
         command=command,
         args=tuple(args),
         allowed_tools=frozenset(v.strip() for v in allowed if v.strip()),
-        connect_timeout_seconds=float(raw.get("connect_timeout_seconds", 20)),
+        connect_timeout_seconds=float(raw.get("connect_timeout_seconds", 30)),
         call_timeout_seconds=float(raw.get("call_timeout_seconds", 45)),
         max_result_chars=int(raw.get("max_result_chars", 30000)),
     )
