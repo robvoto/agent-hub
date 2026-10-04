@@ -29,7 +29,9 @@ Read the owner module before editing. If one module clearly owns the behavior, s
 - Do not add fallback/default behavior that changes outcomes unless explicitly approved.
 - Do not mask invalid agent output with guessed status mappings or silent recovery.
 - Preserve explicit lifecycle semantics: received, routed, dispatched, in_progress, waiting_*, succeeded, failed, cancelled.
+- Treat specialist protocol status as authoritative. `approval_required` maps to Hub approval commands; structured `pending_decision` maps to `waiting_decision` and must be resumed with one of the reported options. Never infer approval behavior from prompt text or a specialist-internal decision kind.
 - If a specialist status cannot be resumed cleanly by Hub, surface that explicitly instead of inventing a resume path.
+- Any path that resumes a live subprocess after a pause must register that run with `TaskControlRegistry` for the resumed dispatch. Cancellation is incomplete unless `/stop` terminates the process tree, persists `cancelled`, and suppresses any late result.
 - If a change lets more than one task run at once (new dispatch path, new concurrency mode), check whether it shares LangGraph `thread_id`/session state with another concurrent path — two invokes sharing one thread can interleave conversation state. This was a real bug caught mid-build, not a hypothetical.
 - Cross-repo permission/allowlist decisions (which projects a specialist may write to) are not Hub's call — they live in the specialist's own local settings and Agent Factory's registry, not Hub code.
 - `human_logger` output (`_consume_graph_stream_event` in `orchestrator.py`) must not repeat the same fact via multiple LangGraph `stream_mode`s — e.g. don't reintroduce "task started"/"task finished" lines alongside "entered node"/"produced message", they say the same thing twice per node.
@@ -51,6 +53,7 @@ A Hub runtime change is done only when:
 2. Tests are added or updated when behavior changes.
 3. No unapproved fallback, hardcoding, or specialist-internal logic was introduced.
 4. Human-readable logging exists for any new operator-visible decision.
+5. Changes to pause/resume/cancellation are live-proven against the real operator path when automated tests cannot prove subprocess termination or late-reply suppression.
 
 ## Finish format
 
