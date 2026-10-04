@@ -52,6 +52,23 @@ def test_load_human_mcp_config_round_trips_transport_and_limits(tmp_path, monkey
     assert config.max_result_chars == 1234
 
 
+def test_load_human_mcp_config_uses_30_second_connect_default(tmp_path, monkeypatch):
+    monkeypatch.delenv("HUB_HUMAN_MCP_ENABLED", raising=False)
+    path = tmp_path / "human_mcp.json"
+    path.write_text(
+        json.dumps(
+            {
+                "enabled": True,
+                "transport": {"command": "powershell.exe", "args": []},
+                "allowed_tools": ["browser_snapshot"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert load_human_mcp_config(path).connect_timeout_seconds == 30
+
+
 def test_human_mcp_enabled_env_overrides_repo_default(tmp_path, monkeypatch):
     path = tmp_path / "human_mcp.json"
     path.write_text(
