@@ -10,6 +10,7 @@ Diagrams are generated views of current runtime behaviour. Code and tests remain
 | [`05D-HUB-EXPLICIT-LEARNING.md`](05D-HUB-EXPLICIT-LEARNING.md) | Explicit `/learn` storage, analysis and governed action |
 | [`07-HUB-LANGGRAPH-TOOLS.md`](07-HUB-LANGGRAPH-TOOLS.md) | Current specialist/tool graph |
 | [`07B-HUB-LANGGRAPH-NODE-FLOW.md`](07B-HUB-LANGGRAPH-NODE-FLOW.md) | LangGraph node-level execution |
+| [`08-HUB-COMPILED-LANGGRAPH.svg`](08-HUB-COMPILED-LANGGRAPH.svg) | Generated directly from the compiled Hub specialist LangGraph (`agent` / `tools`) |
 
 Each diagram has matching `.mmd` source and `.svg` output. Regenerate after runtime-flow changes:
 

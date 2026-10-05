@@ -14,3 +14,6 @@ build/
 htmlcov/
 data/
 node_modules/
+
+# LangGraph Studio local development state
+.langgraph_api/

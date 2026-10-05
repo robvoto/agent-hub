@@ -70,7 +70,23 @@ Run the real transport checklist after changes that affect commands, sessions, m
 docs/VALIDATION.md
 ```
 
-## Diagrams
+## LangGraph Studio and diagrams
+
+Open the real Hub specialist graph in LangGraph Studio:
+
+```bash
+uv run --with 'langgraph-cli[inmem]' langgraph dev --host 127.0.0.1 --port 2024
+```
+
+Studio uses `langgraph.json` and `src/agent_hub/studio_graph.py`. The Studio adapter keeps the real Hub specialist tools and ReAct `agent`/`tools` topology, while leaving persistence to Studio and excluding Hub-only support tools that start external gateways.
+
+Export the compiled graph itself to Mermaid and SVG:
+
+```bash
+uv run python scripts/export_compiled_hub_graph.py
+```
+
+The generated `08-HUB-COMPILED-LANGGRAPH.mmd` and `.svg` show the actual compiled node topology. The existing richer callable-tool diagrams remain available with:
 
 ```bash
 python3 scripts/generate_hub_langgraph_diagram.py

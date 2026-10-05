@@ -1,0 +1,8 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "agent-hub": "./src/agent_hub/studio_graph.py:graph"
+  },
+  "env": "./.env",
+  "python_version": "3.13"
+}
