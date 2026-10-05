@@ -81,6 +81,7 @@ from .run_status import format_current_run_status, format_last_run_status
 from .session_state import load_or_create_session_id, persist_session_id
 from .shared_docs import make_shared_docs_tool
 from .specialist_fanout import FanoutError, run_specialist_fanout
+from .specialist_result import SpecialistResultContractError, validate_specialist_result
 from .task_control import TaskCancelled, get_task_control_registry, subprocess_popen_kwargs
 from .task_envelope import build_task_envelope
 from .task_runs import (
@@ -850,6 +851,7 @@ def _dispatch_subprocess(
     project_context_override: ProjectContext | None = None,
     backlog_reference_override: dict[str, str] | None | object = _UNSET_RESOURCE_OVERRIDE,
     task_kind: str | None = None,
+    result_registry: list[AgentSpec] | None = None,
 ) -> dict:
     """Invoke a subprocess specialist and return its structured JSON output.
 
@@ -1172,6 +1174,26 @@ def _dispatch_subprocess(
             )
 
         output = json.loads(output_file.read_text(encoding="utf-8"))
+        try:
+            validate_specialist_result(
+                output,
+                result_registry if result_registry is not None else [spec],
+            )
+        except SpecialistResultContractError as exc:
+            summary = f"Specialist '{spec.name}' returned an invalid result contract: {exc}"
+            logger.warning("Task %s: %s", task_run_id or request_id, summary)
+            _human_task_log(
+                task_run_id,
+                "%s returned an invalid result contract; failing closed: %s",
+                spec.name,
+                exc,
+            )
+            output = {
+                "status": "failed",
+                "summary": summary,
+                "result_kind": "contract_failure",
+                "caller_action": "inspect_failure",
+            }
         if (
             output.get("status")
             not in (
@@ -1489,10 +1511,16 @@ def _update_manifest_cache(spec: AgentSpec, output: dict) -> None:
         get_manifest_cache().update_reference(spec.id, reference)
 
 
-def _make_agent_tool(spec: AgentSpec, *, task_kind: str | None = None) -> Any:
+def _make_agent_tool(
+    spec: AgentSpec,
+    *,
+    task_kind: str | None = None,
+    result_registry: list[AgentSpec] | None = None,
+) -> Any:
     """Create a LangChain tool that dispatches to the registered agent."""
     mode = spec.runtime["mode"]
     description = get_manifest_cache().description_for(spec)
+    registry_for_results = result_registry if result_registry is not None else [spec]
 
     def _dispatch_task_with_operator_source(task: str, task_run_id: str | None) -> str:
         """Preserve the exact operator request alongside Hub's bounded reformulation.
@@ -1549,6 +1577,7 @@ def _make_agent_tool(spec: AgentSpec, *, task_kind: str | None = None) -> Any:
                         else None
                     ),
                     task_kind=task_kind,
+                    result_registry=registry_for_results,
                 ),
             )
         if mode == "factory_brain":
@@ -1607,6 +1636,7 @@ def _make_parallel_specialist_fanout_tool(
                     spec,
                     task,
                     task_kind=task_kind,
+                    result_registry=registry,
                     project_root_override=project.root,
                     project_context_override=project,
                 )
@@ -1778,7 +1808,15 @@ class HubOrchestrator:
         checkpointer = get_checkpointer()
         active_registry = self._registry if registry is None else registry
 
-        agent_tools = [_make_agent_tool(s, task_kind=task_kind) for s in active_registry]
+        registry_for_results = self._registry if registry is not None else active_registry
+        agent_tools = [
+            _make_agent_tool(
+                s,
+                task_kind=task_kind,
+                result_registry=registry_for_results,
+            )
+            for s in active_registry
+        ]
         support_tools = (
             _build_support_tools(store, self._registry, session_id=self._session_id)
             if include_memory_tools
@@ -2428,6 +2466,7 @@ class HubOrchestrator:
                         "agent_dispatch_backlog_reference"
                     ),
                     task_kind=pending.context.get("agent_dispatch_task_kind"),
+                    result_registry=self._registry,
                 )
         return self._finalize_specialist_follow_up(pending.id, spec, output)
 
@@ -2606,6 +2645,7 @@ class HubOrchestrator:
                         "agent_dispatch_backlog_reference"
                     ),
                     task_kind=pending.context.get("agent_dispatch_task_kind"),
+                    result_registry=self._registry,
                 )
             else:
                 resumed_task = (
@@ -2623,6 +2663,7 @@ class HubOrchestrator:
                         "agent_dispatch_backlog_reference"
                     ),
                     task_kind=pending.context.get("agent_dispatch_task_kind"),
+                    result_registry=self._registry,
                 )
         return self._finalize_specialist_follow_up(pending.id, spec, output)
 
@@ -2719,6 +2760,7 @@ class HubOrchestrator:
                 references=pending.context.get("agent_dispatch_references"),
                 backlog_reference_override=pending.context.get("agent_dispatch_backlog_reference"),
                 task_kind=pending.context.get("agent_dispatch_task_kind"),
+                result_registry=self._registry,
             )
         return self._finalize_specialist_follow_up(pending.id, spec, output)
 

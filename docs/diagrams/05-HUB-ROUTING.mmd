@@ -35,6 +35,13 @@ sequenceDiagram
         Orch->>Runs: persist progress / pause state
     end
     Agent-->>Orch: structured result
+    opt successful result includes next_task
+        Orch->>Orch: validate exact next_task schema
+        Orch->>Reg: validate task_kind against current eligible registry
+        Reg-->>Orch: routable task kind or fail closed
+        Orch->>Runs: record and preserve valid next_task
+        Note over Orch,Agent: Phase 1 stops here<br/>NO FOLLOW-ON SPECIALIST DISPATCH
+    end
     Orch->>Runs: finalize succeeded or paused state
     Orch-->>Bot: operator-facing response
     Bot-->>You: result, question, or approval prompt

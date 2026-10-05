@@ -122,6 +122,14 @@ task remains authoritative for scope, and the source block cannot expand permiss
 the specialist contract. This prevents literal handoff contracts or evidence from being lost during
 LLM task reformulation.
 
+A successful specialist result may optionally include the generic `next_task` contract. Hub accepts
+only `task_kind` and `task` as required non-empty strings plus an optional list of string
+`references`; extra fields such as `agent_id`, lifecycle fields, `project_root`, `context` and
+`metadata` are rejected. Hub validates the task kind against the current eligible specialist
+registry and preserves a valid result. In Phase 1, Hub then stops: it does not create a child run,
+dispatch another specialist, parse Factory prose, or add a human checkpoint. A `next_task` on any
+non-success result, or a task kind that is not currently routable, fails closed.
+
 ## Project context
 
 `/project <path>` resolves a canonical project context containing the root, stable project identity, contract version and fingerprint. A request may explicitly name one already-known project alias; otherwise a valid current `/project` selection is used. Unknown or ambiguous project references stop safely. Fresh dispatches revalidate the resolved context. Paused runs replay the project context pinned at original dispatch, even if the operator changes `/project` before resuming.
