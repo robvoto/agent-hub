@@ -2,9 +2,9 @@
 
 This diagram explains the frozen Factory -> Hub -> human -> implementation plan. It is a **planned workflow**, not a claim that all of these steps are LangGraph nodes today.
 
-![Cross-specialist execution plan](09-CROSS-SPECIALIST-EXECUTION-PLAN.svg)
+![Cross-specialist execution plan](08-CROSS-SPECIALIST-EXECUTION-PLAN.svg)
 
-Source: [`09-CROSS-SPECIALIST-EXECUTION-PLAN.mmd`](09-CROSS-SPECIALIST-EXECUTION-PLAN.mmd) · Rendered: [`09-CROSS-SPECIALIST-EXECUTION-PLAN.svg`](09-CROSS-SPECIALIST-EXECUTION-PLAN.svg)
+Source: [`08-CROSS-SPECIALIST-EXECUTION-PLAN.mmd`](08-CROSS-SPECIALIST-EXECUTION-PLAN.mmd) · Rendered: [`08-CROSS-SPECIALIST-EXECUTION-PLAN.svg`](08-CROSS-SPECIALIST-EXECUTION-PLAN.svg)
 
 Learning boundary:
 

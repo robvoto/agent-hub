@@ -25,22 +25,24 @@ def test_build_mermaid_lists_real_langgraph_tools_and_not_learn_commands():
             id="ai-tech-lead",
             name="AI Tech Lead",
             purpose="Implement bounded coding tasks.",
-            runtime={},
+            runtime={"mode": "subprocess"},
         )
     ]
 
     mermaid = module.build_mermaid(registry)
 
     assert (
-        'tool_search_shared_docs["Callable tool: search_shared_docs'
-        '<br/>shared hub/factory context"]'
+        'tool_search_shared_docs["LangChain tool: search_shared_docs'
+        '<br/>shared documentation search"]'
     ) in mermaid
     assert "Hub --> tool_search_shared_docs" in mermaid
     assert (
-        'agent_ai_tech_lead["Callable tool: ai-tech-lead<br/>AI Tech Lead specialist"]' in mermaid
+        'agent_ai_tech_lead["LangChain tool: ai-tech-lead<br/>Agent: AI Tech Lead'
+        '<br/>runtime: subprocess"]' in mermaid
     )
+    assert "LangChain tool: parallel_specialist_fanout" in mermaid
     assert "memory_hub_learnings" not in mermaid
-    assert "This is a callable-tool map, not a LangGraph node map." in mermaid
+    assert "This is a callable-tool inventory, not a process-flow diagram." in mermaid
 
 
 def test_build_mermaid_keeps_no_agents_placeholder():

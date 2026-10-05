@@ -86,7 +86,7 @@ Export the compiled graph itself to Mermaid and SVG:
 uv run python scripts/export_compiled_hub_graph.py
 ```
 
-The generated `08-HUB-COMPILED-LANGGRAPH.mmd` and `.svg` show the actual compiled node topology. The existing richer callable-tool diagrams remain available with:
+The generated `07-HUB-COMPILED-LANGGRAPH.mmd` and `.svg` show the actual compiled node topology. The existing richer callable-tool diagrams remain available with:
 
 ```bash
 python3 scripts/generate_hub_langgraph_diagram.py

@@ -1,0 +1,33 @@
+sequenceDiagram
+    actor You
+    participant Entry as Telegram / CLI
+    participant Hub as Agent Hub
+    participant Reg as Specialist contracts
+    participant Runs as Task run store
+    participant Graph as Hub LangGraph
+    participant Specialist as Eligible specialist
+
+    You->>Entry: initial task
+    Entry->>Hub: forward message
+    Hub->>Reg: read advertised task kinds
+    Reg-->>Hub: enabled specialist contracts
+    Hub->>Hub: LLM classifies route + task_kind
+    Hub->>Hub: deterministically validate and filter eligibility
+    Hub->>Runs: create / route task run
+    Hub->>Graph: expose only eligible specialist tool(s)
+    Graph->>Specialist: invoke bounded task
+
+    Specialist-->>Hub: status: needs_clarification
+    Hub->>Runs: transition waiting_clarification
+    Hub-->>Entry: relay specialist question
+    Entry-->>You: clarification needed
+
+    You->>Entry: clarification reply
+    Entry->>Hub: resume paused run
+    Hub->>Runs: transition routed
+    Hub->>Specialist: resume with clarification
+
+    Specialist-->>Hub: structured result
+    Hub->>Runs: finalize succeeded / paused / failed
+    Hub-->>Entry: operator-facing response
+    Entry-->>You: result

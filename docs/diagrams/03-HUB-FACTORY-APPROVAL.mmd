@@ -1,0 +1,36 @@
+sequenceDiagram
+    actor You
+    participant Entry as Telegram / CLI
+    participant Hub as Agent Hub
+    participant Reg as Specialist contracts
+    participant Runs as Task run store
+    participant FactoryTool as LangChain tool: agent-factory
+    participant Factory as Factory Brain
+
+    You->>Entry: agent design / package lifecycle request
+    Entry->>Hub: forward message
+    Hub->>Reg: read advertised task kinds
+    Reg-->>Hub: agent_package_lifecycle is advertised by agent-factory
+    Hub->>Hub: LLM classifies task_kind = agent_package_lifecycle
+    Hub->>Hub: deterministic eligibility leaves agent-factory
+    Hub->>Runs: transition routed -> dispatched -> in_progress
+    Hub->>FactoryTool: invoke eligible specialist tool
+    FactoryTool->>Factory: invoke design request on resumable Factory thread
+
+    Factory-->>FactoryTool: interrupted + approval_token
+    FactoryTool-->>Hub: approval_required result
+    Hub->>Runs: transition waiting_approval
+    Hub-->>Entry: approval-required response
+    Entry-->>You: design summary + approval request
+
+    You->>Entry: approve / reject
+    Entry->>Hub: resume paused run with decision
+    Hub->>Runs: transition routed
+    Hub->>FactoryTool: resume saved Factory thread
+    FactoryTool->>Factory: resume decision
+
+    Factory-->>FactoryTool: structured result
+    FactoryTool-->>Hub: specialist result
+    Hub->>Runs: finalize succeeded / paused / failed
+    Hub-->>Entry: operator-facing response
+    Entry-->>You: result

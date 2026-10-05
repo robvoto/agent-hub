@@ -11,8 +11,8 @@ from agent_hub.studio_graph import graph
 
 ROOT = Path(__file__).resolve().parents[1]
 DIAGRAM_DIR = ROOT / "docs" / "diagrams"
-MMD_PATH = DIAGRAM_DIR / "08-HUB-COMPILED-LANGGRAPH.mmd"
-SVG_PATH = DIAGRAM_DIR / "08-HUB-COMPILED-LANGGRAPH.svg"
+MMD_PATH = DIAGRAM_DIR / "07-HUB-COMPILED-LANGGRAPH.mmd"
+SVG_PATH = DIAGRAM_DIR / "07-HUB-COMPILED-LANGGRAPH.svg"
 
 
 def main() -> None:

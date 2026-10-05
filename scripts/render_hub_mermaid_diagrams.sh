@@ -154,13 +154,13 @@ installDomShims(
 );
 mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' });
 
-// 07-HUB-LANGGRAPH-TOOLS and 07B-HUB-LANGGRAPH-NODE-FLOW are flowchart
+// 05-HUB-LANGGRAPH-TOOLS and 06-HUB-LANGGRAPH-NODE-FLOW are flowchart
 // diagrams rendered with the real @mermaid-js/mermaid-cli (puppeteer).
 // This JSDOM shim can't lay out flowcharts correctly, so it must not touch
 // those files.
 const excluded = new Set([
-  '07-HUB-LANGGRAPH-TOOLS.mmd',
-  '07B-HUB-LANGGRAPH-NODE-FLOW.mmd',
+  '05-HUB-LANGGRAPH-TOOLS.mmd',
+  '06-HUB-LANGGRAPH-NODE-FLOW.mmd',
 ]);
 const mmdFiles = [...fs.readdirSync(targetDir).filter((name) => name.endsWith('.mmd') && !excluded.has(name))].sort();
 for (const filename of mmdFiles) {

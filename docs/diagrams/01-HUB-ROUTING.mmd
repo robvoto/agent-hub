@@ -1,0 +1,44 @@
+sequenceDiagram
+    actor You
+    participant Entry as Telegram / CLI
+    participant Hub as Agent Hub
+    participant Reg as Specialist contracts
+    participant Ctx as Project context
+    participant Runs as Task run store
+    participant Graph as Hub LangGraph
+    participant Specialist as Eligible specialist tool
+
+    You->>Entry: operator request
+    Entry->>Hub: forward message
+
+    Hub->>Reg: read current advertised task kinds
+    Reg-->>Hub: enabled specialist contracts
+    Hub->>Hub: LLM classifies route + task_kind
+    Hub->>Hub: validate task_kind is advertised
+    Hub->>Reg: deterministically filter by task_kind
+    Reg-->>Hub: eligible specialist set
+
+    Hub->>Ctx: resolve target project safely
+    Ctx-->>Hub: canonical project context or safe error
+    Hub->>Runs: reject conflicting active work or create task run
+
+    alt specialist route
+        Hub->>Graph: build graph with eligible specialist tools only
+        Graph->>Specialist: invoke selected eligible tool
+        Specialist-->>Graph: progress / pause / structured result
+        Graph-->>Hub: specialist result
+        opt success includes next_task
+            Hub->>Hub: validate next_task deterministically
+            Hub->>Reg: confirm next task_kind is currently routable
+            Reg-->>Hub: routable or fail closed
+            Hub->>Runs: preserve validated next_task
+            Note over Hub,Runs: Phase 1 stops here — no follow-on dispatch
+        end
+    else direct / clarify route
+        Hub->>Graph: build graph without specialist tools
+        Graph-->>Hub: direct reply or clarification
+    end
+
+    Hub->>Runs: persist final or paused state
+    Hub-->>Entry: operator-facing response
+    Entry-->>You: result / question / approval prompt

@@ -6,10 +6,10 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 cd "$PROJECT_ROOT"
 
-echo "Rendering 07-HUB-LANGGRAPH-TOOLS.*"
+echo "Rendering 05-HUB-LANGGRAPH-TOOLS.*"
 uv run python scripts/generate_hub_langgraph_diagram.py
 
-echo "Rendering 07B-HUB-LANGGRAPH-NODE-FLOW.svg"
+echo "Rendering 06-HUB-LANGGRAPH-NODE-FLOW.svg"
 npx --yes @mermaid-js/mermaid-cli \
-  -i docs/diagrams/07B-HUB-LANGGRAPH-NODE-FLOW.mmd \
-  -o docs/diagrams/07B-HUB-LANGGRAPH-NODE-FLOW.svg
+  -i docs/diagrams/06-HUB-LANGGRAPH-NODE-FLOW.mmd \
+  -o docs/diagrams/06-HUB-LANGGRAPH-NODE-FLOW.svg

@@ -1,0 +1,48 @@
+flowchart TD
+    UserStart(["You: request a new or changed agent"])
+    HubStart["Agent Hub receives the request"]
+    Factory["Agent Factory<br/>designs and governs the agent"]
+    FactoryNeedsInput{"Does Factory need your input?"}
+    FactoryQuestion["Factory asks a clarification question"]
+    UserClarifies(["You: answer / clarify"])
+    FactoryResult["Factory completes its responsibility<br/>status: success + next_task"]
+    Validate["Hub validates next_task deterministically<br/>task_kind + task + references"]
+    Phase1(["PHASE 1 COMPLETE<br/>validated next_task; no follow-on dispatch"])
+    HumanGate{"PHASE 2 HUMAN CHECKPOINT<br/>approve / change / reject"}
+    ChangeRequest(["You: request changes"])
+    Resolve["Hub resolves task_kind against<br/>enabled specialist contracts"]
+    One{"Exactly one eligible specialist?"}
+    ClarifySelection["Hub pauses and asks for clarification<br/>rather than guessing"]
+    UserClarifiesRouting(["You: clarify the requirement"])
+    ATL["AI Tech Lead<br/>implements and tests"]
+    Result["ATL result returns to Hub"]
+    Complete(["Hub continues or completes the workflow"])
+
+    UserStart --> HubStart --> Factory --> FactoryNeedsInput
+    FactoryNeedsInput -->|"yes"| FactoryQuestion --> UserClarifies --> Factory
+    FactoryNeedsInput -->|"no"| FactoryResult --> Validate --> Phase1
+
+    Phase1 -.->|"Phase 2 begins"| HumanGate
+    HumanGate -->|"approve"| Resolve --> One
+    HumanGate -->|"change"| ChangeRequest --> Factory
+    HumanGate -->|"reject"| Complete
+
+    One -->|"yes"| ATL --> Result --> Complete
+    One -->|"no / ambiguous"| ClarifySelection --> UserClarifiesRouting --> Resolve
+
+    rule["Architecture rule:<br/>Factory requests WHAT work is needed (task_kind).<br/>Hub decides WHO executes it.<br/>Factory never calls ATL directly."]
+    Validate -.-> rule
+
+    classDef hub fill:#eef6ff,stroke:#2b6cb0,stroke-width:2px,color:#0f172a;
+    classDef specialist fill:#f7f0ff,stroke:#6b46c1,stroke-width:2px,color:#1f2937;
+    classDef deterministic fill:#eefbf3,stroke:#2f855a,stroke-width:2px,color:#1f2937;
+    classDef human fill:#fff8e8,stroke:#b7791f,stroke-width:2px,color:#1f2937;
+    classDef terminal fill:#f7fafc,stroke:#4a5568,stroke-width:2px,color:#1f2937;
+    classDef note fill:#fff8dc,stroke:#d69e2e,color:#1f2937;
+
+    class HubStart,Result hub;
+    class Factory,ATL specialist;
+    class FactoryResult,Validate,Resolve,One deterministic;
+    class FactoryNeedsInput,FactoryQuestion,HumanGate,ClarifySelection human;
+    class UserStart,UserClarifies,ChangeRequest,UserClarifiesRouting,Phase1,Complete terminal;
+    class rule note;

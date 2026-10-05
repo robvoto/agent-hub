@@ -2,9 +2,9 @@
 
 Current operator-to-specialist routing overview.
 
-![Hub routing](05-HUB-ROUTING.svg)
+![Hub routing](01-HUB-ROUTING.svg)
 
-Source: [`05-HUB-ROUTING.mmd`](05-HUB-ROUTING.mmd) · Rendered: [`05-HUB-ROUTING.svg`](05-HUB-ROUTING.svg)
+Source: [`01-HUB-ROUTING.mmd`](01-HUB-ROUTING.mmd) · Rendered: [`01-HUB-ROUTING.svg`](01-HUB-ROUTING.svg)
 
 On a successful specialist result, `next_task` is optional. If present, Hub validates the exact
 `task_kind`/`task`/`references` contract and checks `task_kind` against the current eligible

@@ -20,14 +20,18 @@ sys.path.insert(0, str(SRC))
 
 
 DIAGRAM_DIR = ROOT / "docs" / "diagrams"
-DIAGRAM_BASE = DIAGRAM_DIR / "07-HUB-LANGGRAPH-TOOLS"
+DIAGRAM_BASE = DIAGRAM_DIR / "05-HUB-LANGGRAPH-TOOLS"
 MMD_PATH = DIAGRAM_BASE.with_suffix(".mmd")
 SVG_PATH = DIAGRAM_BASE.with_suffix(".svg")
 
 LANGGRAPH_TOOL_NODES = [
     (
         "search_shared_docs",
-        "Callable tool: search_shared_docs<br/>shared hub/factory context",
+        "LangChain tool: search_shared_docs<br/>shared documentation search",
+    ),
+    (
+        "parallel_specialist_fanout",
+        "LangChain tool: parallel_specialist_fanout<br/>bounded multi-project specialist fan-out",
     ),
 ]
 
@@ -40,13 +44,63 @@ def render_agent_nodes(registry: Iterable[object]) -> str:
     lines = []
     for spec in registry:
         node_id = sanitize_id("agent", spec.id)
-        label = f"Callable tool: {spec.id}<br/>{spec.name} specialist"
+        runtime_mode = (spec.runtime or {}).get("mode", "unknown")
+        label = (
+            f"LangChain tool: {spec.id}<br/>"
+            f"Agent: {spec.name}<br/>"
+            f"runtime: {runtime_mode}"
+        )
         lines.append(f'    {node_id}["{label}"]')
     return "\n".join(lines)
 
 
 def get_langgraph_tool_nodes() -> list[tuple[str, str]]:
-    return LANGGRAPH_TOOL_NODES
+    nodes = list(LANGGRAPH_TOOL_NODES)
+    try:
+        from agent_hub.human_mcp_gateway import load_human_mcp_config
+
+        config = load_human_mcp_config()
+        if config.enabled:
+            groups = {
+                "human_mcp_browser_navigation": [],
+                "human_mcp_browser_actions": [],
+                "human_mcp_docs": [],
+                "human_mcp_gmail": [],
+                "human_mcp_sheets": [],
+            }
+            action_names = {
+                "browser_click",
+                "browser_fill",
+                "browser_press_key",
+                "browser_upload_file",
+            }
+            for name in sorted(config.allowed_tools):
+                if name in action_names:
+                    groups["human_mcp_browser_actions"].append(name)
+                elif name.startswith("browser_"):
+                    groups["human_mcp_browser_navigation"].append(name)
+                elif name.startswith("docs_"):
+                    groups["human_mcp_docs"].append(name)
+                elif name.startswith("gmail_"):
+                    groups["human_mcp_gmail"].append(name)
+                elif name.startswith("sheets_"):
+                    groups["human_mcp_sheets"].append(name)
+
+            labels = {
+                "human_mcp_browser_navigation": "Human MCP — browser navigation/state",
+                "human_mcp_browser_actions": "Human MCP — browser actions",
+                "human_mcp_docs": "Human MCP — Google Docs",
+                "human_mcp_gmail": "Human MCP — Gmail",
+                "human_mcp_sheets": "Human MCP — Google Sheets",
+            }
+            for group_id, names in groups.items():
+                if names:
+                    exact_names = "<br/>".join(names)
+                    nodes.append((group_id, f"{labels[group_id]}<br/>{exact_names}"))
+    except Exception:
+        # Diagram generation must not start or depend on the external gateway.
+        pass
+    return nodes
 
 
 def build_mermaid(registry: Iterable[object]) -> str:
@@ -66,7 +120,8 @@ def build_mermaid(registry: Iterable[object]) -> str:
         )
 
     commands_note = (
-        "This is a callable-tool map, not a LangGraph node map.<br/>"
+        "This is a callable-tool inventory, not a process-flow diagram.<br/>"
+        "Human MCP names are grouped only for readability; names shown are exact.<br/>"
         "/learn, /memory, and /forget stay outside the tool list."
     )
 

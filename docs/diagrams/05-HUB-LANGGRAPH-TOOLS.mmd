@@ -1,0 +1,32 @@
+flowchart TD
+    You([You])
+    Hub["Hub Orchestrator<br/>(LangGraph react agent)"]
+
+    subgraph Tools["Tools callable from LangGraph"]
+    tool_search_shared_docs["LangChain tool: search_shared_docs<br/>shared documentation search"]
+    tool_parallel_specialist_fanout["LangChain tool: parallel_specialist_fanout<br/>bounded multi-project specialist fan-out"]
+    tool_human_mcp_browser_navigation["Human MCP — browser navigation/state<br/>browser_close_tab<br/>browser_go_back<br/>browser_go_forward<br/>browser_list_pages<br/>browser_navigate<br/>browser_open_session<br/>browser_open_tab<br/>browser_reload<br/>browser_select_page<br/>browser_snapshot<br/>browser_status<br/>browser_wait_for"]
+    tool_human_mcp_browser_actions["Human MCP — browser actions<br/>browser_click<br/>browser_fill<br/>browser_press_key<br/>browser_upload_file"]
+    tool_human_mcp_docs["Human MCP — Google Docs<br/>docs_append_text<br/>docs_create<br/>docs_get_hyperlinks<br/>docs_read_text<br/>docs_replace_text<br/>docs_set_hyperlink"]
+    tool_human_mcp_gmail["Human MCP — Gmail<br/>gmail_auth_status<br/>gmail_read_attachment<br/>gmail_read_message<br/>gmail_read_thread<br/>gmail_search"]
+    tool_human_mcp_sheets["Human MCP — Google Sheets<br/>sheets_append_row<br/>sheets_list_tabs<br/>sheets_read_rows<br/>sheets_update_cell"]
+    agent_ai_tech_lead["LangChain tool: ai-tech-lead<br/>Agent: AI Tech Lead<br/>runtime: subprocess"]
+    agent_agent_factory["LangChain tool: agent-factory<br/>Agent: Agent Factory<br/>runtime: factory_brain"]
+    end
+
+    You --> Hub
+    Hub --> tool_search_shared_docs
+    Hub --> tool_parallel_specialist_fanout
+    Hub --> tool_human_mcp_browser_navigation
+    Hub --> tool_human_mcp_browser_actions
+    Hub --> tool_human_mcp_docs
+    Hub --> tool_human_mcp_gmail
+    Hub --> tool_human_mcp_sheets
+    Hub --> agent_ai_tech_lead
+    Hub --> agent_agent_factory
+
+    classDef note fill:#fff8dc,stroke:#e6a817;
+    note["Generated from current registry and HubOrchestrator LangGraph tool wiring"]:::note
+    commands_note["This is a callable-tool inventory, not a process-flow diagram.<br/>Human MCP names are grouped only for readability; names shown are exact.<br/>/learn, /memory, and /forget stay outside the tool list."]:::note
+    Hub --> note
+    Hub -.-> commands_note
