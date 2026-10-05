@@ -9,22 +9,24 @@ flowchart TD
     Decision{"Human decision"}
     Approve{"APPROVE"}
     Choose["Choose one exact eligible<br/>specialist id when multiple exist"]
-    Dispatch["Dispatch exactly once<br/>normal universal task envelope<br/>frozen task, project, references, specialist"]
-    Request([REQUEST CHANGES<br/>dispatch nothing<br/>persist correction for originating workflow])
+    Parent["Originating Factory/design parent run<br/>WAITING_DECISION"]
+    Child["New Hub-owned implementation child run<br/>handoff_parent_run_id · depth = 1"]
+    Dispatch["Dispatch child exactly once<br/>normal universal task envelope<br/>frozen task, project, references, specialist"]
+    Request([REQUEST CHANGES<br/>parent remains paused<br/>persist correction for originating workflow])
     Reject([REJECT<br/>dispatch nothing<br/>cancel continuation + reason])
     SpecialistDecision["Specialist-owned pending_decision<br/>continues existing same-specialist path"]
     Result([Implementation result<br/>Hub continues or completes])
     Fail([Fail closed<br/>no approval checkpoint<br/>missing/mismatched evidence or review failure])
 
-    Source --> Proposed --> Deterministic --> Evidence --> Reviewer --> Packet --> Waiting --> Decision
+    Source --> Proposed --> Deterministic --> Evidence --> Reviewer --> Packet --> Parent --> Waiting --> Decision
     Deterministic -->|failure| Fail
     Evidence -->|missing or mismatch| Fail
     Reviewer -->|timeout or invalid output| Fail
     Decision --> Approve
     Decision -->|REQUEST CHANGES| Request
     Decision -->|REJECT| Reject
-    Approve -->|one eligible| Dispatch
-    Approve -->|multiple eligible| Choose --> Dispatch
+    Approve -->|one eligible| Child --> Dispatch
+    Approve -->|multiple eligible| Choose --> Child
     Dispatch --> Result
     Dispatch -.-> SpecialistDecision
 

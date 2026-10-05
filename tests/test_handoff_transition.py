@@ -5,10 +5,11 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
+from langchain_core.messages import AIMessage
 
 import agent_hub.orchestrator as orchestrator_module
 from agent_hub.handoff_transition import HandoffFidelityReviewer
-from agent_hub.orchestrator import HubOrchestrator
+from agent_hub.orchestrator import HubOrchestrator, RoutingDecision
 from agent_hub.project_context import ProjectContext, ProjectContextResolution
 from agent_hub.registry import AgentSpec
 from agent_hub.task_runs import (
@@ -53,13 +54,18 @@ EVIDENCE = {
 }
 
 
-def _spec(agent_id: str = "shopping-implementer") -> AgentSpec:
+def _spec(
+    agent_id: str = "shopping-implementer",
+    *,
+    task_kinds: tuple[str, ...] = ("coding_task",),
+    runtime_mode: str = "subprocess",
+) -> AgentSpec:
     return AgentSpec(
         id=agent_id,
         name=agent_id.replace("-", " ").title(),
         purpose="Implements approved coding tasks.",
-        runtime={"mode": "subprocess"},
-        task_contract={"task_kinds": ["coding_task"]},
+        runtime={"mode": runtime_mode},
+        task_contract={"task_kinds": list(task_kinds)},
     )
 
 
@@ -101,16 +107,20 @@ class _FixtureEvidenceResolver:
 
 
 class _FakeProjectRegistry:
-    def __init__(self, resolution=None):
+    def __init__(self, resolution=None, live_context=None):
         self.resolution = resolution
+        self.live_context = live_context
         self.calls = []
 
     def revalidate_context(self, context):
         self.calls.append(context)
         return self.resolution or ProjectContextResolution(context=context, error=None)
 
+    def resolve_for_request(self, _session_id, _message):
+        return self.resolution or ProjectContextResolution(context=PROJECT, error=None)
+
     def get(self, _session_id):
-        return None
+        return self.live_context
 
 
 def _orchestrator(
@@ -119,12 +129,15 @@ def _orchestrator(
     specs=None,
     resolver=None,
     project_registry=None,
+    routing_classifier=None,
+    graph=None,
 ) -> HubOrchestrator:
     specs = specs or [_spec()]
+    graph = graph or _UnusedGraph()
     monkeypatch.setattr(
         HubOrchestrator,
         "_build_graph",
-        lambda self, *args, **kwargs: _UnusedGraph(),
+        lambda self, *args, **kwargs: graph,
     )
     monkeypatch.setattr(orchestrator_module, "_load_specialists", lambda: specs)
     monkeypatch.setattr(
@@ -134,6 +147,7 @@ def _orchestrator(
     )
     return HubOrchestrator(
         model="test",
+        routing_classifier=routing_classifier,
         handoff_reviewer=reviewer,
         handoff_evidence_resolver=resolver or _FixtureEvidenceResolver(),
     )
@@ -153,6 +167,87 @@ def _paused_origin(orchestrator: HubOrchestrator, *, depth: int = 0):
         },
     )
     return store.get_run(run.id)
+
+
+class _NaturalLanguageFactoryGraph:
+    """Deterministic Phase 2 fixture for the operator-level transition proof."""
+
+    def invoke(self, _payload, *, config):
+        run_id = orchestrator_module.get_current_task_run_id()
+        assert run_id is not None
+        store = get_task_run_store()
+        store.transition(run_id, TASK_STATE_ROUTED, selected_agent_id="factory-brain")
+        store.transition(run_id, TASK_STATE_DISPATCHED, selected_agent_id="factory-brain")
+        store.transition(run_id, TASK_STATE_IN_PROGRESS, selected_agent_id="factory-brain")
+        store.update_run(
+            run_id,
+            raw_result={
+                "status": "success",
+                "summary": "Deterministic Factory design fixture completed.",
+                "next_task": NEXT_TASK,
+            },
+        )
+        return {
+            "messages": [
+                AIMessage(
+                    content=(
+                        "I prepared an evidence-backed implementation handoff for your "
+                        "surf-leash request."
+                    )
+                )
+            ]
+        }
+
+
+def test_default_handoff_reviewer_uses_dedicated_runtime_model(monkeypatch):
+    monkeypatch.setenv("HUB_MODEL", "hub-model")
+    monkeypatch.setenv("HUB_HANDOFF_REVIEW_MODEL", "handoff-review-model")
+    orch = _orchestrator(monkeypatch, reviewer=None)
+
+    assert orch._handoff_reviewer.model == "handoff-review-model"
+
+
+def test_natural_language_shopping_request_reaches_realistic_approval_surface(monkeypatch):
+    orch = _orchestrator(
+        monkeypatch,
+        HandoffFidelityReviewer(review_callable=lambda _payload: REVIEW_SUPPORTED),
+        specs=[
+            _spec("factory-brain", task_kinds=("design_task",), runtime_mode="factory_brain"),
+            _spec(),
+        ],
+        resolver=_FixtureEvidenceResolver(),
+        project_registry=_FakeProjectRegistry(live_context=PROJECT),
+        routing_classifier=lambda _message, _registry, *, model: RoutingDecision(
+            route="specialist", task_kind="design_task", reason="deterministic fixture routing"
+        ),
+        graph=_NaturalLanguageFactoryGraph(),
+    )
+
+    reply = orch.invoke("Find me a 7-foot surf leash under $30 delivered to my house.")
+
+    assert "Proposed implementation handoff" in reply
+    assert "Implement the approved Shopping Agent package and behaviour." in reply
+    pending = orch.pending_run()
+    assert pending is not None
+    assert pending.state == TASK_STATE_WAITING_DECISION
+    assert pending.user_message == "Find me a 7-foot surf leash under $30 delivered to my house."
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "_dispatch_subprocess",
+        lambda *_args, **_kwargs: {
+            "status": "success",
+            "summary": "Fixture implementation complete.",
+        },
+    )
+    assert orch.approve_pending() == "[Shopping Implementer] Fixture implementation complete."
+    parent = get_task_run_store().get_run(pending.id)
+    assert parent is not None
+    child_id = parent.context["handoff_child_run_id"]
+    child = get_task_run_store().get_run(child_id)
+    assert child is not None
+    assert child.context["handoff_parent_run_id"] == parent.id
+    assert parent.id != child.id
 
 
 def test_valid_next_task_becomes_persisted_hub_transition(monkeypatch):
@@ -341,26 +436,33 @@ def test_approve_dispatches_frozen_task_once_and_request_changes_reject_do_not(m
     calls = []
 
     def dispatch(spec, task, **kwargs):
-        calls.append((spec.id, task, kwargs))
+        calls.append((spec.id, task, kwargs, orchestrator_module.get_current_task_run_id()))
         return {"status": "success", "summary": "Implemented."}
 
     monkeypatch.setattr(orchestrator_module, "_dispatch_subprocess", dispatch)
     assert orch.approve_pending() == "[Shopping Implementer] Implemented."
-    assert calls == [
-        (
-            "shopping-implementer",
-            NEXT_TASK["task"],
-            {
-                "references": NEXT_TASK["references"],
-                "project_root_override": PROJECT.root,
-                "project_context_override": PROJECT,
-                "backlog_reference_override": None,
-                "task_kind": "coding_task",
-                "result_registry": orch.registry,
-            },
-        )
-    ]
-    assert get_task_run_store().get_run(run.id).state == TASK_STATE_SUCCEEDED
+    assert calls[0][:3] == (
+        "shopping-implementer",
+        NEXT_TASK["task"],
+        {
+            "references": NEXT_TASK["references"],
+            "project_root_override": PROJECT.root,
+            "project_context_override": PROJECT,
+            "backlog_reference_override": None,
+            "task_kind": "coding_task",
+            "result_registry": orch.registry,
+        },
+    )
+    parent = get_task_run_store().get_run(run.id)
+    assert parent is not None
+    assert parent.state == TASK_STATE_SUCCEEDED
+    child_id = parent.context["handoff_child_run_id"]
+    assert calls[0][3] == child_id
+    child = get_task_run_store().get_run(child_id)
+    assert child is not None
+    assert child.id != parent.id
+    assert child.state == TASK_STATE_SUCCEEDED
+    assert child.context["handoff_parent_run_id"] == parent.id
 
     second = _paused_origin(orch)
     assert second is not None
@@ -370,7 +472,15 @@ def test_approve_dispatches_frozen_task_once_and_request_changes_reject_do_not(m
             {"status": "success", "next_task": NEXT_TASK, "approved_design_evidence": EVIDENCE},
         )
     assert "Human requested changes" in orch.provide_decision("request_changes", "Fix the scope")
-    assert get_task_run_store().get_run(second.id).state == TASK_STATE_SUCCEEDED
+    second_record = get_task_run_store().get_run(second.id)
+    assert second_record is not None
+    assert second_record.state == TASK_STATE_WAITING_DECISION
+    assert (
+        second_record.context["hub_transition_decision"]["decision"]
+        == "revision_requested"
+    )
+    assert second_record.context["handoff_requested_correction"] == "Fix the scope"
+    assert "revised handoff" in orch.approve_pending().lower()
 
     third = _paused_origin(orch)
     assert third is not None

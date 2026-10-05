@@ -138,15 +138,18 @@ review output fails closed before any checkpoint is offered.
 
 The resulting Hub-owned `hub_transition_decision` is persisted in `waiting_decision`, separately
 from `specialist_pending_decision`. Its packet freezes the exact task, references, project,
-specialist snapshot, approved constraints and review findings. `/approve` dispatches that exact
-handoff once; with multiple eligible specialists the operator must name one exact eligible id.
-`REQUEST CHANGES` dispatches nothing and persists the correction for the originating design
-workflow to consume when that continuation exists; it does not claim to invoke Factory. `REJECT`
-cancels the proposed continuation. Immediately before approval dispatch, Hub revalidates the live
-specialist contract/fingerprint and the exact frozen project context; any change invalidates the
-checkpoint. Approval is bound to a fingerprint of the frozen packet, and cross-specialist
-follow-on depth is limited to one. Phase 2 uses deterministic/test fixture entry paths while
-Factory Brain runtime emission of `next_task` remains later work.
+specialist snapshot, approved constraints and review findings. `/approve` closes the originating
+Factory/design parent successfully and creates a distinct Hub-owned implementation child run with
+an explicit `handoff_parent_run_id`; only that child is dispatched. With multiple eligible
+specialists the operator must name one exact eligible id. `REQUEST CHANGES` dispatches nothing:
+the originating parent remains in `waiting_decision`, persists `revision_requested` and the exact
+correction, and waits for the originating design workflow to provide a revised handoff. It does
+not claim to invoke Factory. `REJECT` cancels the proposed continuation. Immediately before
+approval dispatch, Hub revalidates the live specialist contract/fingerprint and the exact frozen
+project context; any change invalidates the checkpoint. Approval is bound to a fingerprint of the
+frozen packet, and cross-specialist follow-on depth is limited to one. Phase 2 uses
+deterministic/test fixture entry paths while Factory Brain runtime emission of `next_task` remains
+later work.
 
 ## Project context
 

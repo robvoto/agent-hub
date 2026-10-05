@@ -48,7 +48,9 @@ The `./run.sh` wrapper accepts the same `chat`, `telegram` and `--debug` choices
 A normal message resumes an active clarification or specialist decision pause. For a Hub-owned
 cross-specialist transition, the packet is the frozen approval surface: use `/approve` when one
 specialist is resolved, or reply `APPROVE <exact-specialist-id>` when several eligible choices
-are shown. Use `REQUEST_CHANGES <correction>` or `REJECT <reason>` to prevent dispatch.
+are shown. Approval completes the originating design parent and dispatches a separate Hub child
+run. Use `REQUEST_CHANGES <correction>` to keep that parent paused with a persisted revision
+request, or `REJECT <reason>` to prevent dispatch and cancel the proposed continuation.
 
 Not implemented: `/fork`, generic `/resume`, `/model`, `/med`, `/high`.
 

@@ -1800,7 +1800,7 @@ class HubOrchestrator:
         self._handoff_reviewer = (
             handoff_reviewer
             if handoff_reviewer is not None
-            else HandoffFidelityReviewer(model=self._model)
+            else HandoffFidelityReviewer()
         )
         self._handoff_evidence_resolver = (
             handoff_evidence_resolver
@@ -2013,12 +2013,17 @@ class HubOrchestrator:
             project_key = run.context.get("target_project") or DEFAULT_PROJECT_KEY
             summary = _truncate(run.user_message, 80)
             relation = ""
-            parent_id = run.context.get("fanout_parent_run_id")
+            parent_id = run.context.get("fanout_parent_run_id") or run.context.get(
+                "handoff_parent_run_id"
+            )
             child_ids = run.context.get("fanout_child_ids")
+            handoff_child_id = run.context.get("handoff_child_run_id")
             if isinstance(parent_id, str) and parent_id:
                 relation = f" | child-of:{parent_id[:8]}"
             elif isinstance(child_ids, list) and child_ids:
                 relation = f" | fanout-parent:{len(child_ids)}"
+            elif isinstance(handoff_child_id, str) and handoff_child_id:
+                relation = f" | handoff-child:{handoff_child_id[:8]}"
             lines.append(
                 f"{identifier} | {_friendly_project_label(project_key)} | {run.state}"
                 f"{relation} | {summary}"
@@ -2952,7 +2957,10 @@ class HubOrchestrator:
     @staticmethod
     def _waiting_handoff(pending: TaskRun) -> bool:
         handoff = pending.context.get("hub_transition_decision")
-        return isinstance(handoff, dict) and handoff.get("decision") == "waiting"
+        return isinstance(handoff, dict) and handoff.get("decision") in {
+            "waiting",
+            "revision_requested",
+        }
 
     def _format_handoff_packet(self, handoff: dict[str, Any]) -> str:
         evidence = handoff["approved_design_evidence"]
@@ -3128,7 +3136,7 @@ class HubOrchestrator:
             raise HandoffEvidenceError(
                 "the persisted handoff changed after review; a new checkpoint is required"
             )
-        if handoff.get("decision") != "waiting":
+        if handoff.get("decision") not in {"waiting", "revision_requested"}:
             raise HandoffEvidenceError("the persisted handoff is no longer awaiting a decision")
         return handoff
 
@@ -3153,6 +3161,11 @@ class HubOrchestrator:
         normalized = decision.strip().lower().replace(" ", "_")
         if normalized not in {"approve", "request_changes", "reject"}:
             return "Choose APPROVE, REQUEST CHANGES, or REJECT for the proposed handoff."
+        if handoff.get("decision") == "revision_requested" and normalized != "reject":
+            return (
+                "The originating design workflow must provide a revised handoff before "
+                "approval can continue. No implementation dispatch occurred."
+            )
         if normalized == "approve":
             choices = handoff["eligible_specialists"]
             allowed_ids = {choice["id"] for choice in choices}
@@ -3176,19 +3189,23 @@ class HubOrchestrator:
         stored_decision["decision"] = normalized
         stored_decision["decision_text"] = text
         if normalized == "request_changes":
-            store.transition(
+            stored_decision["decision"] = "revision_requested"
+            stored_decision["revision_status"] = "waiting_for_originating_design_workflow"
+            stored_decision["requested_correction"] = text
+            unsigned = dict(stored_decision)
+            unsigned.pop("fingerprint", None)
+            stored_decision["fingerprint"] = self._handoff_fingerprint(unsigned)
+            store.update_run(
                 pending.id,
-                TASK_STATE_SUCCEEDED,
-                detail="Human requested changes to the proposed implementation handoff.",
                 final_response=(
-                    "Human requested changes. No implementation dispatch occurred. The "
-                    "correction is persisted for the originating design workflow to consume "
-                    "when that continuation exists."
+                    "Human requested changes. The originating design workflow remains paused "
+                    "for a revised handoff; no implementation dispatch occurred."
                     + (f"\nCorrection: {text}" if text else "")
                 ),
                 context_updates={
                     "hub_transition_decision": stored_decision,
                     "handoff_requested_correction": text,
+                    "handoff_revision_status": "waiting_for_originating_design_workflow",
                 },
                 raw_result={"status": "request_changes", "summary": text},
             )
@@ -3257,40 +3274,94 @@ class HubOrchestrator:
         approved = dict(handoff)
         approved["decision"] = "approved"
         approved["resolved_specialist_id"] = specialist_id
+        child = store.create_run(session_id=pending.session_id, user_message=next_task.task)
+        approved["child_run_id"] = child.id
         unsigned = dict(approved)
         unsigned.pop("fingerprint", None)
         approved["fingerprint"] = self._handoff_fingerprint(unsigned)
+        child_context = {
+            "target_project": pending.context.get("target_project"),
+            "originating_project_context": pending.context.get("originating_project_context"),
+            "cross_specialist_follow_on_depth": 1,
+            "handoff_parent_run_id": pending.id,
+            "handoff_originating_run_id": handoff.get("originating_run_id", pending.id),
+            "handoff_parent_decision": approved,
+        }
+        store.update_run(child.id, context_updates=child_context)
         store.transition(
-            pending.id,
+            child.id,
             TASK_STATE_ROUTED,
-            detail=f"Human approved the exact handoff for specialist '{specialist_id}'.",
+            detail=(
+                f"Hub created implementation child run from approved Factory parent "
+                f"'{pending.id}'."
+            ),
             selected_agent_id=specialist_id,
             dispatched_task=next_task.task,
+            context_updates=child_context,
+        )
+        store.transition(
+            pending.id,
+            TASK_STATE_SUCCEEDED,
+            detail=(
+                f"Human approved the handoff; implementation child run '{child.id}' "
+                "was created."
+            ),
             context_updates={
                 "hub_transition_decision": approved,
-                "cross_specialist_follow_on_depth": 1,
+                "handoff_child_run_id": child.id,
             },
+            raw_result={"status": "handoff_approved", "child_run_id": child.id},
         )
         with (
-            _registered_resumed_run(pending.id),
-            active_task_run(pending.id, progress_callback=progress_notify),
+            _registered_resumed_run(child.id),
+            active_task_run(child.id, progress_callback=progress_notify),
         ):
-            if spec.runtime["mode"] == "subprocess":
-                output = _dispatch_subprocess(
-                    spec,
-                    next_task.task,
-                    references=next_task.references,
-                    project_root_override=project_context.root if project_context else "",
-                    project_context_override=project_context,
-                    backlog_reference_override=None,
-                    task_kind=next_task.task_kind,
-                    result_registry=self._registry,
+            try:
+                if spec.runtime["mode"] == "subprocess":
+                    output = _dispatch_subprocess(
+                        spec,
+                        next_task.task,
+                        references=next_task.references,
+                        project_root_override=project_context.root if project_context else "",
+                        project_context_override=project_context,
+                        backlog_reference_override=None,
+                        task_kind=next_task.task_kind,
+                        result_registry=self._registry,
+                    )
+                elif spec.runtime["mode"] == "factory_brain":
+                    output = _dispatch_factory_brain(spec, next_task.task)
+                else:
+                    raise RuntimeError(f"Unsupported runtime mode: {spec.runtime['mode']}")
+            except TaskCancelled:
+                cancellation_message = (
+                    "Approved implementation child run was cancelled. No further handoff "
+                    "dispatch occurred."
                 )
-            elif spec.runtime["mode"] == "factory_brain":
-                output = _dispatch_factory_brain(spec, next_task.task)
-            else:
-                raise RuntimeError(f"Unsupported runtime mode: {spec.runtime['mode']}")
-        return self._finalize_specialist_follow_up(pending.id, spec, output)
+                store.transition(
+                    child.id,
+                    TASK_STATE_CANCELLED,
+                    detail=cancellation_message,
+                    final_response=cancellation_message,
+                    cancellation_reason="Stopped by user",
+                    raw_result={"status": "cancelled", "summary": "Stopped by user"},
+                )
+                store.update_run(pending.id, final_response=cancellation_message)
+                raise
+            except Exception as exc:
+                failure_message = f"[Hub] Follow-on implementation child failed: {exc}"
+                store.transition(
+                    child.id,
+                    TASK_STATE_FAILED,
+                    detail=f"Implementation child run failed: {exc}",
+                    final_response=failure_message,
+                    error_message=str(exc),
+                    raw_result={"status": "failed", "summary": str(exc)},
+                )
+                store.update_run(pending.id, final_response=failure_message)
+                return failure_message
+        reply = self._finalize_specialist_follow_up(child.id, spec, output)
+        store.update_run(pending.id, final_response=reply)
+        return reply
 
     def invoke(
         self,
