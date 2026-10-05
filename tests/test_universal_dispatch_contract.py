@@ -24,10 +24,13 @@ import json
 import logging
 from pathlib import Path
 
+import pytest
+
 from agent_hub.orchestrator import HubOrchestrator, _make_agent_tool
 from agent_hub.project_context import get_project_context_registry
 from agent_hub.project_resources import get_project_resource_registry
-from agent_hub.registry import load_registry
+from agent_hub.registry import AgentSpec, load_registry
+from agent_hub.specialist_result import SpecialistResultContractError, validate_specialist_result
 from agent_hub.task_runs import (
     TASK_STATE_DISPATCHED,
     TASK_STATE_FAILED,
@@ -51,6 +54,7 @@ def _write_fake_specialist_manifest(
     *,
     input_contract_overrides: dict | None = None,
     project_context_contract_overrides: dict | None = None,
+    task_contract_overrides: dict | None = None,
 ) -> None:
     agent_dir = registry_dir / FAKE_SPECIALIST_ID
     agent_dir.mkdir(parents=True)
@@ -116,6 +120,8 @@ def _write_fake_specialist_manifest(
     }
     if project_context_contract_overrides is not None:
         manifest["project_context_contract"] = project_context_contract_overrides
+    if task_contract_overrides is not None:
+        manifest["task_contract"] = task_contract_overrides
     (agent_dir / "agent.json").write_text(json.dumps(manifest), encoding="utf-8")
 
 
@@ -161,6 +167,200 @@ class _ScriptedFakePopen:
 
     def communicate(self):
         return ("", "")
+
+
+def _result_registry(*task_kinds: str) -> list[AgentSpec]:
+    return [
+        AgentSpec(
+            id="registered-specialist",
+            name="Registered Specialist",
+            purpose="Contract test specialist",
+            task_contract={"task_kinds": list(task_kinds)},
+        )
+    ]
+
+
+VALID_SHOPPING_NEXT_TASK = {
+    "task_kind": "coding_task",
+    "task": "Implement the approved Shopping Agent package and behaviour.",
+    "references": ["approved-shopping-agent-design", "staged-shopping-agent-package"],
+}
+
+
+@pytest.mark.parametrize(
+    ("next_task", "error_fragment"),
+    [
+        ({"task": "Implement it."}, "task_kind"),
+        ({"task_kind": "", "task": "Implement it."}, "task_kind"),
+        ({"task_kind": "   ", "task": "Implement it."}, "task_kind"),
+        ({"task_kind": 42, "task": "Implement it."}, "task_kind"),
+        ({"task_kind": "coding_task"}, "task"),
+        ({"task_kind": "coding_task", "task": ""}, "task"),
+        ({"task_kind": "coding_task", "task": "   "}, "task"),
+        ({"task_kind": "coding_task", "task": 42}, "task"),
+        ({"task_kind": "coding_task", "task": "Implement it.", "references": "ref"}, "references"),
+        ({"task_kind": "coding_task", "task": "Implement it.", "references": None}, "references"),
+        ({"task_kind": "coding_task", "task": "Implement it.", "references": [42]}, "references"),
+        (
+            {
+                "task_kind": "coding_task",
+                "task": "Implement it.",
+                "agent_id": "ai-tech-lead",
+            },
+            "agent_id",
+        ),
+        (
+            {"task_kind": "coding_task", "task": "Implement it.", "context": {}},
+            "context",
+        ),
+        (
+            {"task_kind": "coding_task", "task": "Implement it.", "metadata": {}},
+            "metadata",
+        ),
+        (
+            {"task_kind": "coding_task", "task": "Implement it.", "objective": "do it"},
+            "objective",
+        ),
+        (
+            {
+                "task_kind": "coding_task",
+                "task": "Implement it.",
+                "handoff_context": {},
+            },
+            "handoff_context",
+        ),
+    ],
+)
+def test_next_task_contract_fails_closed_for_malformed_values(next_task, error_fragment):
+    with pytest.raises(SpecialistResultContractError, match=error_fragment):
+        validate_specialist_result(
+            {"status": "success", "next_task": next_task},
+            _result_registry("coding_task"),
+        )
+
+
+def test_next_task_contract_accepts_shopping_fixture_and_optional_references():
+    validate_specialist_result(
+        {"status": "success", "next_task": VALID_SHOPPING_NEXT_TASK},
+        _result_registry("coding_task"),
+    )
+
+    without_references = {
+        key: value for key, value in VALID_SHOPPING_NEXT_TASK.items() if key != "references"
+    }
+    validate_specialist_result(
+        {"status": "success", "next_task": without_references},
+        _result_registry("coding_task"),
+    )
+
+
+def test_next_task_contract_rejects_unknown_or_unroutable_task_kind():
+    with pytest.raises(SpecialistResultContractError, match="task_kind"):
+        validate_specialist_result(
+            {"status": "success", "next_task": VALID_SHOPPING_NEXT_TASK},
+            _result_registry("technical_analysis"),
+        )
+
+    # The current registry model represents enabled specialists by membership
+    # in the loaded registry; an absent/disabled entry is therefore unroutable.
+    with pytest.raises(SpecialistResultContractError, match="task_kind"):
+        validate_specialist_result(
+            {"status": "success", "next_task": VALID_SHOPPING_NEXT_TASK},
+            [],
+        )
+
+
+def test_success_without_next_task_is_unchanged_and_prose_is_not_inferred():
+    output = {
+        "status": "success",
+        "summary": "The specialist says next_task: coding_task, but this is prose only.",
+    }
+    validate_specialist_result(output, _result_registry("coding_task"))
+    assert output == {
+        "status": "success",
+        "summary": "The specialist says next_task: coding_task, but this is prose only.",
+    }
+
+
+def test_valid_shopping_next_task_is_recorded_without_follow_on_dispatch(
+    monkeypatch, tmp_path
+):
+    registry_dir = tmp_path / "agents"
+    working_directory = tmp_path / "workdir"
+    working_directory.mkdir()
+    _write_fake_specialist_manifest(
+        registry_dir,
+        working_directory,
+        task_contract_overrides={"task_kinds": ["coding_task"]},
+    )
+    spec = load_registry(registry_dir)[0]
+    response = {
+        "status": "success",
+        "summary": "Shopping Agent design completed.",
+        "next_task": VALID_SHOPPING_NEXT_TASK,
+    }
+    _ScriptedFakePopen.calls = []
+    _ScriptedFakePopen.responses = [response]
+    monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
+    monkeypatch.setattr(
+        HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph()
+    )
+
+    orchestrator = HubOrchestrator()
+    run = get_task_run_store().create_run(
+        session_id=orchestrator.session_id,
+        user_message="Design the Shopping Agent",
+    )
+    with active_task_run(run.id):
+        reply = _make_agent_tool(spec, result_registry=[spec]).invoke(
+            {"task": "Design the Shopping Agent", "references": ["shopping://design"]}
+        )
+
+    assert reply == "[Widget Forge] Shopping Agent design completed."
+    assert len(_ScriptedFakePopen.calls) == 1
+    recorded = get_task_run_store().get_run(run.id)
+    assert recorded is not None
+    assert recorded.raw_result["next_task"] == VALID_SHOPPING_NEXT_TASK
+
+
+def test_malformed_next_task_fails_closed_before_any_follow_on_dispatch(monkeypatch, tmp_path):
+    registry_dir = tmp_path / "agents"
+    working_directory = tmp_path / "workdir"
+    working_directory.mkdir()
+    _write_fake_specialist_manifest(
+        registry_dir,
+        working_directory,
+        task_contract_overrides={"task_kinds": ["coding_task"]},
+    )
+    spec = load_registry(registry_dir)[0]
+    _ScriptedFakePopen.calls = []
+    _ScriptedFakePopen.responses = [
+        {
+            "status": "success",
+            "summary": "Shopping Agent design completed.",
+            "next_task": {"task_kind": "coding_task", "task": "Implement it.", "agent_id": "atl"},
+        }
+    ]
+    monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
+    monkeypatch.setattr(
+        HubOrchestrator, "_build_graph", lambda self, registry=None, **kwargs: _UnusedGraph()
+    )
+
+    orchestrator = HubOrchestrator()
+    run = get_task_run_store().create_run(
+        session_id=orchestrator.session_id,
+        user_message="Design the Shopping Agent",
+    )
+    with active_task_run(run.id):
+        reply = _make_agent_tool(spec, result_registry=[spec]).invoke(
+            {"task": "Design the Shopping Agent"}
+        )
+
+    assert "invalid result contract" in reply
+    assert len(_ScriptedFakePopen.calls) == 1
+    recorded = get_task_run_store().get_run(run.id)
+    assert recorded is not None
+    assert recorded.state == TASK_STATE_FAILED
 
 
 def test_widget_forge_discovered_and_dispatched_through_universal_envelope(
