@@ -126,9 +126,22 @@ A successful specialist result may optionally include the generic `next_task` co
 only `task_kind` and `task` as required non-empty strings plus an optional list of string
 `references`; extra fields such as `agent_id`, lifecycle fields, `project_root`, `context` and
 `metadata` are rejected. Hub validates the task kind against the current eligible specialist
-registry and preserves a valid result. In Phase 1, Hub then stops: it does not create a child run,
-dispatch another specialist, parse Factory prose, or add a human checkpoint. A `next_task` on any
-non-success result, or a task kind that is not currently routable, fails closed.
+registry and preserves a valid result. For the Phase 2 transition path, an explicit structured
+`approved_design_evidence` artifact is resolved separately from the `next_task`; it is never
+reconstructed from Factory prose. Hub inherits the originating validated project context, checks
+the exact task and references against that evidence, resolves and freezes eligible specialist
+choices, and runs the bounded tool-free Handoff Fidelity Reviewer. Review output is advisory
+evidence for the human, not execution authority. Missing evidence, deterministic mismatch,
+review failure, timeout or malformed review output fails closed before any checkpoint is offered.
+
+The resulting Hub-owned `hub_transition_decision` is persisted in `waiting_decision`, separately
+from `specialist_pending_decision`. Its packet freezes the exact task, references, project,
+specialist snapshot, approved constraints and review findings. `/approve` dispatches that exact
+handoff once; with multiple eligible specialists the operator must name one exact eligible id.
+`REQUEST CHANGES` dispatches nothing and records the correction for the originating design owner;
+`REJECT` cancels the proposed continuation. Approval is bound to a fingerprint of the frozen
+packet, and cross-specialist follow-on depth is limited to one. Phase 2 uses deterministic/test
+fixture entry paths while Factory Brain runtime emission of `next_task` remains later work.
 
 ## Project context
 
@@ -144,7 +157,9 @@ Supported pause/resume paths include:
 
 - clarification: the next normal operator message resumes the same task;
 - approval: `/approve` or `/reject`;
-- decision: reply normally with the option number or name.
+- specialist decision: reply normally with the option number or name;
+- Hub transition decision: `/approve`, `/reject [reason]`, or reply with
+  `APPROVE [specialist-id]`, `REQUEST_CHANGES <correction>`, or `REJECT <reason>`.
 
 `/stop` cancels the current task while retaining the conversation. `/reset` cancels it and starts a new conversation. Cancelled work is not resumable.
 
@@ -213,4 +228,6 @@ The repository `.agents/skills/` directory contains instructions for coding agen
 - Model profiles and `/model`, `/med`, `/high` remain backlog work until implemented and verified.
 - Documentation, backlog, code-change and new-specialist classifications from `/learn` remain proposals until a separately governed execution path exists.
 - Agent Factory dispatch remains dependent on the Factory runtime being callable and healthy.
+- Factory Brain runtime emission of the structured `next_task`/evidence handoff remains a later
+  phase; Phase 2 can be exercised through deterministic structured fixtures.
 - Generic `/fork` and `/resume` commands are not implemented.

@@ -1,48 +1,43 @@
 flowchart TD
-    UserStart(["You: request a new or changed agent"])
-    HubStart["Agent Hub receives the request"]
-    Factory["Agent Factory<br/>designs and governs the agent"]
-    FactoryNeedsInput{"Does Factory need your input?"}
-    FactoryQuestion["Factory asks a clarification question"]
-    UserClarifies(["You: answer / clarify"])
-    FactoryResult["Factory completes its responsibility<br/>status: success + next_task"]
-    Validate["Hub validates next_task deterministically<br/>task_kind + task + references"]
-    Phase1(["PHASE 1 COMPLETE<br/>validated next_task; no follow-on dispatch"])
-    HumanGate{"PHASE 2 HUMAN CHECKPOINT<br/>approve / change / reject"}
-    ChangeRequest(["You: request changes"])
-    Resolve["Hub resolves task_kind against<br/>enabled specialist contracts"]
-    One{"Exactly one eligible specialist?"}
-    ClarifySelection["Hub pauses and asks for clarification<br/>rather than guessing"]
-    UserClarifiesRouting(["You: clarify the requirement"])
-    ATL["AI Tech Lead<br/>implements and tests"]
-    Result["ATL result returns to Hub"]
-    Complete(["Hub continues or completes the workflow"])
+    Source([Successful result / deterministic fixture<br/>valid next_task + bounded approved evidence<br/>Factory runtime emission remains later phase])
+    Proposed["Validated proposed transition<br/>exact task_kind, task, references<br/>inherited project context"]
+    Deterministic["Deterministic Hub validation<br/>schema, routability, project, references,<br/>unchanged constraints, depth = 1"]
+    Evidence["Resolve authoritative structured<br/>Factory design evidence"]
+    Reviewer["Bounded Handoff Fidelity Reviewer<br/>separate context · zero tools · read-only<br/>strict structured advisory findings"]
+    Packet["Human decision packet<br/>exact frozen handoff + constraints<br/>review findings + eligible choices"]
+    Waiting["WAITING_DECISION<br/>Hub-owned transition decision<br/>not specialist_pending_decision"]
+    Decision{"Human decision"}
+    Approve{"APPROVE"}
+    Choose["Choose one exact eligible<br/>specialist id when multiple exist"]
+    Dispatch["Dispatch exactly once<br/>normal universal task envelope<br/>frozen task, project, references, specialist"]
+    Request([REQUEST CHANGES<br/>dispatch nothing<br/>record correction for design owner])
+    Reject([REJECT<br/>dispatch nothing<br/>cancel continuation + reason])
+    SpecialistDecision["Specialist-owned pending_decision<br/>continues existing same-specialist path"]
+    Result([Implementation result<br/>Hub continues or completes])
+    Fail([Fail closed<br/>no approval checkpoint<br/>missing/mismatched evidence or review failure])
 
-    UserStart --> HubStart --> Factory --> FactoryNeedsInput
-    FactoryNeedsInput -->|"yes"| FactoryQuestion --> UserClarifies --> Factory
-    FactoryNeedsInput -->|"no"| FactoryResult --> Validate --> Phase1
-
-    Phase1 -.->|"Phase 2 begins"| HumanGate
-    HumanGate -->|"approve"| Resolve --> One
-    HumanGate -->|"change"| ChangeRequest --> Factory
-    HumanGate -->|"reject"| Complete
-
-    One -->|"yes"| ATL --> Result --> Complete
-    One -->|"no / ambiguous"| ClarifySelection --> UserClarifiesRouting --> Resolve
-
-    rule["Architecture rule:<br/>Factory requests WHAT work is needed (task_kind).<br/>Hub decides WHO executes it.<br/>Factory never calls ATL directly."]
-    Validate -.-> rule
+    Source --> Proposed --> Deterministic --> Evidence --> Reviewer --> Packet --> Waiting --> Decision
+    Deterministic -->|failure| Fail
+    Evidence -->|missing or mismatch| Fail
+    Reviewer -->|timeout or invalid output| Fail
+    Decision --> Approve
+    Decision -->|REQUEST CHANGES| Request
+    Decision -->|REJECT| Reject
+    Approve -->|one eligible| Dispatch
+    Approve -->|multiple eligible| Choose --> Dispatch
+    Dispatch --> Result
+    Dispatch -.-> SpecialistDecision
 
     classDef hub fill:#eef6ff,stroke:#2b6cb0,stroke-width:2px,color:#0f172a;
-    classDef specialist fill:#f7f0ff,stroke:#6b46c1,stroke-width:2px,color:#1f2937;
     classDef deterministic fill:#eefbf3,stroke:#2f855a,stroke-width:2px,color:#1f2937;
+    classDef review fill:#f7f0ff,stroke:#6b46c1,stroke-width:2px,color:#1f2937;
     classDef human fill:#fff8e8,stroke:#b7791f,stroke-width:2px,color:#1f2937;
     classDef terminal fill:#f7fafc,stroke:#4a5568,stroke-width:2px,color:#1f2937;
-    classDef note fill:#fff8dc,stroke:#d69e2e,color:#1f2937;
+    classDef fail fill:#fff5f5,stroke:#c53030,stroke-width:2px,color:#1f2937;
 
-    class HubStart,Result hub;
-    class Factory,ATL specialist;
-    class FactoryResult,Validate,Resolve,One deterministic;
-    class FactoryNeedsInput,FactoryQuestion,HumanGate,ClarifySelection human;
-    class UserStart,UserClarifies,ChangeRequest,UserClarifiesRouting,Phase1,Complete terminal;
-    class rule note;
+    class Proposed,Packet,Waiting,Dispatch hub;
+    class Deterministic,Evidence deterministic;
+    class Reviewer review;
+    class Decision,Approve,Choose human;
+    class Source,Request,Reject,SpecialistDecision,Result terminal;
+    class Fail fail;
