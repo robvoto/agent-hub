@@ -1,26 +1,49 @@
 flowchart LR
     Operator([Operator message])
-    TaskRun["Hub task run"]
-    Agent["LangGraph node: agent<br/>LLM reasoning"]
-    Tools["LangGraph node: tools<br/>execute requested tool"]
+    TaskRun["Hub task lifecycle"]
+    Classifier["Routing classifier (LLM)<br/>free text -> route + task_kind"]
+    Validate["Deterministic contract checks<br/>task_kind must be advertised"]
+    Eligible["Deterministic eligibility filter<br/>registry manifests by task_kind"]
+    Agent["LangGraph node: agent<br/>LLM decides response/tool call"]
+    Tools["LangGraph node: tools<br/>executes requested tool"]
     Reply([Hub reply])
 
-    subgraph Toolset["Tools callable from node: tools"]
-        SharedDocs["Tool: search_shared_docs<br/>shared hub/factory context"]
-        AITechLead["Tool: ai-tech-lead<br/>dispatch specialist task"]
+    subgraph SpecialistTools["Specialist tools exposed only after eligibility"]
+        Factory["Tool: agent-factory<br/>agent_package_lifecycle"]
+        ATL["Tool: ai-tech-lead<br/>coding_task / technical_analysis / backlog_refinement"]
     end
 
-    Operator --> TaskRun --> Agent
-    Agent -->|"answer directly"| Reply
-    Agent -->|"request tool(s)"| Tools
-    Tools -->|"shared docs query"| SharedDocs -->|"tool result"| Agent
-    Tools -->|"coding task"| AITechLead -->|"specialist result"| Agent
+    subgraph HubTools["Hub-owned support tools on direct turns"]
+        SharedDocs["search_shared_docs"]
+        HumanMCP["governed Human MCP tools"]
+        Fanout["parallel_specialist_fanout"]
+    end
+
+    Operator --> TaskRun --> Classifier
+    Classifier -->|"specialist + task_kind"| Validate --> Eligible --> Agent
+    Classifier -->|"direct / clarify"| Agent
+
+    Agent -->|"answer"| Reply
+    Agent -->|"tool call"| Tools
+    Tools --> Factory -->|"specialist result"| Agent
+    Tools --> ATL -->|"specialist result"| Agent
+    Tools --> SharedDocs -->|"tool result"| Agent
+    Tools --> HumanMCP -->|"tool result / interrupt"| Agent
+    Tools --> Fanout -->|"joined results"| Agent
+
+    note1["LLM interprets natural language into task_kind.<br/>Hub then filters eligibility deterministically."]
+    note2["Current gap: if multiple specialists are eligible for the same task_kind,<br/>the agent LLM may still choose among those eligible tools."]
+    Eligible -.-> note1
+    Agent -.-> note2
 
     classDef core fill:#eef6ff,stroke:#2b6cb0,stroke-width:2px,color:#0f172a;
-    classDef node fill:#fff8e8,stroke:#b7791f,stroke-width:2px,color:#1f2937;
-    classDef tool fill:#eefbf3,stroke:#2f855a,stroke-width:2px,color:#1f2937;
-    classDef terminal fill:#f7f0ff,stroke:#6b46c1,stroke-width:2px,color:#1f2937;
+    classDef deterministic fill:#eefbf3,stroke:#2f855a,stroke-width:2px,color:#1f2937;
+    classDef llm fill:#fff8e8,stroke:#b7791f,stroke-width:2px,color:#1f2937;
+    classDef tool fill:#f7f0ff,stroke:#6b46c1,stroke-width:2px,color:#1f2937;
+    classDef note fill:#fff8dc,stroke:#d69e2e,color:#1f2937;
 
-    class TaskRun,Agent,Tools core;
-    class SharedDocs,AITechLead tool;
-    class Reply,Operator terminal;
+    class TaskRun,Tools core;
+    class Validate,Eligible deterministic;
+    class Classifier,Agent llm;
+    class Factory,ATL,SharedDocs,HumanMCP,Fanout tool;
+    class note1,note2 note;

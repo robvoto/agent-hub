@@ -109,12 +109,16 @@ def render_svg() -> None:
 
 
 def main() -> None:
+    from agent_hub.factory_bridge import build_factory_agent_spec
     from agent_hub.registry import load_registry
 
     if load_dotenv is not None:
         load_dotenv(ROOT / ".env")
 
     registry = load_registry()
+    factory_spec = build_factory_agent_spec()
+    if factory_spec is not None and not any(spec.id == factory_spec.id for spec in registry):
+        registry.append(factory_spec)
     content = build_mermaid(registry)
     write_mermaid(content)
     try:

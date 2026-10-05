@@ -1,6 +1,6 @@
 # LangGraph node flow
 
-Node-level view of Hub orchestration. This is a generated explanatory view, not a second source of runtime rules.
+Educational view of the current Hub routing and LangGraph execution path, including the boundary between LLM classification and deterministic task-contract filtering. This is an explanatory view; code and tests remain authoritative.
 
 ![Hub LangGraph node flow](07B-HUB-LANGGRAPH-NODE-FLOW.svg)
 
