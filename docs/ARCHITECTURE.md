@@ -126,22 +126,27 @@ A successful specialist result may optionally include the generic `next_task` co
 only `task_kind` and `task` as required non-empty strings plus an optional list of string
 `references`; extra fields such as `agent_id`, lifecycle fields, `project_root`, `context` and
 `metadata` are rejected. Hub validates the task kind against the current eligible specialist
-registry and preserves a valid result. For the Phase 2 transition path, an explicit structured
-`approved_design_evidence` artifact is resolved separately from the `next_task`; it is never
-reconstructed from Factory prose. Hub inherits the originating validated project context, checks
-the exact task and references against that evidence, resolves and freezes eligible specialist
-choices, and runs the bounded tool-free Handoff Fidelity Reviewer. Review output is advisory
-evidence for the human, not execution authority. Missing evidence, deterministic mismatch,
-review failure, timeout or malformed review output fails closed before any checkpoint is offered.
+registry and preserves a valid result. For the Phase 2 transition path, Hub resolves an explicit
+structured approved design/package evidence artifact through an injected authoritative evidence
+resolver using only the bounded `next_task.references`; it never trusts producer-supplied
+evidence or reconstructs constraints from Factory prose. Hub inherits the originating validated
+project context, checks the exact task and references against that evidence, resolves and freezes
+eligible specialist choices, and runs the bounded tool-free Handoff Fidelity Reviewer. Review
+output is advisory evidence for the human, not execution authority, and must cover every required
+fidelity dimension. Missing evidence, deterministic mismatch, review failure, timeout or malformed
+review output fails closed before any checkpoint is offered.
 
 The resulting Hub-owned `hub_transition_decision` is persisted in `waiting_decision`, separately
 from `specialist_pending_decision`. Its packet freezes the exact task, references, project,
 specialist snapshot, approved constraints and review findings. `/approve` dispatches that exact
 handoff once; with multiple eligible specialists the operator must name one exact eligible id.
-`REQUEST CHANGES` dispatches nothing and records the correction for the originating design owner;
-`REJECT` cancels the proposed continuation. Approval is bound to a fingerprint of the frozen
-packet, and cross-specialist follow-on depth is limited to one. Phase 2 uses deterministic/test
-fixture entry paths while Factory Brain runtime emission of `next_task` remains later work.
+`REQUEST CHANGES` dispatches nothing and persists the correction for the originating design
+workflow to consume when that continuation exists; it does not claim to invoke Factory. `REJECT`
+cancels the proposed continuation. Immediately before approval dispatch, Hub revalidates the live
+specialist contract/fingerprint and the exact frozen project context; any change invalidates the
+checkpoint. Approval is bound to a fingerprint of the frozen packet, and cross-specialist
+follow-on depth is limited to one. Phase 2 uses deterministic/test fixture entry paths while
+Factory Brain runtime emission of `next_task` remains later work.
 
 ## Project context
 

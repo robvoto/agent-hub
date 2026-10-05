@@ -137,6 +137,15 @@ def canonical_model_name(model_name: str | None) -> str | None:
     return model_name.strip()
 
 
+def lookup_model_pricing(
+    catalog: Mapping[str, Any], model_name: str
+) -> Mapping[str, Any] | None:
+    """Return the catalog entry for a raw or provider-prefixed model name."""
+    models_catalog = catalog.get("models", {}) if isinstance(catalog, Mapping) else {}
+    canonical_name = canonical_model_name(model_name) or model_name
+    return _lookup_pricing(models_catalog, model_name, canonical_name)
+
+
 def _normalise_usage_map(
     usage_map: Mapping[str, UsageSnapshot],
 ) -> dict[str, UsageSnapshot]:

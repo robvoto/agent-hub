@@ -12,5 +12,7 @@ Learning boundary:
 - **LLM reasoning** interprets ambiguous natural language.
 - **Contract validation, eligibility filtering, lifecycle state, approvals and stop conditions** stay deterministic where rules are known.
 - The Phase 2 entry is a successful-result/test-fixture path with an explicit structured
-  `next_task` and approved evidence. Factory Brain runtime emission of those fields is later work.
+  `next_task`; Hub resolves its bounded references through an injected authoritative evidence
+  resolver. Producer-supplied evidence is not authoritative. Factory Brain runtime emission of
+  those fields and evidence is later work.
 - `specialist_pending_decision` remains the separate specialist-owned resume path.

@@ -1,16 +1,16 @@
 flowchart TD
-    Source([Successful result / deterministic fixture<br/>valid next_task + bounded approved evidence<br/>Factory runtime emission remains later phase])
+    Source([Successful result / deterministic fixture<br/>valid next_task with bounded references<br/>Factory runtime emission remains later phase])
     Proposed["Validated proposed transition<br/>exact task_kind, task, references<br/>inherited project context"]
     Deterministic["Deterministic Hub validation<br/>schema, routability, project, references,<br/>unchanged constraints, depth = 1"]
-    Evidence["Resolve authoritative structured<br/>Factory design evidence"]
-    Reviewer["Bounded Handoff Fidelity Reviewer<br/>separate context · zero tools · read-only<br/>strict structured advisory findings"]
+    Evidence["Resolve authoritative structured<br/>Factory design evidence<br/>producer evidence is ignored"]
+    Reviewer["Bounded Handoff Fidelity Reviewer<br/>separate context · zero tools · read-only<br/>mandatory coverage + strict advisory findings"]
     Packet["Human decision packet<br/>exact frozen handoff + constraints<br/>review findings + eligible choices"]
     Waiting["WAITING_DECISION<br/>Hub-owned transition decision<br/>not specialist_pending_decision"]
     Decision{"Human decision"}
     Approve{"APPROVE"}
     Choose["Choose one exact eligible<br/>specialist id when multiple exist"]
     Dispatch["Dispatch exactly once<br/>normal universal task envelope<br/>frozen task, project, references, specialist"]
-    Request([REQUEST CHANGES<br/>dispatch nothing<br/>record correction for design owner])
+    Request([REQUEST CHANGES<br/>dispatch nothing<br/>persist correction for originating workflow])
     Reject([REJECT<br/>dispatch nothing<br/>cancel continuation + reason])
     SpecialistDecision["Specialist-owned pending_decision<br/>continues existing same-specialist path"]
     Result([Implementation result<br/>Hub continues or completes])

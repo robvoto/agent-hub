@@ -38,10 +38,13 @@ from .factory_bridge import (
 )
 from .handoff_transition import (
     HandoffEvidenceError,
+    HandoffEvidenceResolver,
     HandoffFidelityReview,
     HandoffFidelityReviewer,
     NextTaskContract,
+    UnavailableHandoffEvidenceResolver,
     resolve_approved_design_evidence,
+    validate_handoff_references,
 )
 from .hub_context import HubContextService
 from .hub_memory import (
@@ -1782,6 +1785,7 @@ class HubOrchestrator:
         context_service: Any = None,
         routing_classifier: Any = None,
         handoff_reviewer: Any = None,
+        handoff_evidence_resolver: HandoffEvidenceResolver | None = None,
     ) -> None:
         self._model = model or configured_model()
         self._registry = _load_specialists()
@@ -1797,6 +1801,11 @@ class HubOrchestrator:
             handoff_reviewer
             if handoff_reviewer is not None
             else HandoffFidelityReviewer(model=self._model)
+        )
+        self._handoff_evidence_resolver = (
+            handoff_evidence_resolver
+            if handoff_evidence_resolver is not None
+            else UnavailableHandoffEvidenceResolver()
         )
         self._learning_notify: Any = None
         self._learning_watermark: dict[str, Any] = {}
@@ -2994,8 +3003,8 @@ class HubOrchestrator:
                 "- Other approved constraints: "
                 + json.dumps(evidence["other_constraints"], sort_keys=True),
             )
-        for finding in review["findings"]:
-            lines.append(f"- [{finding['result']}] {finding['field']}: {finding['detail']}")
+        for field, finding in review["coverage"].items():
+            lines.append(f"- [{finding['result']}] {field}: {finding['detail']}")
         for heading in (
             "omissions",
             "contradictions",
@@ -3040,8 +3049,14 @@ class HubOrchestrator:
             raise HandoffEvidenceError("validated next_task could not be reconstructed") from exc
 
         project_context = self._handoff_project_context(run)
+        validate_handoff_references(next_task.references)
+        authoritative_evidence = self._handoff_evidence_resolver.resolve(
+            next_task.references or [],
+            next_task,
+            project_context,
+        )
         evidence = resolve_approved_design_evidence(
-            output.get("approved_design_evidence"), next_task, project_context
+            authoritative_evidence, next_task, project_context
         )
         eligible, choices = self._eligible_handoff_choices(next_task.task_kind)
         if not eligible:
@@ -3066,6 +3081,9 @@ class HubOrchestrator:
             "project_context": project_context.to_dict() if project_context else None,
             "eligible_specialists": choices,
             "eligible_specialist_specs": [dataclasses.asdict(spec) for spec in eligible],
+            "eligible_specialist_fingerprints": {
+                spec.id: spec_fingerprint(spec) for spec in eligible
+            },
             "resolved_specialist_id": eligible[0].id if len(eligible) == 1 else None,
             "approved_design_evidence": evidence.model_dump(mode="json"),
             "review": review.model_dump(mode="json"),
@@ -3146,7 +3164,12 @@ class HubOrchestrator:
                 )
             if selected not in allowed_ids:
                 return f"'{selected}' is not an eligible specialist for this handoff."
-            return self._approve_handoff(pending, handoff, selected, progress_notify)
+            try:
+                return self._approve_handoff(pending, handoff, selected, progress_notify)
+            except TaskCancelled:
+                raise
+            except Exception as exc:
+                return self._handoff_failure(pending, exc)
 
         store = get_task_run_store()
         stored_decision = dict(handoff)
@@ -3158,8 +3181,9 @@ class HubOrchestrator:
                 TASK_STATE_SUCCEEDED,
                 detail="Human requested changes to the proposed implementation handoff.",
                 final_response=(
-                    "Changes requested for the originating Factory design; no implementation "
-                    "dispatch was made."
+                    "Human requested changes. No implementation dispatch occurred. The "
+                    "correction is persisted for the originating design workflow to consume "
+                    "when that continuation exists."
                     + (f"\nCorrection: {text}" if text else "")
                 ),
                 context_updates={
@@ -3194,25 +3218,41 @@ class HubOrchestrator:
         specialist_id: str,
         progress_notify: Any | None,
     ) -> str:
-        pinned_specs = handoff.get("eligible_specialist_specs")
-        spec = None
-        if isinstance(pinned_specs, list):
-            for item in pinned_specs:
-                if isinstance(item, dict) and item.get("id") == specialist_id:
-                    try:
-                        spec = AgentSpec(**item)
-                    except TypeError as exc:
-                        raise HandoffEvidenceError(
-                            "persisted eligible specialist snapshot is invalid"
-                        ) from exc
-                    break
+        self._reconcile_registry()
+        spec = next((item for item in self._registry if item.id == specialist_id), None)
         if spec is None:
-            spec = next((item for item in self._registry if item.id == specialist_id), None)
-        if spec is None:
-            return f"'{specialist_id}' is no longer registered; approval cannot proceed."
+            raise HandoffEvidenceError(
+                f"'{specialist_id}' is no longer registered; the handoff checkpoint is invalid"
+            )
         next_task = NextTaskContract.model_validate(handoff["next_task"])
+        if next_task.task_kind not in (spec.task_contract.get("task_kinds", []) or []):
+            raise HandoffEvidenceError(
+                f"'{specialist_id}' no longer advertises task_kind {next_task.task_kind!r}; "
+                "the handoff checkpoint is invalid"
+            )
+        expected_fingerprint = (handoff.get("eligible_specialist_fingerprints") or {}).get(
+            specialist_id
+        )
+        if not isinstance(expected_fingerprint, str):
+            raise HandoffEvidenceError(
+                "the handoff checkpoint has no reviewed specialist fingerprint"
+            )
+        actual_fingerprint = spec_fingerprint(spec)
+        if actual_fingerprint != expected_fingerprint:
+            raise HandoffEvidenceError(
+                f"specialist '{specialist_id}' changed since review; a fresh handoff "
+                "review and approval are required"
+            )
         project_data = handoff.get("project_context")
         project_context = ProjectContext.from_dict(project_data) if project_data else None
+        if project_context is not None:
+            project_resolution = get_project_context_registry().revalidate_context(project_context)
+            if project_resolution.error or project_resolution.context != project_context:
+                raise HandoffEvidenceError(
+                    project_resolution.error
+                    or "the frozen target project changed since review; a fresh handoff "
+                    "review and approval are required"
+                )
         store = get_task_run_store()
         approved = dict(handoff)
         approved["decision"] = "approved"

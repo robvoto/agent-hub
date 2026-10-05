@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import shlex
 import sqlite3
@@ -21,10 +22,14 @@ from .config import (
     LLM_COST_CATALOG_FILE,
     TASK_RUN_DB,
     ConfigurationError,
+    configured_handoff_reviewer_max_tokens,
+    configured_handoff_reviewer_model,
+    configured_handoff_reviewer_reasoning_effort,
+    configured_handoff_reviewer_timeout_seconds,
     configured_model,
     configured_reasoning_effort,
 )
-from .cost_log import canonical_model_name, load_cost_catalog
+from .cost_log import canonical_model_name, load_cost_catalog, lookup_model_pricing
 from .factory_bridge import build_factory_agent_spec
 from .human_mcp_gateway import HumanMCPError, get_human_mcp_gateway
 from .log_config import get_human_logger
@@ -170,6 +175,7 @@ def run_startup_healthcheck(
     checks.append(_check_data_dir())
     checks.extend(_check_sqlite_paths())
     checks.append(_check_model_config())
+    checks.append(_check_handoff_reviewer_config())
     checks.append(_check_cost_catalog())
     checks.append(_check_human_mcp())
     return StartupHealthReport(mode=mode, checks=tuple(checks))
@@ -524,6 +530,54 @@ def _check_model_config() -> HealthCheckResult:
         detail=(
             f"Runtime model configured as {model}; reasoning effort "
             f"{reasoning_effort or 'provider default'}."
+        ),
+    )
+
+
+def _check_handoff_reviewer_config() -> HealthCheckResult:
+    try:
+        model = configured_handoff_reviewer_model()
+        reasoning_effort = configured_handoff_reviewer_reasoning_effort()
+        timeout_seconds = configured_handoff_reviewer_timeout_seconds()
+        max_tokens = configured_handoff_reviewer_max_tokens()
+        if not LLM_COST_CATALOG_FILE.exists():
+            raise FileNotFoundError(f"Cost catalog file does not exist: {LLM_COST_CATALOG_FILE}")
+        catalog = load_cost_catalog(LLM_COST_CATALOG_FILE)
+        pricing = lookup_model_pricing(catalog, model)
+        if not isinstance(pricing, dict) or pricing.get("status") == "unknown":
+            raise ValueError(
+                f"Handoff reviewer model {model!r} is missing from the approved priced "
+                "LLM cost catalog; refusing to start."
+            )
+        for field in ("input_per_1m", "cached_input_per_1m", "output_per_1m"):
+            value = pricing.get(field)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+            ):
+                raise ValueError(
+                    f"Handoff reviewer model {model!r} has invalid {field} pricing; "
+                    "refusing to start."
+                )
+            if value < 0:
+                raise ValueError(
+                    f"Handoff reviewer model {model!r} has negative {field} pricing; "
+                    "refusing to start."
+                )
+    except (ConfigurationError, FileNotFoundError, ValueError, TypeError) as exc:
+        return HealthCheckResult(
+            name="HUB_HANDOFF_REVIEW_MODEL",
+            status="FAIL",
+            detail=str(exc),
+        )
+    return HealthCheckResult(
+        name="HUB_HANDOFF_REVIEW_MODEL",
+        status="PASS",
+        detail=(
+            f"Handoff reviewer model configured as {model}; reasoning effort {reasoning_effort}; "
+            f"output cap {max_tokens} tokens; timeout {timeout_seconds:g}s; retries 0; "
+            "priced model verified."
         ),
     )
 

@@ -11,18 +11,26 @@ import json
 import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from .config import (
-    chat_model_kwargs,
     configured_handoff_reviewer_max_tokens,
     configured_handoff_reviewer_model,
     configured_handoff_reviewer_timeout_seconds,
+    handoff_reviewer_model_kwargs,
 )
 from .cost_log import extract_usage_metadata, record_llm_run
 from .project_context import ProjectContext
@@ -30,10 +38,40 @@ from .specialist_result import NextTaskContract
 
 logger = logging.getLogger(__name__)
 MAX_APPROVED_EVIDENCE_BYTES = 64 * 1024
+MAX_HANDOFF_REFERENCES = 32
+MAX_HANDOFF_REFERENCE_BYTES = 4096
+MAX_REVIEW_DETAIL_BYTES = 2000
+MAX_REVIEW_INPUT_BYTES = 64 * 1024
 
 
 class HandoffEvidenceError(ValueError):
     """Authoritative evidence is missing, malformed, or does not resolve."""
+
+
+class HandoffEvidenceResolver(Protocol):
+    """Hub-owned boundary for resolving references to approved design evidence."""
+
+    def resolve(
+        self,
+        references: Sequence[str],
+        next_task: NextTaskContract,
+        project_context: ProjectContext | None,
+    ) -> Mapping[str, Any]: ...
+
+
+class UnavailableHandoffEvidenceResolver:
+    """Production Phase 2 default until an authoritative evidence source is wired."""
+
+    def resolve(
+        self,
+        references: Sequence[str],
+        next_task: NextTaskContract,
+        project_context: ProjectContext | None,
+    ) -> Mapping[str, Any]:
+        raise HandoffEvidenceError(
+            "authoritative Factory design evidence is unavailable; refusing to use "
+            "producer-supplied handoff evidence"
+        )
 
 
 class TargetProjectEvidence(BaseModel):
@@ -88,12 +126,33 @@ class ApprovedDesignEvidence(BaseModel):
         return value
 
 
-class ReviewFinding(BaseModel):
+class ReviewDimension(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    field: StrictStr
     result: Literal["supported", "needs_attention", "mismatch"]
     detail: StrictStr
+
+    @field_validator("detail")
+    @classmethod
+    def require_bounded_detail(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must be a non-empty string")
+        if len(value.encode("utf-8")) > MAX_REVIEW_DETAIL_BYTES:
+            raise ValueError("exceeds the bounded review-detail size")
+        return value
+
+
+class HandoffReviewCoverage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    purpose: ReviewDimension
+    permissions: ReviewDimension
+    runtime_choice: ReviewDimension
+    budgets_limits: ReviewDimension
+    acceptance_criteria: ReviewDimension
+    stop_conditions: ReviewDimension
+    target_project: ReviewDimension
+    scope: ReviewDimension
 
 
 class HandoffFidelityReview(BaseModel):
@@ -102,12 +161,53 @@ class HandoffFidelityReview(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     verdict: Literal["supported", "needs_attention", "mismatch"]
-    findings: list[ReviewFinding]
+    coverage: HandoffReviewCoverage
     omissions: list[StrictStr]
     contradictions: list[StrictStr]
     unexplained_scope_expansion: list[StrictStr]
     unresolved_risks: list[StrictStr]
     ambiguity: list[StrictStr]
+
+    @field_validator(
+        "omissions",
+        "contradictions",
+        "unexplained_scope_expansion",
+        "unresolved_risks",
+        "ambiguity",
+    )
+    @classmethod
+    def require_bounded_concerns(cls, values: list[str]) -> list[str]:
+        if len(values) > 32:
+            raise ValueError("must contain at most 32 items")
+        if any(
+            not value.strip() or len(value.encode("utf-8")) > MAX_REVIEW_DETAIL_BYTES
+            for value in values
+        ):
+            raise ValueError("items must be non-empty and bounded")
+        return values
+
+    @model_validator(mode="after")
+    def enforce_coverage_consistency(self) -> "HandoffFidelityReview":
+        dimensions = self.coverage.model_dump().values()
+        has_non_supporting_dimension = any(
+            dimension["result"] != "supported" for dimension in dimensions
+        )
+        has_concern = any(
+            getattr(self, name)
+            for name in (
+                "omissions",
+                "contradictions",
+                "unexplained_scope_expansion",
+                "unresolved_risks",
+                "ambiguity",
+            )
+        )
+        if self.verdict == "supported" and (has_non_supporting_dimension or has_concern):
+            raise ValueError(
+                "supported verdict requires every mandatory coverage dimension to be supported "
+                "and every concern list to be empty"
+            )
+        return self
 
 
 def resolve_approved_design_evidence(
@@ -115,10 +215,10 @@ def resolve_approved_design_evidence(
     next_task: NextTaskContract,
     project_context: ProjectContext | None,
 ) -> ApprovedDesignEvidence:
-    """Resolve only a structured evidence object explicitly carried by Hub.
+    """Validate structured evidence returned by the authoritative resolver.
 
-    The producer may reference evidence with the exact ``next_task.references``
-    values, but Hub never reconstructs constraints from a prose response.
+    This function does not inspect a specialist result. The caller must obtain
+    ``raw_evidence`` through ``HandoffEvidenceResolver`` first.
     """
     if not isinstance(raw_evidence, Mapping):
         raise HandoffEvidenceError(
@@ -141,11 +241,8 @@ def resolve_approved_design_evidence(
         )
         raise HandoffEvidenceError(f"invalid approved design evidence: {details}") from exc
 
-    unresolved = [
-        reference
-        for reference in (next_task.references or [])
-        if reference not in evidence.references
-    ]
+    references = validate_handoff_references(next_task.references)
+    unresolved = [reference for reference in references if reference not in evidence.references]
     if unresolved:
         raise HandoffEvidenceError(
             "required handoff reference(s) are not present in authoritative design evidence: "
@@ -186,6 +283,23 @@ def resolve_approved_design_evidence(
     return evidence
 
 
+def validate_handoff_references(references: Sequence[str] | None) -> list[str]:
+    """Validate the bounded references allowed to cross the review boundary."""
+    values = list(references or [])
+    if not values:
+        raise HandoffEvidenceError(
+            "next_task must contain bounded authoritative references before a handoff "
+            "can be reviewed"
+        )
+    if len(values) > MAX_HANDOFF_REFERENCES or any(
+        len(reference.encode("utf-8")) > MAX_HANDOFF_REFERENCE_BYTES for reference in values
+    ):
+        raise HandoffEvidenceError(
+            "next_task references exceed the bounded handoff reference limits"
+        )
+    return values
+
+
 def _review_payload(
     evidence: ApprovedDesignEvidence,
     next_task: NextTaskContract,
@@ -193,7 +307,7 @@ def _review_payload(
     eligible_specialists: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     """Build the complete and bounded reviewer input; no conversation is included."""
-    return {
+    payload = {
         "approved_design_evidence": evidence.model_dump(mode="json"),
         "proposed_next_task": next_task.model_dump(mode="json"),
         "inherited_project_context": (
@@ -201,6 +315,12 @@ def _review_payload(
         ),
         "eligible_specialists": [dict(item) for item in eligible_specialists],
     }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    if len(encoded.encode("utf-8")) > MAX_REVIEW_INPUT_BYTES:
+        raise HandoffEvidenceError(
+            "bounded handoff reviewer input exceeds the 64 KiB limit"
+        )
+    return payload
 
 
 class HandoffFidelityReviewer:
@@ -246,7 +366,7 @@ class HandoffFidelityReviewer:
         error: str | None = None
         result: Any = None
         try:
-            kwargs = chat_model_kwargs(self.model)
+            kwargs = handoff_reviewer_model_kwargs(self.model)
             kwargs.update(
                 {
                     "timeout": self.timeout_seconds,

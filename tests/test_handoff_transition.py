@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 import agent_hub.orchestrator as orchestrator_module
 from agent_hub.handoff_transition import HandoffFidelityReviewer
 from agent_hub.orchestrator import HubOrchestrator
-from agent_hub.project_context import ProjectContext
+from agent_hub.project_context import ProjectContext, ProjectContextResolution
 from agent_hub.registry import AgentSpec
 from agent_hub.task_runs import (
     TASK_STATE_CANCELLED,
@@ -65,7 +67,59 @@ class _UnusedGraph:
     pass
 
 
-def _orchestrator(monkeypatch, reviewer, specs=None) -> HubOrchestrator:
+REVIEW_SUPPORTED = {
+    "verdict": "supported",
+    "coverage": {
+        field: {"result": "supported", "detail": "Authoritative evidence matches."}
+        for field in (
+            "purpose",
+            "permissions",
+            "runtime_choice",
+            "budgets_limits",
+            "acceptance_criteria",
+            "stop_conditions",
+            "target_project",
+            "scope",
+        )
+    },
+    "omissions": [],
+    "contradictions": [],
+    "unexplained_scope_expansion": [],
+    "unresolved_risks": [],
+    "ambiguity": [],
+}
+
+
+class _FixtureEvidenceResolver:
+    def __init__(self, evidence=None):
+        self.evidence = evidence or EVIDENCE
+        self.calls = []
+
+    def resolve(self, references, next_task, project_context):
+        self.calls.append((list(references), next_task, project_context))
+        return self.evidence
+
+
+class _FakeProjectRegistry:
+    def __init__(self, resolution=None):
+        self.resolution = resolution
+        self.calls = []
+
+    def revalidate_context(self, context):
+        self.calls.append(context)
+        return self.resolution or ProjectContextResolution(context=context, error=None)
+
+    def get(self, _session_id):
+        return None
+
+
+def _orchestrator(
+    monkeypatch,
+    reviewer,
+    specs=None,
+    resolver=None,
+    project_registry=None,
+) -> HubOrchestrator:
     specs = specs or [_spec()]
     monkeypatch.setattr(
         HubOrchestrator,
@@ -73,7 +127,16 @@ def _orchestrator(monkeypatch, reviewer, specs=None) -> HubOrchestrator:
         lambda self, *args, **kwargs: _UnusedGraph(),
     )
     monkeypatch.setattr(orchestrator_module, "_load_specialists", lambda: specs)
-    return HubOrchestrator(model="test", handoff_reviewer=reviewer)
+    monkeypatch.setattr(
+        orchestrator_module,
+        "get_project_context_registry",
+        lambda: project_registry or _FakeProjectRegistry(),
+    )
+    return HubOrchestrator(
+        model="test",
+        handoff_reviewer=reviewer,
+        handoff_evidence_resolver=resolver or _FixtureEvidenceResolver(),
+    )
 
 
 def _paused_origin(orchestrator: HubOrchestrator, *, depth: int = 0):
@@ -97,21 +160,23 @@ def test_valid_next_task_becomes_persisted_hub_transition(monkeypatch):
 
     def review(payload):
         seen.update(payload)
-        return {
-            "verdict": "supported",
-            "findings": [{"field": "purpose", "result": "supported", "detail": "Exact."}],
-            "omissions": [],
-            "contradictions": [],
-            "unexplained_scope_expansion": [],
-            "unresolved_risks": [],
-            "ambiguity": [],
-        }
+        return REVIEW_SUPPORTED
 
-    orch = _orchestrator(monkeypatch, HandoffFidelityReviewer(review_callable=review))
+    resolver = _FixtureEvidenceResolver()
+    orch = _orchestrator(
+        monkeypatch,
+        HandoffFidelityReviewer(review_callable=review),
+        resolver=resolver,
+    )
     run = _paused_origin(orch)
     assert run is not None
-    output = {"status": "success", "summary": "Design completed.", "next_task": NEXT_TASK}
-    output["approved_design_evidence"] = EVIDENCE
+    fabricated = {**EVIDENCE, "purpose": "Untrusted producer claim."}
+    output = {
+        "status": "success",
+        "summary": "Design completed.",
+        "next_task": NEXT_TASK,
+        "approved_design_evidence": fabricated,
+    }
 
     with active_task_run(run.id):
         packet = orch._prepare_handoff_transition(run, output)
@@ -120,6 +185,11 @@ def test_valid_next_task_becomes_persisted_hub_transition(monkeypatch):
     assert paused is not None
     assert paused.state == TASK_STATE_WAITING_DECISION
     assert paused.context["hub_transition_decision"]["next_task"] == NEXT_TASK
+    assert (
+        paused.context["hub_transition_decision"]["approved_design_evidence"]["purpose"]
+        == EVIDENCE["purpose"]
+    )
+    assert resolver.calls[0][0] == NEXT_TASK["references"]
     assert "APPROVE" in packet
     assert seen.keys() == {
         "approved_design_evidence",
@@ -137,12 +207,70 @@ def test_deterministic_validation_precedes_reviewer_and_missing_evidence_fails_c
         called = True
         raise AssertionError("reviewer must not run")
 
-    orch = _orchestrator(monkeypatch, HandoffFidelityReviewer(review_callable=review))
+    orch = _orchestrator(
+        monkeypatch,
+        HandoffFidelityReviewer(review_callable=review),
+        resolver=orchestrator_module.UnavailableHandoffEvidenceResolver(),
+    )
     run = _paused_origin(orch)
     assert run is not None
-    with pytest.raises(ValueError, match="approved_design_evidence"):
-        orch._prepare_handoff_transition(run, {"status": "success", "next_task": NEXT_TASK})
+    with pytest.raises(ValueError, match="authoritative Factory design evidence"):
+        orch._prepare_handoff_transition(
+            run,
+            {
+                "status": "success",
+                "next_task": NEXT_TASK,
+                "approved_design_evidence": EVIDENCE,
+            },
+        )
     assert called is False
+    assert get_task_run_store().get_run(run.id).state == TASK_STATE_IN_PROGRESS
+
+
+def test_unresolved_authoritative_reference_fails_before_reviewer(monkeypatch):
+    called = False
+
+    def review(_payload):
+        nonlocal called
+        called = True
+        return REVIEW_SUPPORTED
+
+    evidence = {**EVIDENCE, "references": [NEXT_TASK["references"][0]]}
+    orch = _orchestrator(
+        monkeypatch,
+        HandoffFidelityReviewer(review_callable=review),
+        resolver=_FixtureEvidenceResolver(evidence),
+    )
+    run = _paused_origin(orch)
+    assert run is not None
+    with pytest.raises(ValueError, match="not present in authoritative design evidence"):
+        orch._prepare_handoff_transition(
+            run,
+            {"status": "success", "next_task": NEXT_TASK},
+        )
+    assert called is False
+
+
+def test_reviewer_requires_complete_supporting_coverage(monkeypatch):
+    orch = _orchestrator(
+        monkeypatch,
+        HandoffFidelityReviewer(
+            review_callable=lambda _payload: {
+                **REVIEW_SUPPORTED,
+                "coverage": {
+                    **REVIEW_SUPPORTED["coverage"],
+                    "scope": {"result": "needs_attention", "detail": "Scope is unclear."},
+                },
+            }
+        ),
+    )
+    run = _paused_origin(orch)
+    assert run is not None
+    with pytest.raises(ValueError, match="supported verdict"):
+        orch._prepare_handoff_transition(
+            run,
+            {"status": "success", "next_task": NEXT_TASK},
+        )
     assert get_task_run_store().get_run(run.id).state == TASK_STATE_IN_PROGRESS
 
 
@@ -168,7 +296,10 @@ def test_multiple_eligible_specialists_require_explicit_human_choice(monkeypatch
         HandoffFidelityReviewer(
             review_callable=lambda _payload: {
                 "verdict": "needs_attention",
-                "findings": [],
+                "coverage": {
+                    field: {"result": "supported", "detail": "Evidence present."}
+                    for field in REVIEW_SUPPORTED["coverage"]
+                },
                 "omissions": [],
                 "contradictions": [],
                 "unexplained_scope_expansion": [],
@@ -196,15 +327,7 @@ def test_approve_dispatches_frozen_task_once_and_request_changes_reject_do_not(m
     orch = _orchestrator(
         monkeypatch,
         HandoffFidelityReviewer(
-            review_callable=lambda _payload: {
-                "verdict": "supported",
-                "findings": [],
-                "omissions": [],
-                "contradictions": [],
-                "unexplained_scope_expansion": [],
-                "unresolved_risks": [],
-                "ambiguity": [],
-            }
+            review_callable=lambda _payload: REVIEW_SUPPORTED
         ),
     )
     run = _paused_origin(orch)
@@ -246,7 +369,7 @@ def test_approve_dispatches_frozen_task_once_and_request_changes_reject_do_not(m
             second,
             {"status": "success", "next_task": NEXT_TASK, "approved_design_evidence": EVIDENCE},
         )
-    assert "Changes requested" in orch.provide_decision("request_changes", "Fix the scope")
+    assert "Human requested changes" in orch.provide_decision("request_changes", "Fix the scope")
     assert get_task_run_store().get_run(second.id).state == TASK_STATE_SUCCEEDED
 
     third = _paused_origin(orch)
@@ -261,18 +384,74 @@ def test_approve_dispatches_frozen_task_once_and_request_changes_reject_do_not(m
     assert len(calls) == 1
 
 
-def test_material_change_depth_and_stop_prevent_approval(monkeypatch):
-    reviewer = HandoffFidelityReviewer(
-        review_callable=lambda _payload: {
-            "verdict": "supported",
-            "findings": [],
-            "omissions": [],
-            "contradictions": [],
-            "unexplained_scope_expansion": [],
-            "unresolved_risks": [],
-            "ambiguity": [],
-        }
+@pytest.mark.parametrize(
+    "mutation",
+    ["removed", "task_kind_removed", "runtime_changed", "contract_changed"],
+)
+def test_approval_revalidates_live_specialist_before_dispatch(monkeypatch, mutation):
+    specs = [_spec()]
+    orch = _orchestrator(
+        monkeypatch,
+        HandoffFidelityReviewer(review_callable=lambda _payload: REVIEW_SUPPORTED),
+        specs,
     )
+    run = _paused_origin(orch)
+    assert run is not None
+    with active_task_run(run.id):
+        orch._prepare_handoff_transition(
+            run,
+            {"status": "success", "next_task": NEXT_TASK},
+        )
+
+    if mutation == "removed":
+        specs.clear()
+    elif mutation == "task_kind_removed":
+        specs[0] = replace(specs[0], task_contract={"task_kinds": []})
+    elif mutation == "runtime_changed":
+        specs[0] = replace(specs[0], runtime={"mode": "subprocess", "changed": True})
+    else:
+        specs[0] = replace(
+            specs[0],
+            task_contract={"task_kinds": ["coding_task"], "contract_revision": 2},
+        )
+
+    calls = []
+    monkeypatch.setattr(
+        orchestrator_module,
+        "_dispatch_subprocess",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+    result = orch.approve_pending()
+    assert "handoff" in result.lower() or "changed" in result.lower()
+    assert calls == []
+    assert get_task_run_store().get_run(run.id).state == TASK_STATE_FAILED
+
+
+def test_approval_revalidates_frozen_project_without_using_current_selection(monkeypatch):
+    project_registry = _FakeProjectRegistry(
+        ProjectContextResolution(context=None, error="frozen project root disappeared")
+    )
+    orch = _orchestrator(
+        monkeypatch,
+        HandoffFidelityReviewer(review_callable=lambda _payload: REVIEW_SUPPORTED),
+        project_registry=project_registry,
+    )
+    run = _paused_origin(orch)
+    assert run is not None
+    with active_task_run(run.id):
+        orch._prepare_handoff_transition(
+            run,
+            {"status": "success", "next_task": NEXT_TASK},
+        )
+
+    result = orch.approve_pending()
+    assert "frozen project root disappeared" in result
+    assert project_registry.calls == [PROJECT]
+    assert get_task_run_store().get_run(run.id).state == TASK_STATE_FAILED
+
+
+def test_material_change_depth_and_stop_prevent_approval(monkeypatch):
+    reviewer = HandoffFidelityReviewer(review_callable=lambda _payload: REVIEW_SUPPORTED)
     orch = _orchestrator(monkeypatch, reviewer)
     run = _paused_origin(orch)
     assert run is not None
