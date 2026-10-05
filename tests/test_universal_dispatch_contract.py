@@ -254,6 +254,22 @@ def test_next_task_contract_accepts_shopping_fixture_and_optional_references():
     )
 
 
+@pytest.mark.parametrize("status", ["failed", "needs_clarification", "approval_required", "other"])
+def test_next_task_contract_rejects_next_task_on_non_success_results(status):
+    with pytest.raises(SpecialistResultContractError, match="only allowed.*success"):
+        validate_specialist_result(
+            {"status": status, "next_task": VALID_SHOPPING_NEXT_TASK},
+            _result_registry("coding_task"),
+        )
+
+
+@pytest.mark.parametrize("status", ["failed", "needs_clarification", "approval_required"])
+def test_non_success_result_without_next_task_is_unchanged(status):
+    output = {"status": status, "summary": "The specialist is not complete yet."}
+    validate_specialist_result(output, _result_registry("coding_task"))
+    assert output == {"status": status, "summary": "The specialist is not complete yet."}
+
+
 def test_next_task_contract_rejects_unknown_or_unroutable_task_kind():
     with pytest.raises(SpecialistResultContractError, match="task_kind"):
         validate_specialist_result(

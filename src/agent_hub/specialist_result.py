@@ -51,6 +51,10 @@ def validate_specialist_result(
         raise SpecialistResultContractError("specialist result must be a JSON object")
     if "next_task" not in output:
         return
+    if output.get("status") != "success":
+        raise SpecialistResultContractError(
+            "next_task is only allowed when specialist result status is 'success'"
+        )
 
     value = output["next_task"]
     if not isinstance(value, dict):
