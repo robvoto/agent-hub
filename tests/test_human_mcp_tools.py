@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
 from agent_hub import human_mcp_tools
-from agent_hub.human_mcp_gateway import HumanMCPTool
+from agent_hub.human_mcp_gateway import HumanMCPError, HumanMCPTool
 from agent_hub.human_mcp_tools import make_human_mcp_tools
 
 
@@ -68,3 +70,41 @@ def test_mutating_human_mcp_tool_does_not_execute_after_rejection(monkeypatch):
 
     assert "rejected" in result.lower()
     assert gateway.calls == []
+
+
+def test_browser_setup_tool_stays_approval_gated_even_if_server_marks_read_only(monkeypatch):
+    gateway = _Gateway([_tool("browser_open_session", read_only=True)])
+    monkeypatch.setattr(human_mcp_tools, "interrupt", lambda payload: False)
+    tool = make_human_mcp_tools(gateway)[0]
+
+    result = tool.invoke({"value": "isolated"})
+
+    assert "rejected" in result.lower()
+    assert gateway.calls == []
+    assert "explicit human approval" in tool.description
+
+
+def test_browser_context_failure_becomes_clear_tool_result():
+    class _FailingGateway(_Gateway):
+        def call_browser_tool(self, name, arguments):
+            raise HumanMCPError("No isolated agent-owned browser context is configured.")
+
+    gateway = _FailingGateway([_tool("browser_snapshot", read_only=True)])
+    tool = make_human_mcp_tools(gateway)[0]
+
+    result = tool.invoke({"value": "read"})
+
+    assert "unavailable" in result
+    assert "No isolated agent-owned browser context" in result
+
+
+def test_non_browser_human_mcp_failure_preserves_existing_error_path():
+    class _FailingGateway(_Gateway):
+        def call_tool(self, name, arguments):
+            raise HumanMCPError("document service failed")
+
+    gateway = _FailingGateway([_tool("docs_read_text", read_only=True)])
+    tool = make_human_mcp_tools(gateway)[0]
+
+    with pytest.raises(HumanMCPError, match="document service failed"):
+        tool.invoke({"value": "read"})

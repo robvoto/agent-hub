@@ -43,5 +43,25 @@
   ],
   "connect_timeout_seconds": 30,
   "call_timeout_seconds": 45,
-  "max_result_chars": 30000
+  "max_result_chars": 30000,
+  "browser_context": {
+    "enabled": false,
+    "max_calls_per_task": 12,
+    "auto_prepare_tools": [],
+    "session_tool": "browser_open_session",
+    "tab_tool": "browser_open_tab",
+    "session_open_arguments": {},
+    "tab_open_arguments": {},
+    "session_id_argument": "session_id",
+    "session_id_response_field": "session_id",
+    "tab_id_response_field": "tab_id",
+    "tab_session_id_response_field": "session_id",
+    "isolation_response_field": "isolated",
+    "ownership_response_field": "owner",
+    "ownership_response_value": "agent",
+    "isolation_request_argument": "isolation",
+    "isolation_request_value": "isolated",
+    "ownership_request_argument": "owner",
+    "ownership_request_value": "agent"
+  }
 }

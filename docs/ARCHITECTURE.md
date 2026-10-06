@@ -54,6 +54,18 @@ Tool safety comes from Human MCP's MCP annotations:
   task as `waiting_approval`; `/approve` resumes the same graph checkpoint and
   `/reject` resumes with a rejection without executing the external action.
 
+Browser read-only calls have an additional context precondition. Automatic
+browser research is disabled unless `config/human_mcp.json` explicitly
+configures the session/tab tool schemas, bounded per-task call budget, and
+the arguments and response fields that prove an isolated, agent-owned session
+and a tab attached to that session. The first eligible read-only browser call
+creates that context; later calls reuse it. Direct calls to the session/tab
+setup tools remain approval-gated, including when a server annotates them as
+read-only. Missing setup tools, schema mismatches, failed setup, or missing
+isolation/ownership evidence fail closed without selecting an existing tab.
+Each setup and browser call emits a bounded audit event without logging its
+arguments or page contents.
+
 An explicit operator request for Human MCP or an allowlisted Human MCP tool is
 routed to Hub directly before specialist classification. This prevents browser
 or Google Workspace work from being misrouted to AI Tech Lead.

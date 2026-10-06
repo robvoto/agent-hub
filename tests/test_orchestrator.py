@@ -2514,6 +2514,24 @@ def test_routing_keeps_named_human_mcp_tool_in_hub(monkeypatch):
     assert decision.task_kind is None
 
 
+def test_rough_shopping_request_stays_on_hub_direct_path_without_specialist(monkeypatch):
+    from agent_hub.orchestrator import _classify_routing_request
+
+    class _Config:
+        allowed_tools = frozenset({"browser_snapshot", "browser_open_tab"})
+
+    monkeypatch.setattr("agent_hub.orchestrator.load_human_mcp_config", lambda: _Config())
+
+    decision = _classify_routing_request(
+        "find 7ft leash under 30 delivered here",
+        [],
+        model="test",
+    )
+
+    assert decision.route == "direct"
+    assert decision.task_kind is None
+
+
 def test_parallel_fanout_tool_passes_explicit_branches_to_executor(monkeypatch):
     from agent_hub.orchestrator import _make_parallel_specialist_fanout_tool
 
