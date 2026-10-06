@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 from langchain_core.tools import StructuredTool
@@ -10,13 +11,22 @@ from langgraph.types import interrupt
 from .human_mcp_gateway import HumanMCPError, HumanMCPGateway, HumanMCPTool
 
 
-def make_human_mcp_tools(gateway: HumanMCPGateway | None) -> list[StructuredTool]:
+def make_human_mcp_tools(
+    gateway: HumanMCPGateway | None,
+    *,
+    session_id: str | None = None,
+) -> list[StructuredTool]:
     if gateway is None:
         return []
-    return [_make_tool(gateway, info) for info in gateway.list_tools()]
+    return [_make_tool(gateway, info, session_id=session_id) for info in gateway.list_tools()]
 
 
-def _make_tool(gateway: HumanMCPGateway, info: HumanMCPTool) -> StructuredTool:
+def _make_tool(
+    gateway: HumanMCPGateway,
+    info: HumanMCPTool,
+    *,
+    session_id: str | None,
+) -> StructuredTool:
     def _invoke(**kwargs: Any) -> str:
         if _requires_approval(gateway, info):
             approved = interrupt(
@@ -30,16 +40,13 @@ def _make_tool(gateway: HumanMCPGateway, info: HumanMCPTool) -> StructuredTool:
             )
             if approved is not True:
                 return f"Human rejected Human MCP tool '{info.name}'. No external action was taken."
+        use_isolated_context = _uses_isolated_browser_context(gateway, info)
         try:
-            if info.name.startswith("browser_") and info.read_only and not _is_setup_tool(
-                gateway, info
-            ):
-                return gateway.call_browser_tool(info.name, kwargs)
+            if use_isolated_context:
+                return gateway.call_browser_tool(info.name, kwargs, session_id=session_id)
             return gateway.call_tool(info.name, kwargs)
         except HumanMCPError as exc:
-            if info.name.startswith("browser_") and info.read_only and not _is_setup_tool(
-                gateway, info
-            ):
+            if use_isolated_context:
                 return f"Human MCP tool '{info.name}' is unavailable: {exc}"
             raise
 
@@ -50,7 +57,7 @@ def _make_tool(gateway: HumanMCPGateway, info: HumanMCPTool) -> StructuredTool:
         func=_invoke,
         name=info.name,
         description=description,
-        args_schema=info.input_schema,
+        args_schema=_tool_input_schema(gateway, info),
     )
 
 
@@ -69,3 +76,41 @@ def _is_setup_tool(gateway: HumanMCPGateway, info: HumanMCPTool) -> bool:
         getattr(browser_context, "tab_tool", "browser_open_tab"),
     }
     return info.name in setup_names
+
+
+def _uses_isolated_browser_context(gateway: HumanMCPGateway, info: HumanMCPTool) -> bool:
+    """Select autonomous preparation only for the explicitly configured tools."""
+    if not info.name.startswith("browser_") or not info.read_only:
+        return False
+    if _is_setup_tool(gateway, info):
+        return False
+    config = getattr(gateway, "config", None)
+    browser_context = getattr(config, "browser_context", None)
+    return bool(
+        getattr(browser_context, "enabled", False)
+        and info.name in getattr(browser_context, "auto_prepare_tools", ())
+    )
+
+
+def _tool_input_schema(gateway: HumanMCPGateway, info: HumanMCPTool) -> dict[str, Any]:
+    """Keep MCP-owned context selectors out of autonomous model arguments."""
+    if not _uses_isolated_browser_context(gateway, info):
+        return info.input_schema
+    browser_context = gateway.config.browser_context
+    schema = deepcopy(info.input_schema)
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        properties.pop(browser_context.session_id_argument, None)
+        properties.pop(browser_context.tab_id_argument, None)
+    required = schema.get("required")
+    if isinstance(required, list):
+        schema["required"] = [
+            name
+            for name in required
+            if name
+            not in {
+                browser_context.session_id_argument,
+                browser_context.tab_id_argument,
+            }
+        ]
+    return schema

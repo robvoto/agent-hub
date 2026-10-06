@@ -25,6 +25,7 @@ from agent_hub.knowledge_store import SqliteStore
 from agent_hub.orchestrator import (
     _SYSTEM_PROMPT,
     HubOrchestrator,
+    _build_support_tools,
     _build_system_prompt,
     _dispatch_subprocess,
     _make_agent_tool,
@@ -2635,6 +2636,41 @@ def test_direct_graph_keeps_full_registry_for_fanout_support_tool(monkeypatch):
     orchestrator._build_graph([], include_memory_tools=True)
 
     assert captured["registry"] == ["ai-tech-lead"]
+
+
+def test_human_mcp_tools_bind_to_the_canonical_hub_session(monkeypatch):
+    import agent_hub.orchestrator as orchestrator_module
+
+    captured = {}
+    monkeypatch.setattr(orchestrator_module, "make_shared_docs_tool", lambda registry: "docs")
+    monkeypatch.setattr(
+        orchestrator_module,
+        "get_human_mcp_gateway",
+        lambda: "gateway",
+    )
+    monkeypatch.setattr(
+        orchestrator_module,
+        "make_human_mcp_tools",
+        lambda gateway, *, session_id: captured.update(
+            gateway=gateway, session_id=session_id
+        )
+        or ["browser-tools"],
+    )
+    monkeypatch.setattr(
+        orchestrator_module,
+        "_make_parallel_specialist_fanout_tool",
+        lambda registry, *, session_id: "fanout",
+    )
+
+    assert _build_support_tools(None, [], session_id="canonical-hub-session") == [
+        "docs",
+        "browser-tools",
+        "fanout",
+    ]
+    assert captured == {
+        "gateway": "gateway",
+        "session_id": "canonical-hub-session",
+    }
 
 
 def test_pending_run_disambiguates_by_currently_selected_project(monkeypatch, tmp_path):

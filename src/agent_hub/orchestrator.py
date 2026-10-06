@@ -48,7 +48,11 @@ from .hub_memory import (
     format_learnings_for_prompt,
 )
 from .hub_skills import HubSkillStore, SkillProposalResult
-from .human_mcp_gateway import get_human_mcp_gateway, load_human_mcp_config
+from .human_mcp_gateway import (
+    discard_human_mcp_browser_context,
+    get_human_mcp_gateway,
+    load_human_mcp_config,
+)
 from .human_mcp_tools import make_human_mcp_tools
 from .knowledge_store import get_knowledge_store
 from .learning_mode import get_learning_mode_registry
@@ -1670,7 +1674,7 @@ def _build_support_tools(
     session_id: str,
 ) -> list[Any]:
     tools = [make_shared_docs_tool(registry)]
-    tools.extend(make_human_mcp_tools(get_human_mcp_gateway()))
+    tools.extend(make_human_mcp_tools(get_human_mcp_gateway(), session_id=session_id))
     tools.append(_make_parallel_specialist_fanout_tool(registry, session_id=session_id))
     return tools
 
@@ -1854,8 +1858,10 @@ class HubOrchestrator:
 
     def _rotate_session(self, *, carry_active_work: bool) -> None:
         previous_session_id = self._session_id
+        discard_human_mcp_browser_context(previous_session_id)
         self._session_id = str(uuid.uuid4())
         persist_session_id(self._session_id)
+        self._graph = self._build_graph()
         if carry_active_work:
             human_logger.info(
                 "Started a new hub conversation. Future turns use a fresh LangGraph thread "

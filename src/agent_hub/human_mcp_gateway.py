@@ -49,6 +49,7 @@ class BrowserContextConfig:
     session_open_arguments: dict[str, Any]
     tab_open_arguments: dict[str, Any]
     session_id_argument: str
+    tab_id_argument: str
     session_id_response_field: str
     tab_id_response_field: str
     tab_session_id_response_field: str
@@ -83,6 +84,7 @@ def _disabled_browser_context_config() -> BrowserContextConfig:
         session_open_arguments={},
         tab_open_arguments={},
         session_id_argument="session_id",
+        tab_id_argument="tab_id",
         session_id_response_field="session_id",
         tab_id_response_field="tab_id",
         tab_session_id_response_field="session_id",
@@ -152,6 +154,7 @@ def _load_browser_context_config(
     session_id_argument = str(
         raw.get("session_id_argument", defaults.session_id_argument)
     ).strip()
+    tab_id_argument = str(raw.get("tab_id_argument", "")).strip()
     session_id_response_field = str(
         raw.get("session_id_response_field", defaults.session_id_response_field)
     ).strip()
@@ -175,6 +178,7 @@ def _load_browser_context_config(
     ).strip()
     required_fields = {
         "session_id_argument": session_id_argument,
+        "tab_id_argument": tab_id_argument,
         "session_id_response_field": session_id_response_field,
         "tab_id_response_field": tab_id_response_field,
         "tab_session_id_response_field": tab_session_id_response_field,
@@ -217,6 +221,7 @@ def _load_browser_context_config(
         session_open_arguments=dict(session_args),
         tab_open_arguments=dict(tab_args),
         session_id_argument=session_id_argument,
+        tab_id_argument=tab_id_argument,
         session_id_response_field=session_id_response_field,
         tab_id_response_field=tab_id_response_field,
         tab_session_id_response_field=tab_session_id_response_field,
@@ -295,7 +300,7 @@ class HumanMCPGateway:
         self._stop_event: asyncio.Event | None = None
         self._startup_error: Exception | None = None
         self._closed = False
-        self._browser_context: tuple[str, str] | None = None
+        self._browser_contexts: dict[str, tuple[str, str]] = {}
         self._browser_context_lock = threading.RLock()
         self._browser_call_counts: dict[str, int] = {}
         self._thread.start()
@@ -403,7 +408,13 @@ class HumanMCPGateway:
             timeout=self.config.call_timeout_seconds + 5,
         )
 
-    def call_browser_tool(self, name: str, arguments: dict[str, Any]) -> str:
+    def call_browser_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        session_id: str | None = None,
+    ) -> str:
         """Call a configured read-only browser tool after proving safe context."""
         policy = self.config.browser_context
         if not policy.enabled:
@@ -417,19 +428,28 @@ class HumanMCPGateway:
                 f"Human MCP browser tool '{name}' is not approved for automatic read-only "
                 "context use."
             )
+        if not isinstance(session_id, str) or not session_id.strip():
+            raise HumanMCPError(
+                "Automatic browser research requires the canonical Hub session id; refusing "
+                "to select an unscoped browser context."
+            )
         info = self._tools.get(name)
         if info is None or not info.read_only or info.destructive:
             raise HumanMCPError(
                 f"Human MCP browser tool '{name}' is not a read-only, non-destructive tool."
             )
         try:
-            self.ensure_browser_context()
+            self._validate_browser_binding_schema(info, policy)
+            context = self.ensure_browser_context(session_id)
+            bound_arguments = self._bind_browser_arguments(
+                info, arguments, context, policy
+            )
         except HumanMCPError:
             self._audit_browser("context", name, "failed")
             raise
-        return self._call_browser_tool(name, arguments, phase="browser")
+        return self._call_browser_tool(name, bound_arguments, phase="browser")
 
-    def ensure_browser_context(self) -> tuple[str, str]:
+    def ensure_browser_context(self, hub_session_id: str) -> tuple[str, str]:
         """Create/reuse only a context whose MCP response proves isolation and ownership."""
         policy = self.config.browser_context
         if not policy.enabled:
@@ -437,10 +457,16 @@ class HumanMCPGateway:
                 "No isolated agent-owned browser context is configured; refusing to use an "
                 "existing browser tab."
             )
+        if not isinstance(hub_session_id, str) or not hub_session_id.strip():
+            raise HumanMCPError(
+                "Automatic browser research requires the canonical Hub session id; refusing "
+                "to select an unscoped browser context."
+            )
         with self._browser_context_lock:
-            if self._browser_context is not None:
+            existing = self._browser_contexts.get(hub_session_id)
+            if existing is not None:
                 self._audit_browser("reuse", policy.session_tool, "ok")
-                return self._browser_context
+                return existing
 
             session_tool = self._tools.get(policy.session_tool)
             tab_tool = self._tools.get(policy.tab_tool)
@@ -462,7 +488,7 @@ class HumanMCPGateway:
                 policy.session_tool, session_args, phase="setup"
             )
             session_payload = _parse_json_object(session_result)
-            session_id = _required_response_value(
+            mcp_session_id = _required_response_value(
                 session_payload, policy.session_id_response_field, "session id"
             )
             if _response_value(session_payload, policy.isolation_response_field) is not True:
@@ -478,20 +504,65 @@ class HumanMCPGateway:
                     "refusing to use it or any existing tab."
                 )
 
-            tab_args = _replace_session_id(tab_args_template, session_id)
+            tab_args = _replace_session_id(tab_args_template, mcp_session_id)
             self._validate_setup_arguments(tab_tool, tab_args, policy.tab_tool)
             self._audit_browser("open_tab", policy.tab_tool, "started")
             tab_result = self._call_browser_tool(policy.tab_tool, tab_args, phase="setup")
             tab_payload = _parse_json_object(tab_result)
             tab_id = _required_response_value(tab_payload, policy.tab_id_response_field, "tab id")
-            if _response_value(tab_payload, policy.tab_session_id_response_field) != session_id:
+            if _response_value(tab_payload, policy.tab_session_id_response_field) != mcp_session_id:
                 raise HumanMCPError(
                     "Human MCP did not prove that the new browser tab belongs to the isolated "
                     "agent-owned session; refusing to use it."
                 )
-            self._browser_context = (session_id, tab_id)
+            self._browser_contexts[hub_session_id] = (mcp_session_id, tab_id)
             self._audit_browser("setup", policy.tab_tool, "ok")
-            return self._browser_context
+            return self._browser_contexts[hub_session_id]
+
+    def discard_browser_context(self, session_id: str) -> None:
+        """Drop local autonomous-context state when a Hub session is rotated."""
+        with self._browser_context_lock:
+            removed = self._browser_contexts.pop(session_id, None)
+            if removed is not None:
+                self._audit_browser("discard", self.config.browser_context.tab_tool, "ok")
+
+    def _bind_browser_arguments(
+        self,
+        info: HumanMCPTool,
+        arguments: dict[str, Any],
+        context: tuple[str, str],
+        policy: BrowserContextConfig,
+    ) -> dict[str, Any]:
+        self._validate_browser_binding_schema(info, policy)
+        session_id, tab_id = context
+        bound = dict(arguments)
+        expected = {
+            policy.session_id_argument: session_id,
+            policy.tab_id_argument: tab_id,
+        }
+        for argument, value in expected.items():
+            if argument in bound and bound[argument] != value:
+                raise HumanMCPError(
+                    f"Human MCP browser tool '{info.name}' supplied a context argument for "
+                    "a different session or tab; refusing to cross-bind browser state."
+                )
+            bound[argument] = value
+        return bound
+
+    def _validate_browser_binding_schema(
+        self,
+        info: HumanMCPTool,
+        policy: BrowserContextConfig,
+    ) -> None:
+        properties = info.input_schema.get("properties")
+        if not isinstance(properties, dict) or any(
+            argument not in properties
+            for argument in (policy.session_id_argument, policy.tab_id_argument)
+        ):
+            raise HumanMCPError(
+                f"Human MCP browser tool '{info.name}' cannot prove session/tab binding; "
+                "its schema does not expose both configured context arguments."
+            )
 
     def _call_browser_tool(self, name: str, arguments: dict[str, Any], *, phase: str) -> str:
         run_id = get_current_task_run_id()
@@ -558,6 +629,8 @@ class HumanMCPGateway:
         if self._closed:
             return
         self._closed = True
+        with self._browser_context_lock:
+            self._browser_contexts.clear()
         if self._loop is not None and self._stop_event is not None:
             self._loop.call_soon_threadsafe(self._stop_event.set)
         self._thread.join(timeout=5)
@@ -645,6 +718,14 @@ def _truncate_result(value: str, limit: int) -> str:
 
 _gateway: HumanMCPGateway | None = None
 _gateway_lock = threading.Lock()
+
+
+def discard_human_mcp_browser_context(session_id: str) -> None:
+    """Discard context state only when an already-running gateway owns it."""
+    with _gateway_lock:
+        gateway = _gateway
+    if gateway is not None:
+        gateway.discard_browser_context(session_id)
 
 
 def get_human_mcp_gateway() -> HumanMCPGateway | None:

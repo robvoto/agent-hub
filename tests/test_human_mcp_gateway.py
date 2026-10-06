@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from dataclasses import replace
 
 import pytest
 
@@ -124,6 +125,7 @@ def _browser_context_config(tmp_path, *, max_calls_per_task=12):
                         "session_id": "$session_id",
                         "url": "about:blank",
                     },
+                    "tab_id_argument": "tab_id",
                 },
             }
         ),
@@ -168,14 +170,17 @@ def _browser_gateway(tmp_path, responses=None, *, max_calls_per_task=12):
         "browser_snapshot": HumanMCPTool(
             name="browser_snapshot",
             description="read page",
-            input_schema={"type": "object", "properties": {}},
+            input_schema={
+                "type": "object",
+                "properties": {"session_id": {}, "tab_id": {}},
+            },
             read_only=True,
             destructive=False,
             idempotent=True,
             open_world=True,
         ),
     }
-    gateway._browser_context = None
+    gateway._browser_contexts = {}
     gateway._browser_context_lock = threading.RLock()
     gateway._browser_call_counts = {}
     calls = []
@@ -190,6 +195,8 @@ def _browser_gateway(tmp_path, responses=None, *, max_calls_per_task=12):
     def call_tool(name, arguments):
         calls.append((name, arguments))
         result = results[name]
+        if callable(result):
+            result = result(arguments)
         if isinstance(result, Exception):
             raise result
         return result
@@ -202,7 +209,7 @@ def test_browser_snapshot_missing_tab_prepares_isolated_context(tmp_path, caplog
     caplog.set_level(logging.INFO)
     gateway, calls = _browser_gateway(tmp_path)
 
-    assert gateway.call_browser_tool("browser_snapshot", {}) == "snapshot"
+    assert gateway.call_browser_tool("browser_snapshot", {}, session_id="hub-a") == "snapshot"
     assert [name for name, _ in calls] == [
         "browser_open_session",
         "browser_open_tab",
@@ -216,8 +223,8 @@ def test_browser_snapshot_missing_tab_prepares_isolated_context(tmp_path, caplog
 def test_browser_context_reuses_isolated_session_and_tab(tmp_path):
     gateway, calls = _browser_gateway(tmp_path)
 
-    gateway.call_browser_tool("browser_snapshot", {})
-    gateway.call_browser_tool("browser_snapshot", {})
+    gateway.call_browser_tool("browser_snapshot", {}, session_id="hub-a")
+    gateway.call_browser_tool("browser_snapshot", {}, session_id="hub-a")
 
     assert [name for name, _ in calls] == [
         "browser_open_session",
@@ -225,6 +232,96 @@ def test_browser_context_reuses_isolated_session_and_tab(tmp_path):
         "browser_snapshot",
         "browser_snapshot",
     ]
+
+
+def test_browser_context_is_scoped_to_hub_session_and_binds_follow_up_calls(tmp_path):
+    mcp_session_ids = iter(("mcp-a", "mcp-b"))
+    current_session = {"value": None}
+
+    def open_session(_arguments):
+        current_session["value"] = next(mcp_session_ids)
+        return json.dumps(
+            {
+                "session_id": current_session["value"],
+                "isolated": True,
+                "owner": "agent",
+            }
+        )
+
+    gateway, calls = _browser_gateway(
+        tmp_path,
+        responses={
+            "browser_open_session": open_session,
+            "browser_open_tab": lambda _arguments: json.dumps(
+                {
+                    "tab_id": f"tab-{current_session['value']}",
+                    "session_id": current_session["value"],
+                }
+            ),
+            "browser_snapshot": "snapshot",
+        },
+    )
+
+    gateway.call_browser_tool("browser_snapshot", {}, session_id="hub-a")
+    gateway.call_browser_tool("browser_snapshot", {}, session_id="hub-b")
+    gateway.call_browser_tool("browser_snapshot", {}, session_id="hub-a")
+
+    assert gateway._browser_contexts == {
+        "hub-a": ("mcp-a", "tab-mcp-a"),
+        "hub-b": ("mcp-b", "tab-mcp-b"),
+    }
+    assert calls[-1] == (
+        "browser_snapshot",
+        {"session_id": "mcp-a", "tab_id": "tab-mcp-a"},
+    )
+
+
+def test_browser_context_discard_requires_new_context_for_rotated_session(tmp_path):
+    gateway, calls = _browser_gateway(tmp_path)
+
+    gateway.call_browser_tool("browser_snapshot", {}, session_id="hub-a")
+    gateway.discard_browser_context("hub-a")
+    gateway.call_browser_tool("browser_snapshot", {}, session_id="hub-a")
+
+    assert [name for name, _ in calls] == [
+        "browser_open_session",
+        "browser_open_tab",
+        "browser_snapshot",
+        "browser_open_session",
+        "browser_open_tab",
+        "browser_snapshot",
+    ]
+
+
+def test_unapproved_auto_snapshot_without_context_never_uses_an_existing_tab(tmp_path):
+    gateway, calls = _browser_gateway(tmp_path)
+    gateway.config = replace(
+        gateway.config,
+        browser_context=replace(
+            gateway.config.browser_context,
+            enabled=False,
+            max_calls_per_task=0,
+            auto_prepare_tools=frozenset(),
+        ),
+    )
+
+    with pytest.raises(HumanMCPError, match="no existing browser tab was used"):
+        gateway.call_browser_tool("browser_snapshot", {}, session_id="hub-a")
+
+    assert calls == []
+
+
+def test_browser_context_fails_closed_when_follow_up_schema_cannot_bind_context(tmp_path):
+    gateway, calls = _browser_gateway(tmp_path)
+    gateway._tools["browser_snapshot"] = replace(
+        gateway._tools["browser_snapshot"],
+        input_schema={"type": "object", "properties": {}},
+    )
+
+    with pytest.raises(HumanMCPError, match="cannot prove session/tab binding"):
+        gateway.call_browser_tool("browser_snapshot", {}, session_id="hub-a")
+
+    assert calls == []
 
 
 def test_browser_context_fails_closed_without_isolation_evidence(tmp_path):
@@ -238,7 +335,7 @@ def test_browser_context_fails_closed_without_isolation_evidence(tmp_path):
     )
 
     with pytest.raises(HumanMCPError, match="did not prove.*isolated"):
-        gateway.call_browser_tool("browser_snapshot", {})
+        gateway.call_browser_tool("browser_snapshot", {}, session_id="hub-a")
 
 
 def test_browser_context_failure_does_not_retry_or_use_existing_tab(tmp_path):
@@ -252,9 +349,9 @@ def test_browser_context_failure_does_not_retry_or_use_existing_tab(tmp_path):
     )
 
     with pytest.raises(HumanMCPError, match="MCP setup failed"):
-        gateway.call_browser_tool("browser_snapshot", {})
+        gateway.call_browser_tool("browser_snapshot", {}, session_id="hub-a")
     assert [name for name, _ in calls] == ["browser_open_session"]
-    assert gateway._browser_context is None
+    assert gateway._browser_contexts == {}
 
 
 def test_browser_context_enforces_per_task_call_bound(tmp_path):
@@ -263,9 +360,9 @@ def test_browser_context_enforces_per_task_call_bound(tmp_path):
     gateway, _ = _browser_gateway(tmp_path, max_calls_per_task=3)
 
     with active_task_run("run-059"):
-        gateway.call_browser_tool("browser_snapshot", {})
+        gateway.call_browser_tool("browser_snapshot", {}, session_id="hub-a")
         with pytest.raises(HumanMCPError, match="call limit"):
-            gateway.call_browser_tool("browser_snapshot", {})
+            gateway.call_browser_tool("browser_snapshot", {}, session_id="hub-a")
 
 
 def test_enabled_browser_context_requires_explicit_isolation_arguments(tmp_path):
@@ -281,6 +378,7 @@ def test_enabled_browser_context_requires_explicit_isolation_arguments(tmp_path)
                     "auto_prepare_tools": ["browser_snapshot"],
                     "session_open_arguments": {},
                     "tab_open_arguments": {"session_id": "$session_id"},
+                    "tab_id_argument": "tab_id",
                 },
             }
         ),
