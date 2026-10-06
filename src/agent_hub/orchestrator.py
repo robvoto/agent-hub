@@ -3346,6 +3346,10 @@ class HubOrchestrator:
                 thread_id=thread_id,
                 action="invoke",
             )
+        if output.get("status") == "success" and "next_task" not in output:
+            raise HandoffEvidenceError(
+                "the originating Factory revision returned success without a fresh next_task"
+            )
         return self._finalize_specialist_follow_up(pending.id, spec, output)
 
     def _approve_handoff(

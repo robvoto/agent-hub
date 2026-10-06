@@ -295,6 +295,33 @@ def test_natural_language_request_changes_reenters_originating_factory_thread(mo
     assert pending.context["hub_transition_decision"]["decision"] == "waiting"
 
 
+def test_revision_success_without_fresh_next_task_fails_closed(monkeypatch):
+    orch = _natural_language_orchestrator(monkeypatch)
+    orch.invoke("Find me a 7-foot surf leash under $30 delivered to my house.")
+    pending = orch.pending_run()
+    assert pending is not None
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "_dispatch_factory_brain",
+        lambda *_args, **_kwargs: {
+            "status": "success",
+            "summary": "Factory revised the design but omitted continuation.",
+        },
+    )
+    reply = orch.provide_decision(
+        "request_changes",
+        "Please make delivery-to-home explicit.",
+    )
+
+    assert "fresh next_task" in reply
+    failed = get_task_run_store().get_run(pending.id)
+    assert failed is not None
+    assert failed.state == TASK_STATE_FAILED
+    assert failed.error_message is not None
+    assert "fresh next_task" in failed.error_message
+
+
 def test_valid_next_task_becomes_persisted_hub_transition(monkeypatch):
     seen = {}
 
