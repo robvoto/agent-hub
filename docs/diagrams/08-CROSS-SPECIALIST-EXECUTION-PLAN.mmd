@@ -12,7 +12,7 @@ flowchart TD
     Parent["Originating Factory/design parent run<br/>WAITING_DECISION"]
     Child["New Hub-owned implementation child run<br/>handoff_parent_run_id · depth = 1"]
     Dispatch["Dispatch child exactly once<br/>normal universal task envelope<br/>frozen task, project, references, specialist"]
-    Request([REQUEST CHANGES<br/>parent remains paused<br/>persist correction for originating workflow])
+    Request([REQUEST CHANGES<br/>return correction through existing Factory thread<br/>fresh review required])
     Reject([REJECT<br/>dispatch nothing<br/>cancel continuation + reason])
     SpecialistDecision["Specialist-owned pending_decision<br/>continues existing same-specialist path"]
     Result([Implementation result<br/>Hub continues or completes])
@@ -29,6 +29,7 @@ flowchart TD
     Approve -->|multiple eligible| Choose --> Child
     Dispatch --> Result
     Dispatch -.-> SpecialistDecision
+    Request -.-> Parent
 
     classDef hub fill:#eef6ff,stroke:#2b6cb0,stroke-width:2px,color:#0f172a;
     classDef deterministic fill:#eefbf3,stroke:#2f855a,stroke-width:2px,color:#1f2937;

@@ -2036,7 +2036,17 @@ class HubOrchestrator:
             return None, "A task ID is required."
         candidates: list[TaskRun] = []
         for run in get_task_run_store().list_runs():
-            if not (is_active_state(run.state) or is_paused_state(run.state)):
+            resumable = is_active_state(run.state) or is_paused_state(run.state)
+            sequential_child = run.context.get("handoff_child_run_id")
+            child = (
+                get_task_run_store().get_run(sequential_child)
+                if isinstance(sequential_child, str)
+                else None
+            )
+            has_active_sequential_child = child is not None and (
+                is_active_state(child.state) or is_paused_state(child.state)
+            )
+            if not resumable and not has_active_sequential_child:
                 continue
             backlog_reference = run.context.get("agent_dispatch_backlog_reference") or {}
             backlog_id = str(backlog_reference.get("item_id") or "")
@@ -2402,6 +2412,7 @@ class HubOrchestrator:
         project_key = run.context.get("target_project") or DEFAULT_PROJECT_KEY
 
         child_ids = run.context.get("fanout_child_ids")
+        handoff_child_id = run.context.get("handoff_child_run_id")
         agent_id = run.selected_agent_id or (
             "hub-fanout" if isinstance(child_ids, list) and child_ids else "unknown-agent"
         )
@@ -2423,10 +2434,40 @@ class HubOrchestrator:
                         cancellation_reason=reason,
                         raw_result={"status": "cancelled", "summary": reason},
                     )
-        confirmation = f"Stopped run {run.id} for agent '{agent_id}'. State is now cancelled."
+        sequential_children = []
+        sequential_child_seen = False
+        if isinstance(handoff_child_id, str) and handoff_child_id:
+            child = store.get_run(handoff_child_id)
+            sequential_child_seen = child is not None
+            if child is not None and not is_terminal_state(child.state):
+                sequential_children.append(child)
+                get_task_control_registry().request_cancel(child.id, reason)
+                current_child = store.get_run(child.id)
+                if current_child is not None and not is_terminal_state(current_child.state):
+                    store.transition(
+                        current_child.id,
+                        TASK_STATE_CANCELLED,
+                        detail=f"Parent handoff task was cancelled: {reason}",
+                        selected_agent_id=current_child.selected_agent_id,
+                        final_response=f"Cancelled because parent run {run.id[:8]} was stopped.",
+                        cancellation_reason=reason,
+                        raw_result={"status": "cancelled", "summary": reason},
+                    )
+        if is_terminal_state(run.state) and sequential_children:
+            confirmation = (
+                f"Stopped sequential handoff child {sequential_children[0].id} for parent "
+                f"run {run.id}. Parent state remains {run.state}."
+            )
+        else:
+            confirmation = f"Stopped run {run.id} for agent '{agent_id}'. State is now cancelled."
         if fanout_children:
             confirmation += (
                 f" Cancellation requested for {fanout_children} fan-out child task(s)."
+            )
+        if sequential_children:
+            confirmation += (
+                f" Cancellation requested for sequential handoff child "
+                f"{sequential_children[0].id[:8]}."
             )
         _human_task_log(
             run.id,
@@ -2448,6 +2489,28 @@ class HubOrchestrator:
                 raw_result={"status": "cancelled", "summary": reason},
             )
             _human_task_log(run.id, "Hub marked the task as cancelled.")
+        if isinstance(run.context.get("handoff_parent_run_id"), str):
+            parent = store.get_run(run.context["handoff_parent_run_id"])
+            if parent is not None:
+                store.update_run(
+                    parent.id,
+                    context_updates={
+                        "handoff_child_status": "cancelled",
+                        "handoff_cancellation_reason": reason,
+                    },
+                )
+        elif sequential_children or (
+            is_terminal_state(run.state)
+            and isinstance(handoff_child_id, str)
+            and sequential_child_seen
+        ):
+            store.update_run(
+                run.id,
+                context_updates={
+                    "handoff_child_status": "cancelled",
+                    "handoff_cancellation_reason": reason,
+                },
+            )
         if handle is not None:
             handle.mark_stop_reply_sent()
         return confirmation
@@ -3189,6 +3252,11 @@ class HubOrchestrator:
         stored_decision["decision"] = normalized
         stored_decision["decision_text"] = text
         if normalized == "request_changes":
+            if not text.strip():
+                return (
+                    "Please describe the change you want the originating design workflow "
+                    "to make."
+                )
             stored_decision["decision"] = "revision_requested"
             stored_decision["revision_status"] = "waiting_for_originating_design_workflow"
             stored_decision["requested_correction"] = text
@@ -3209,7 +3277,12 @@ class HubOrchestrator:
                 },
                 raw_result={"status": "request_changes", "summary": text},
             )
-            return store.get_run(pending.id).final_response or "Changes requested."
+            try:
+                return self._return_handoff_for_revision(pending, text, progress_notify)
+            except TaskCancelled:
+                raise
+            except Exception as exc:
+                return self._handoff_failure(pending, exc)
 
         store.transition(
             pending.id,
@@ -3227,6 +3300,53 @@ class HubOrchestrator:
             store.get_run(pending.id).final_response
             or "Proposed implementation handoff rejected."
         )
+
+    def _return_handoff_for_revision(
+        self,
+        pending: TaskRun,
+        correction: str,
+        progress_notify: Any | None,
+    ) -> str:
+        """Re-enter the originating Factory thread with the human's correction."""
+        spec = self._require_spec(pending)
+        if spec.runtime.get("mode") != "factory_brain":
+            raise HandoffEvidenceError(
+                "the originating design workflow does not expose the Hub Factory continuation"
+            )
+        thread_id = pending.context.get("agent_thread_id")
+        if not isinstance(thread_id, str) or not thread_id:
+            raise HandoffEvidenceError(
+                "the originating Factory workflow has no resumable thread checkpoint"
+            )
+
+        store = get_task_run_store()
+        store.transition(
+            pending.id,
+            TASK_STATE_ROUTED,
+            detail="Returning the requested handoff correction to the originating design workflow.",
+            selected_agent_id=spec.id,
+            dispatched_task=correction,
+            context_updates={
+                "handoff_revision_status": "returned_to_originating_design_workflow",
+                "handoff_requested_correction": correction,
+            },
+        )
+        _human_task_log(
+            pending.id,
+            "Returning the requested handoff correction to %s for revision.",
+            spec.name,
+        )
+        with (
+            _registered_resumed_run(pending.id),
+            active_task_run(pending.id, progress_callback=progress_notify),
+        ):
+            output = _dispatch_factory_brain(
+                spec,
+                correction,
+                thread_id=thread_id,
+                action="invoke",
+            )
+        return self._finalize_specialist_follow_up(pending.id, spec, output)
 
     def _approve_handoff(
         self,
@@ -3337,26 +3457,30 @@ class HubOrchestrator:
                     "Approved implementation child run was cancelled. No further handoff "
                     "dispatch occurred."
                 )
-                store.transition(
-                    child.id,
-                    TASK_STATE_CANCELLED,
-                    detail=cancellation_message,
-                    final_response=cancellation_message,
-                    cancellation_reason="Stopped by user",
-                    raw_result={"status": "cancelled", "summary": "Stopped by user"},
-                )
+                current_child = store.get_run(child.id)
+                if current_child is not None and not is_terminal_state(current_child.state):
+                    store.transition(
+                        child.id,
+                        TASK_STATE_CANCELLED,
+                        detail=cancellation_message,
+                        final_response=cancellation_message,
+                        cancellation_reason="Stopped by user",
+                        raw_result={"status": "cancelled", "summary": "Stopped by user"},
+                    )
                 store.update_run(pending.id, final_response=cancellation_message)
                 raise
             except Exception as exc:
                 failure_message = f"[Hub] Follow-on implementation child failed: {exc}"
-                store.transition(
-                    child.id,
-                    TASK_STATE_FAILED,
-                    detail=f"Implementation child run failed: {exc}",
-                    final_response=failure_message,
-                    error_message=str(exc),
-                    raw_result={"status": "failed", "summary": str(exc)},
-                )
+                current_child = store.get_run(child.id)
+                if current_child is not None and not is_terminal_state(current_child.state):
+                    store.transition(
+                        child.id,
+                        TASK_STATE_FAILED,
+                        detail=f"Implementation child run failed: {exc}",
+                        final_response=failure_message,
+                        error_message=str(exc),
+                        raw_result={"status": "failed", "summary": str(exc)},
+                    )
                 store.update_run(pending.id, final_response=failure_message)
                 return failure_message
         reply = self._finalize_specialist_follow_up(child.id, spec, output)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from dataclasses import replace
 
 import pytest
@@ -12,6 +14,7 @@ from agent_hub.handoff_transition import HandoffFidelityReviewer
 from agent_hub.orchestrator import HubOrchestrator, RoutingDecision
 from agent_hub.project_context import ProjectContext, ProjectContextResolution
 from agent_hub.registry import AgentSpec
+from agent_hub.task_control import TaskCancelled, get_task_control_registry
 from agent_hub.task_runs import (
     TASK_STATE_CANCELLED,
     TASK_STATE_DISPATCHED,
@@ -179,6 +182,7 @@ class _NaturalLanguageFactoryGraph:
         store.transition(run_id, TASK_STATE_ROUTED, selected_agent_id="factory-brain")
         store.transition(run_id, TASK_STATE_DISPATCHED, selected_agent_id="factory-brain")
         store.transition(run_id, TASK_STATE_IN_PROGRESS, selected_agent_id="factory-brain")
+        store.update_run(run_id, context_updates={"agent_thread_id": "fixture-factory-thread"})
         store.update_run(
             run_id,
             raw_result={
@@ -207,8 +211,8 @@ def test_default_handoff_reviewer_uses_dedicated_runtime_model(monkeypatch):
     assert orch._handoff_reviewer.model == "handoff-review-model"
 
 
-def test_natural_language_shopping_request_reaches_realistic_approval_surface(monkeypatch):
-    orch = _orchestrator(
+def _natural_language_orchestrator(monkeypatch):
+    return _orchestrator(
         monkeypatch,
         HandoffFidelityReviewer(review_callable=lambda _payload: REVIEW_SUPPORTED),
         specs=[
@@ -223,6 +227,9 @@ def test_natural_language_shopping_request_reaches_realistic_approval_surface(mo
         graph=_NaturalLanguageFactoryGraph(),
     )
 
+
+def test_natural_language_shopping_request_reaches_realistic_approval_surface(monkeypatch):
+    orch = _natural_language_orchestrator(monkeypatch)
     reply = orch.invoke("Find me a 7-foot surf leash under $30 delivered to my house.")
 
     assert "Proposed implementation handoff" in reply
@@ -248,6 +255,44 @@ def test_natural_language_shopping_request_reaches_realistic_approval_surface(mo
     assert child is not None
     assert child.context["handoff_parent_run_id"] == parent.id
     assert parent.id != child.id
+
+
+def test_natural_language_request_changes_reenters_originating_factory_thread(monkeypatch):
+    orch = _natural_language_orchestrator(monkeypatch)
+    orch.invoke("Find me a 7-foot surf leash under $30 delivered to my house.")
+
+    calls = []
+
+    def revise(spec, task, **kwargs):
+        calls.append((spec.id, task, kwargs, orchestrator_module.get_current_task_run_id()))
+        return {
+            "status": "success",
+            "summary": "Factory revised the design.",
+            "next_task": NEXT_TASK,
+        }
+
+    monkeypatch.setattr(orchestrator_module, "_dispatch_factory_brain", revise)
+    reply = orch.provide_decision(
+        "request_changes",
+        "Please keep the leash under $30 and make delivery-to-home explicit.",
+    )
+
+    assert "Proposed implementation handoff" in reply
+    assert calls == [
+        (
+            "factory-brain",
+            "Please keep the leash under $30 and make delivery-to-home explicit.",
+            {"thread_id": "fixture-factory-thread", "action": "invoke"},
+            orch.pending_run().id,
+        )
+    ]
+    pending = orch.pending_run()
+    assert pending is not None
+    assert pending.state == TASK_STATE_WAITING_DECISION
+    assert pending.context["handoff_requested_correction"] == (
+        "Please keep the leash under $30 and make delivery-to-home explicit."
+    )
+    assert pending.context["hub_transition_decision"]["decision"] == "waiting"
 
 
 def test_valid_next_task_becomes_persisted_hub_transition(monkeypatch):
@@ -464,24 +509,6 @@ def test_approve_dispatches_frozen_task_once_and_request_changes_reject_do_not(m
     assert child.state == TASK_STATE_SUCCEEDED
     assert child.context["handoff_parent_run_id"] == parent.id
 
-    second = _paused_origin(orch)
-    assert second is not None
-    with active_task_run(second.id):
-        orch._prepare_handoff_transition(
-            second,
-            {"status": "success", "next_task": NEXT_TASK, "approved_design_evidence": EVIDENCE},
-        )
-    assert "Human requested changes" in orch.provide_decision("request_changes", "Fix the scope")
-    second_record = get_task_run_store().get_run(second.id)
-    assert second_record is not None
-    assert second_record.state == TASK_STATE_WAITING_DECISION
-    assert (
-        second_record.context["hub_transition_decision"]["decision"]
-        == "revision_requested"
-    )
-    assert second_record.context["handoff_requested_correction"] == "Fix the scope"
-    assert "revised handoff" in orch.approve_pending().lower()
-
     third = _paused_origin(orch)
     assert third is not None
     with active_task_run(third.id):
@@ -492,6 +519,60 @@ def test_approve_dispatches_frozen_task_once_and_request_changes_reject_do_not(m
     assert "rejected" in orch.provide_decision("reject", "Not approved").lower()
     assert get_task_run_store().get_run(third.id).state == TASK_STATE_CANCELLED
     assert len(calls) == 1
+
+
+def test_stopping_handoff_parent_cancels_active_sequential_child(monkeypatch):
+    orch = _orchestrator(
+        monkeypatch,
+        HandoffFidelityReviewer(review_callable=lambda _payload: REVIEW_SUPPORTED),
+    )
+    run = _paused_origin(orch)
+    assert run is not None
+    with active_task_run(run.id):
+        orch._prepare_handoff_transition(
+            run,
+            {"status": "success", "next_task": NEXT_TASK, "approved_design_evidence": EVIDENCE},
+        )
+
+    child_started = threading.Event()
+
+    def dispatch(*_args, **_kwargs):
+        child_id = orchestrator_module.get_current_task_run_id()
+        assert child_id is not None
+        child_started.set()
+        while True:
+            handle = get_task_control_registry().get_handle(child_id)
+            if handle is not None and handle.cancel_requested:
+                raise TaskCancelled(handle.cancellation_reason or "Stopped by user")
+            time.sleep(0.01)
+
+    monkeypatch.setattr(orchestrator_module, "_dispatch_subprocess", dispatch)
+    result = {}
+
+    def approve():
+        try:
+            result["reply"] = orch.approve_pending()
+        except TaskCancelled:
+            result["cancelled"] = True
+
+    worker = threading.Thread(target=approve)
+    worker.start()
+    assert child_started.wait(timeout=2)
+
+    confirmation = orch.stop_current_task(identifier=run.id)
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert "sequential handoff child" in confirmation
+    parent = get_task_run_store().get_run(run.id)
+    assert parent is not None
+    assert parent.state == TASK_STATE_SUCCEEDED
+    child_id = parent.context["handoff_child_run_id"]
+    child = get_task_run_store().get_run(child_id)
+    assert child is not None
+    assert child.state == TASK_STATE_CANCELLED
+    assert parent.context["handoff_child_status"] == "cancelled"
+    assert result["cancelled"] is True
 
 
 @pytest.mark.parametrize(

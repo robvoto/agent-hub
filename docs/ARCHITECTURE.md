@@ -141,15 +141,18 @@ from `specialist_pending_decision`. Its packet freezes the exact task, reference
 specialist snapshot, approved constraints and review findings. `/approve` closes the originating
 Factory/design parent successfully and creates a distinct Hub-owned implementation child run with
 an explicit `handoff_parent_run_id`; only that child is dispatched. With multiple eligible
-specialists the operator must name one exact eligible id. `REQUEST CHANGES` dispatches nothing:
-the originating parent remains in `waiting_decision`, persists `revision_requested` and the exact
-correction, and waits for the originating design workflow to provide a revised handoff. It does
-not claim to invoke Factory. `REJECT` cancels the proposed continuation. Immediately before
-approval dispatch, Hub revalidates the live specialist contract/fingerprint and the exact frozen
-project context; any change invalidates the checkpoint. Approval is bound to a fingerprint of the
-frozen packet, and cross-specialist follow-on depth is limited to one. Phase 2 uses
-deterministic/test fixture entry paths while Factory Brain runtime emission of `next_task` remains
-later work.
+specialists the operator must name one exact eligible id. `REQUEST CHANGES` returns the exact
+natural-language correction through the existing originating Factory Brain thread continuation;
+the same parent run re-enters the design workflow and must produce a fresh reviewed handoff before
+implementation can be approved. If the originating workflow has no resumable Factory checkpoint,
+Hub fails clearly rather than parking the request or guessing a replacement path. `REJECT` cancels
+the proposed continuation. Immediately before approval dispatch, Hub revalidates the live
+specialist contract/fingerprint and the exact frozen project context; any change invalidates the
+checkpoint. Approval is bound to a fingerprint of the frozen packet, and cross-specialist
+follow-on depth is limited to one. A sequential implementation child is cancellable through its
+parent workflow as well as directly; stopping either path persists cancellation and suppresses
+late completion. Phase 2 uses deterministic/test fixture entry paths while Factory Brain runtime
+emission of `next_task` remains later work.
 
 ## Project context
 
