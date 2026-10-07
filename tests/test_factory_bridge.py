@@ -5,7 +5,12 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+import agent_hub.orchestrator as orchestrator_module
 from agent_hub import factory_bridge
+from agent_hub.orchestrator import _dispatch_factory_brain
+from agent_hub.registry import AgentSpec
 from agent_hub.task_runs import active_task_run, get_task_run_store
 
 
@@ -56,7 +61,22 @@ class _FakeProcess:
         self.returncode = 0
         self.pid = 12345
         output_file.write_text(
-            json.dumps({"response": "Factory result", "interrupted": False}),
+            json.dumps(
+                {
+                    "response": "Factory result",
+                    "interrupted": False,
+                    "status": "success",
+                    "summary": "Factory result",
+                    "next_task": {
+                        "task_kind": "coding_task",
+                        "task": "Implement the staged package.",
+                        "references": [
+                            "staging/agents/example-agent/BUILD_TASK.json",
+                        ],
+                    },
+                    "artifact_reference": "staging/agents/example-agent/BUILD_TASK.json",
+                }
+            ),
             encoding="utf-8",
         )
 
@@ -102,7 +122,14 @@ def test_factory_bridge_streams_progress_and_preserves_final_result(monkeypatch)
             ],
         )
 
-    assert result == {"response": "Factory result", "interrupted": False}
+    assert result["response"] == "Factory result"
+    assert result["interrupted"] is False
+    assert result["status"] == "success"
+    assert result["summary"] == "Factory result"
+    assert result["next_task"]["task_kind"] == "coding_task"
+    assert result["artifact_reference"] == (
+        "staging/agents/example-agent/BUILD_TASK.json"
+    )
     assert captured_payload["run_id"] == run.id
     assert captured_payload["request_id"]
     assert captured_payload["action"] == "invoke"
@@ -126,3 +153,94 @@ def test_factory_bridge_streams_progress_and_preserves_final_result(monkeypatch)
     ]
     # Hub intentionally does not notify the terminal progress event separately;
     # the unchanged final result is returned through the existing bridge contract.
+
+
+@pytest.mark.parametrize("action", ["resume", "reject"])
+def test_factory_bridge_resume_and_reject_preserve_structured_result(monkeypatch, action):
+    captured_payload: dict[str, Any] = {}
+
+    def fake_popen(command: list[str], **kwargs: Any) -> _FakeProcess:
+        input_file = Path(command[-2])
+        captured_payload.update(json.loads(input_file.read_text(encoding="utf-8")))
+        return _FakeProcess(command, **kwargs)
+
+    monkeypatch.setattr(factory_bridge.subprocess, "Popen", fake_popen)
+    store = get_task_run_store()
+    run = store.create_run(session_id="telegram:42", user_message="Create an agent")
+    with active_task_run(run.id):
+        if action == "resume":
+            result = factory_bridge.resume_factory_request(
+                working_directory="/tmp/agent-factory",
+                thread_id="hub-factory-thread-1",
+            )
+        else:
+            result = factory_bridge.reject_factory_request(
+                working_directory="/tmp/agent-factory",
+                thread_id="hub-factory-thread-1",
+                reason="Not approved",
+            )
+
+    assert captured_payload["action"] == action
+    assert result["status"] == "success"
+    assert result["summary"] == "Factory result"
+    assert result["next_task"]["task_kind"] == "coding_task"
+    assert result["artifact_reference"].endswith("/BUILD_TASK.json")
+
+
+@pytest.mark.parametrize(
+    ("factory_status", "interrupted", "hub_status"),
+    [("success", False, "success"), ("waiting_approval", True, "approval_required")],
+)
+def test_factory_dispatch_stores_structured_result_and_maps_interruption(
+    monkeypatch, factory_status, interrupted, hub_status
+):
+    spec = AgentSpec(
+        id="agent-factory",
+        name="Agent Factory",
+        purpose="Design and govern specialist packages.",
+        runtime={
+            "mode": "factory_brain",
+            "working_directory": "/tmp/agent-factory",
+        },
+    )
+    structured = {
+        "status": factory_status,
+        "summary": "Factory summary",
+    }
+    if factory_status == "success":
+        structured.update(
+            {
+                "next_task": {
+                    "task_kind": "coding_task",
+                    "task": "Implement the package.",
+                    "references": ["staging/agents/example-agent/BUILD_TASK.json"],
+                },
+                "artifact_reference": "staging/agents/example-agent/BUILD_TASK.json",
+            }
+        )
+    monkeypatch.setattr(
+        orchestrator_module,
+        "invoke_factory_request",
+        lambda **_kwargs: {"response": "Factory summary", "interrupted": interrupted, **structured},
+    )
+    monkeypatch.setattr(
+        orchestrator_module,
+        "get_manifest_cache",
+        lambda: type("Cache", (), {"get_or_refresh": lambda self, _spec: None})(),
+    )
+    store = get_task_run_store()
+    run = store.create_run(session_id="telegram:42", user_message="Create an agent")
+    with active_task_run(run.id):
+        output = _dispatch_factory_brain(spec, "Create an agent", thread_id="factory-thread")
+
+    assert output["status"] == hub_status
+    assert output["summary"] == "Factory summary"
+    assert output["factory_result"]["status"] == factory_status
+    recorded = store.get_run(run.id)
+    assert recorded is not None
+    assert recorded.raw_result["status"] == hub_status
+    if factory_status == "success":
+        assert recorded.raw_result["next_task"] == structured["next_task"]
+        assert recorded.raw_result["artifact_reference"] == structured["artifact_reference"]
+    else:
+        assert recorded.state == "waiting_approval"

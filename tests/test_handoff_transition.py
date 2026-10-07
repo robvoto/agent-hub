@@ -10,7 +10,12 @@ import pytest
 from langchain_core.messages import AIMessage
 
 import agent_hub.orchestrator as orchestrator_module
-from agent_hub.handoff_transition import HandoffFidelityReviewer
+from agent_hub.handoff_transition import (
+    FactoryHandoffEvidenceResolver,
+    HandoffEvidenceError,
+    HandoffFidelityReviewer,
+    NextTaskContract,
+)
 from agent_hub.orchestrator import HubOrchestrator, RoutingDecision
 from agent_hub.project_context import ProjectContext, ProjectContextResolution
 from agent_hub.registry import AgentSpec
@@ -55,6 +60,74 @@ EVIDENCE = {
     "acceptance_criteria": ["Package tests pass", "No unapproved files change"],
     "stop_conditions": ["Stop on permission mismatch", "Stop on missing evidence"],
 }
+
+FACTORY_THREAD = "hub-factory-thread"
+FACTORY_ROOT_CONTEXT = ProjectContext(
+    project_id="https://example.invalid/agent-factory.git",
+    root="/tmp/agent-factory",
+    contract_version=1,
+    fingerprint="factory-fingerprint",
+    metadata={"name": "agent-factory"},
+)
+
+
+def _factory_resolution(next_task=None, *, thread_id=FACTORY_THREAD, correlation_id="corr-1"):
+    next_task = next_task or {
+        "task_kind": "coding_task",
+        "task": "Implement the approved staged package.",
+        "references": ["staging/agents/example-agent/BUILD_TASK.json", "docs/agent-contract.md"],
+    }
+    build_task = {
+        "schema_version": 1,
+        "agent_id": "example-agent",
+        "agent_version": "1.0.0",
+        "manifest_schema_version": 1,
+        "manifest_sha256": "a" * 64,
+        "staging_target": "staging/agents/example-agent",
+        "permitted_paths": ["staging/agents/example-agent/src/**"],
+        "acceptance_criteria": ["The package tests pass."],
+        "test_commands": ["uv run pytest staging/agents/example-agent/tests -q"],
+        "relevant_docs": ["docs/agent-contract.md"],
+        "relevant_skills": ["skills/agent-authoring/SKILL.md"],
+        "token_budget": 12000,
+        "time_budget_seconds": 1800,
+        "stop_conditions": ["Stop when validation cannot be satisfied."],
+        "runtime_pattern": "deterministic_workflow",
+        "runtime_pattern_reason": "The package workflow is fixed and inspectable.",
+        "thread_id": thread_id,
+        "correlation_id": correlation_id,
+    }
+    return {
+        "status": "resolved",
+        "artifact_reference": "staging/agents/example-agent/BUILD_TASK.json",
+        "thread_id": thread_id,
+        "correlation_id": correlation_id,
+        "build_task": build_task,
+        "manifest": {
+            "id": "example-agent",
+            "version": "1.0.0",
+            "manifest_schema_version": 1,
+            "name": "Example Agent",
+            "purpose": "Implement the approved example package.",
+            "permissions": {"filesystem": "write", "network": False},
+            "runtime": {"mode": "subprocess", "entrypoint": "run.sh"},
+            "design": {
+                "runtime_pattern": "deterministic_workflow",
+                "runtime_pattern_reason": "The package workflow is fixed and inspectable.",
+            },
+        },
+        "validated_references": [
+            "staging/agents/example-agent/BUILD_TASK.json",
+            "docs/agent-contract.md",
+            "skills/agent-authoring/SKILL.md",
+        ],
+        "factory_result": {
+            "status": "success",
+            "summary": "Approved implementation handoff.",
+            "next_task": next_task,
+            "artifact_reference": "staging/agents/example-agent/BUILD_TASK.json",
+        },
+    }
 
 
 def _spec(
@@ -104,7 +177,15 @@ class _FixtureEvidenceResolver:
         self.evidence = evidence or EVIDENCE
         self.calls = []
 
-    def resolve(self, references, next_task, project_context):
+    def resolve(
+        self,
+        references,
+        next_task,
+        project_context,
+        *,
+        originating_agent_id=None,
+        factory_thread_id=None,
+    ):
         self.calls.append((list(references), next_task, project_context))
         return self.evidence
 
@@ -120,6 +201,9 @@ class _FakeProjectRegistry:
         return self.resolution or ProjectContextResolution(context=context, error=None)
 
     def resolve_for_request(self, _session_id, _message):
+        return self.resolution or ProjectContextResolution(context=PROJECT, error=None)
+
+    def resolve_known(self, _reference):
         return self.resolution or ProjectContextResolution(context=PROJECT, error=None)
 
     def get(self, _session_id):
@@ -156,17 +240,28 @@ def _orchestrator(
     )
 
 
-def _paused_origin(orchestrator: HubOrchestrator, *, depth: int = 0):
+def _paused_origin(
+    orchestrator: HubOrchestrator,
+    *,
+    depth: int = 0,
+    selected_agent_id: str = "factory-brain",
+    factory_thread_id: str | None = None,
+):
     store = get_task_run_store()
     run = store.create_run(orchestrator.session_id, "Design the Shopping Agent")
-    store.transition(run.id, TASK_STATE_ROUTED, selected_agent_id="factory-brain")
-    store.transition(run.id, TASK_STATE_DISPATCHED, selected_agent_id="factory-brain")
-    store.transition(run.id, TASK_STATE_IN_PROGRESS, selected_agent_id="factory-brain")
+    store.transition(run.id, TASK_STATE_ROUTED, selected_agent_id=selected_agent_id)
+    store.transition(run.id, TASK_STATE_DISPATCHED, selected_agent_id=selected_agent_id)
+    store.transition(run.id, TASK_STATE_IN_PROGRESS, selected_agent_id=selected_agent_id)
     store.update_run(
         run.id,
         context_updates={
             "originating_project_context": PROJECT.to_dict(),
             "cross_specialist_follow_on_depth": depth,
+            **(
+                {"agent_thread_id": factory_thread_id}
+                if factory_thread_id is not None
+                else {}
+            ),
         },
     )
     return store.get_run(run.id)
@@ -364,6 +459,176 @@ def test_valid_next_task_becomes_persisted_hub_transition(monkeypatch):
         "inherited_project_context",
         "eligible_specialists",
     }
+
+
+def test_factory_resolver_maps_factory_validated_build_task_to_evidence(monkeypatch, tmp_path):
+    root = tmp_path / "agent-factory"
+    root.mkdir()
+    factory_project = replace(FACTORY_ROOT_CONTEXT, root=str(root))
+    monkeypatch.setattr(
+        orchestrator_module,
+        "get_project_context_registry",
+        lambda: _FakeProjectRegistry(
+            resolution=ProjectContextResolution(context=factory_project, error=None)
+        ),
+    )
+    monkeypatch.setattr(
+        "agent_hub.handoff_transition.get_project_context_registry",
+        lambda: _FakeProjectRegistry(
+            resolution=ProjectContextResolution(context=factory_project, error=None)
+        ),
+    )
+    resolved = _factory_resolution()
+    monkeypatch.setattr(
+        "agent_hub.factory_bridge.resolve_factory_build_task",
+        lambda **_kwargs: resolved,
+    )
+
+    resolver = FactoryHandoffEvidenceResolver(root)
+    target = resolver.target_project_context(
+        resolved["factory_result"]["next_task"]["references"],
+        PROJECT,
+        originating_agent_id="agent-factory",
+    )
+    evidence = resolver.resolve(
+        resolved["factory_result"]["next_task"]["references"],
+        NextTaskContract.model_validate(resolved["factory_result"]["next_task"]),
+        target,
+        originating_agent_id="agent-factory",
+        factory_thread_id=FACTORY_THREAD,
+    )
+
+    assert target.root == str(root)
+    assert evidence["design_id"] == "factory-build:corr-1"
+    assert evidence["package_id"] == f"example-agent@1.0.0#{'a' * 64}"
+    assert evidence["target_project"]["root"] == str(root)
+    assert evidence["references"] == resolved["factory_result"]["next_task"]["references"]
+    assert evidence["budgets"] == {"token_budget": 12000, "time_budget_seconds": 1800}
+    assert evidence["other_constraints"]["permitted_paths"] == [
+        "staging/agents/example-agent/src/**"
+    ]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "missing BUILD_TASK",
+        "build task is not approved",
+        "stale staged package",
+        "tampered build task",
+        "wrong Factory thread",
+        "wrong Factory correlation",
+        "traversal reference",
+    ],
+)
+def test_factory_resolver_fails_closed_when_factory_bridge_rejects_reference(
+    monkeypatch, tmp_path, failure
+):
+    root = tmp_path / "agent-factory"
+    root.mkdir()
+    factory_project = replace(FACTORY_ROOT_CONTEXT, root=str(root))
+    monkeypatch.setattr(
+        "agent_hub.factory_bridge.resolve_factory_build_task",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError(failure)),
+    )
+    resolver = FactoryHandoffEvidenceResolver(root)
+    next_task = NextTaskContract.model_validate(
+        _factory_resolution()["factory_result"]["next_task"]
+    )
+
+    with pytest.raises(HandoffEvidenceError, match="could not be validated"):
+        resolver.resolve(
+            next_task.references or [],
+            next_task,
+            factory_project,
+            originating_agent_id="agent-factory",
+            factory_thread_id=FACTORY_THREAD,
+        )
+
+
+def test_factory_resolver_rejects_exact_next_task_mismatch(monkeypatch, tmp_path):
+    root = tmp_path / "agent-factory"
+    root.mkdir()
+    resolved = _factory_resolution()
+    monkeypatch.setattr(
+        "agent_hub.factory_bridge.resolve_factory_build_task",
+        lambda **_kwargs: resolved,
+    )
+    resolver = FactoryHandoffEvidenceResolver(root)
+    mismatch = NextTaskContract.model_validate(
+        {
+            **resolved["factory_result"]["next_task"],
+            "task": "Implement a different package.",
+        }
+    )
+
+    with pytest.raises(HandoffEvidenceError, match="does not exactly match"):
+        resolver.resolve(
+            mismatch.references or [],
+            mismatch,
+            replace(FACTORY_ROOT_CONTEXT, root=str(root)),
+            originating_agent_id="agent-factory",
+            factory_thread_id=FACTORY_THREAD,
+        )
+
+
+def test_factory_handoff_approves_child_with_factory_root_context(monkeypatch, tmp_path):
+    root = tmp_path / "agent-factory"
+    root.mkdir()
+    factory_project = replace(FACTORY_ROOT_CONTEXT, root=str(root))
+    registry = _FakeProjectRegistry(
+        resolution=ProjectContextResolution(context=factory_project, error=None)
+    )
+    monkeypatch.setattr(
+        "agent_hub.handoff_transition.get_project_context_registry", lambda: registry
+    )
+    resolved = _factory_resolution()
+    monkeypatch.setattr(
+        "agent_hub.factory_bridge.resolve_factory_build_task",
+        lambda **_kwargs: resolved,
+    )
+    specs = [
+        _spec("agent-factory", task_kinds=("design_task",), runtime_mode="factory_brain"),
+        _spec("ai-tech-lead"),
+    ]
+    orch = _orchestrator(
+        monkeypatch,
+        HandoffFidelityReviewer(review_callable=lambda _payload: REVIEW_SUPPORTED),
+        specs=specs,
+        resolver=FactoryHandoffEvidenceResolver(root),
+        project_registry=registry,
+    )
+    run = _paused_origin(
+        orch,
+        selected_agent_id="agent-factory",
+        factory_thread_id=FACTORY_THREAD,
+    )
+    next_task = NextTaskContract.model_validate(resolved["factory_result"]["next_task"])
+    with active_task_run(run.id):
+        orch._prepare_handoff_transition(
+            run,
+            {"status": "success", "next_task": next_task.model_dump(mode="json")},
+        )
+
+    pending = get_task_run_store().get_run(run.id)
+    assert pending is not None
+    handoff = pending.context["hub_transition_decision"]
+    assert handoff["project_context"]["root"] == str(root)
+    assert handoff["originating_project_context"]["root"] == PROJECT.root
+
+    calls = []
+    monkeypatch.setattr(
+        orchestrator_module,
+        "_dispatch_subprocess",
+        lambda spec, task, **kwargs: calls.append((spec.id, task, kwargs))
+        or {"status": "success", "summary": "Implemented."},
+    )
+    assert "Implemented." in orch.approve_pending()
+    assert calls[0][0] == "ai-tech-lead"
+    assert calls[0][2]["project_root_override"] == str(root)
+    assert calls[0][2]["project_context_override"].root == str(root)
+    assert calls[0][2]["task_kind"] == "coding_task"
+    assert calls[0][2]["references"] == next_task.references
 
 
 def test_deterministic_validation_precedes_reviewer_and_missing_evidence_fails_closed(monkeypatch):

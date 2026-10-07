@@ -16,7 +16,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Sequence
 
 from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
@@ -37,12 +37,13 @@ from .factory_bridge import (
     resume_factory_request,
 )
 from .handoff_transition import (
+    FactoryHandoffEvidenceResolver,
     HandoffEvidenceError,
     HandoffEvidenceResolver,
     HandoffFidelityReview,
     HandoffFidelityReviewer,
     NextTaskContract,
-    UnavailableHandoffEvidenceResolver,
+    UnavailableHandoffEvidenceResolver,  # noqa: F401 - retained module compatibility
     resolve_approved_design_evidence,
     validate_handoff_references,
 )
@@ -1298,9 +1299,17 @@ def _dispatch_factory_brain(
         )
 
     cache = get_manifest_cache().get_or_refresh(spec)
+    factory_status = result.get("status")
+    if factory_status == "waiting_approval" or result.get("interrupted"):
+        hub_status = "approval_required"
+    elif factory_status in {"failed", "rejected"}:
+        hub_status = "failed"
+    else:
+        hub_status = "success"
     output = {
-        "status": "approval_required" if result.get("interrupted") else "success",
-        "summary": result.get("response", ""),
+        "status": hub_status,
+        "summary": result.get("summary", result.get("response", "")),
+        "factory_status": factory_status,
         "agent_manifest": (
             {
                 "agent_id": spec.id,
@@ -1310,6 +1319,14 @@ def _dispatch_factory_brain(
             if cache is not None
             else None
         ),
+    }
+    for field in ("next_task", "artifact_reference"):
+        if field in result:
+            output[field] = result[field]
+    output["factory_result"] = {
+        key: result[key]
+        for key in ("status", "summary", "next_task", "artifact_reference")
+        if key in result
     }
     if task_run_id:
         get_task_run_store().update_run(
@@ -1805,7 +1822,7 @@ class HubOrchestrator:
         self._handoff_evidence_resolver = (
             handoff_evidence_resolver
             if handoff_evidence_resolver is not None
-            else UnavailableHandoffEvidenceResolver()
+            else FactoryHandoffEvidenceResolver()
         )
         self._learning_notify: Any = None
         self._learning_watermark: dict[str, Any] = {}
@@ -2595,8 +2612,18 @@ class HubOrchestrator:
                 thread_id=pending.context["agent_thread_id"],
                 reason=reason,
             )
-            response_text = f"[{spec.name}] {result.get('response', reason)}"
-            raw_result = {"status": "failed", "summary": result.get("response", reason)}
+            summary = result.get("summary", result.get("response", reason))
+            response_text = f"[{spec.name}] {summary}"
+            raw_result = {
+                "status": "failed",
+                "summary": summary,
+                "factory_status": result.get("status"),
+                "factory_result": {
+                    key: result[key]
+                    for key in ("status", "summary", "next_task", "artifact_reference")
+                    if key in result
+                },
+            }
         else:
             response_text = f"[{spec.name}] Request rejected: {reason}"
             raw_result = {"status": "failed", "summary": reason}
@@ -3007,6 +3034,22 @@ class HubOrchestrator:
         except (KeyError, TypeError, ValueError) as exc:
             raise HandoffEvidenceError("originating project context is incomplete") from exc
 
+    def _handoff_target_project_context(
+        self,
+        run: TaskRun,
+        references: Sequence[str],
+        originating_project_context: ProjectContext | None,
+    ) -> ProjectContext | None:
+        resolver = self._handoff_evidence_resolver
+        resolver_method = getattr(resolver, "target_project_context", None)
+        if not callable(resolver_method):
+            return originating_project_context
+        return resolver_method(
+            references,
+            originating_project_context,
+            originating_agent_id=run.selected_agent_id,
+        )
+
     def _eligible_handoff_choices(
         self, task_kind: str
     ) -> tuple[list[AgentSpec], list[dict[str, str]]]:
@@ -3119,12 +3162,19 @@ class HubOrchestrator:
         except ValidationError as exc:
             raise HandoffEvidenceError("validated next_task could not be reconstructed") from exc
 
-        project_context = self._handoff_project_context(run)
+        originating_project_context = self._handoff_project_context(run)
         validate_handoff_references(next_task.references)
+        project_context = self._handoff_target_project_context(
+            run,
+            next_task.references or [],
+            originating_project_context,
+        )
         authoritative_evidence = self._handoff_evidence_resolver.resolve(
             next_task.references or [],
             next_task,
             project_context,
+            originating_agent_id=run.selected_agent_id,
+            factory_thread_id=run.context.get("agent_thread_id"),
         )
         evidence = resolve_approved_design_evidence(
             authoritative_evidence, next_task, project_context
@@ -3150,6 +3200,11 @@ class HubOrchestrator:
             "follow_on_depth": 1,
             "next_task": next_task.model_dump(mode="json"),
             "project_context": project_context.to_dict() if project_context else None,
+            "originating_project_context": (
+                originating_project_context.to_dict()
+                if originating_project_context
+                else None
+            ),
             "eligible_specialists": choices,
             "eligible_specialist_specs": [dataclasses.asdict(spec) for spec in eligible],
             "eligible_specialist_fingerprints": {

@@ -32,6 +32,7 @@ _BRIDGE_SCRIPT = textwrap.dedent(
     import json
     import sys
     from pathlib import Path
+    from pathlib import PurePosixPath
 
     root = Path(sys.argv[1])
     input_file = Path(sys.argv[2])
@@ -40,11 +41,21 @@ _BRIDGE_SCRIPT = textwrap.dedent(
     sys.path.insert(0, str(root / "src"))
 
     from agent_factory.factory_brain import (
+        build_factory_specialist_result,
         invoke_factory_brain,
         reject_factory_brain,
         resume_factory_brain,
     )
+    from agent_factory.agent_spec import VALID_ID_PATTERN
+    from agent_factory.build_task import (
+        AgentBuildTask,
+        BuildTaskError,
+        assert_task_matches_staged_package,
+        build_task_reference,
+        load_staged_manifest,
+    )
     from agent_factory.progress_events import progress_reporter_from_ids
+    from agent_factory.storage import get_build_task
 
     payload = json.loads(input_file.read_text(encoding="utf-8"))
     action = payload["action"]
@@ -56,6 +67,94 @@ _BRIDGE_SCRIPT = textwrap.dedent(
         agent_name="Agent Factory",
     )
 
+    def _canonical_build_task_references(values):
+        candidates = []
+        for value in values:
+            if not isinstance(value, str) or not value.strip():
+                continue
+            reference = value.strip()
+            path = PurePosixPath(reference)
+            if (
+                str(path) == reference
+                and path.parts[:2] == ("staging", "agents")
+                and len(path.parts) == 4
+                and path.parts[3] == "BUILD_TASK.json"
+                and VALID_ID_PATTERN.fullmatch(path.parts[2])
+            ):
+                candidates.append(reference)
+        return candidates
+
+    def _resolve_build_task(references, thread_id):
+        candidates = _canonical_build_task_references(references)
+        if len(candidates) != 1:
+            raise BuildTaskError(
+                "exactly one canonical staged BUILD_TASK.json reference is required"
+            )
+        reference = candidates[0]
+        artifact_path = root / PurePosixPath(reference)
+        try:
+            task = AgentBuildTask.model_validate(
+                json.loads(artifact_path.read_text(encoding="utf-8"))
+            )
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            raise BuildTaskError(f"invalid build-task artifact: {reference}") from exc
+        if task.thread_id != thread_id or build_task_reference(task) != reference:
+            raise BuildTaskError("build-task thread or artifact reference does not match")
+        row = get_build_task(
+            reference,
+            correlation_id=task.correlation_id,
+            thread_id=thread_id,
+        )
+        if not row or row.get("status") != "approved":
+            raise BuildTaskError("build task is missing or is not approved for this thread")
+        if any(
+            row.get(field) != getattr(task, field)
+            for field in ("agent_id", "agent_version", "manifest_sha256")
+        ):
+            raise BuildTaskError("approved build-task storage does not match its artifact")
+        assert_task_matches_staged_package(task, root)
+        package_dir = (root / task.staging_target).resolve()
+        raw_manifest, manifest, _ = load_staged_manifest(package_dir, task.agent_id)
+        factory_result = build_factory_specialist_result(
+            thread_id,
+            "Validated approved Factory build task.",
+            interrupted=False,
+        )
+        if (
+            factory_result.status != "success"
+            or factory_result.artifact_reference != reference
+            or factory_result.next_task is None
+        ):
+            raise BuildTaskError("Factory structured result does not expose this approved task")
+        return {
+            "status": "resolved",
+            "artifact_reference": reference,
+            "thread_id": thread_id,
+            "correlation_id": task.correlation_id,
+            "build_task": task.model_dump(mode="json"),
+            "manifest": {
+                "id": manifest.id,
+                "version": raw_manifest["version"],
+                "manifest_schema_version": raw_manifest["manifest_schema_version"],
+                "name": manifest.name,
+                "purpose": manifest.purpose,
+                "permissions": manifest.permissions,
+                "runtime": manifest.runtime,
+                "design": manifest.design,
+            },
+            "validated_references": list(
+                dict.fromkeys(
+                    [reference, *task.relevant_docs, *task.relevant_skills]
+                )
+            ),
+            "factory_result": factory_result.model_dump(mode="json"),
+        }
+
+    if action == "resolve_build_task":
+        result = _resolve_build_task(payload.get("references", []), thread_id)
+        output_file.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+        raise SystemExit(0)
+
     if action == "invoke":
         response, interrupted = invoke_factory_brain(
             payload["request"],
@@ -63,14 +162,32 @@ _BRIDGE_SCRIPT = textwrap.dedent(
             purpose=purpose,
             progress_reporter=progress_reporter,
         )
-        result = {"response": response, "interrupted": interrupted}
+        structured = build_factory_specialist_result(
+            thread_id,
+            response,
+            interrupted=interrupted,
+        ).model_dump(mode="json")
+        result = {
+            "response": response,
+            "interrupted": interrupted,
+            **structured,
+        }
     elif action == "resume":
         response, interrupted = resume_factory_brain(
             thread_id,
             purpose=purpose,
             progress_reporter=progress_reporter,
         )
-        result = {"response": response, "interrupted": interrupted}
+        structured = build_factory_specialist_result(
+            thread_id,
+            response,
+            interrupted=interrupted,
+        ).model_dump(mode="json")
+        result = {
+            "response": response,
+            "interrupted": interrupted,
+            **structured,
+        }
     elif action == "reject":
         response = reject_factory_brain(
             thread_id,
@@ -78,11 +195,20 @@ _BRIDGE_SCRIPT = textwrap.dedent(
             purpose=purpose,
             progress_reporter=progress_reporter,
         )
-        result = {"response": response, "interrupted": False}
+        structured = build_factory_specialist_result(
+            thread_id,
+            response,
+            interrupted=False,
+        ).model_dump(mode="json")
+        result = {
+            "response": response,
+            "interrupted": False,
+            **structured,
+        }
     else:
         raise ValueError(f"Unknown action: {action}")
 
-    output_file.write_text(json.dumps(result), encoding="utf-8")
+    output_file.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
     """
 )
 
@@ -187,6 +313,26 @@ def reject_factory_request(
             "reason": reason,
         },
     )
+
+
+def resolve_factory_build_task(
+    *,
+    working_directory: str,
+    thread_id: str,
+    references: list[str],
+) -> dict[str, Any]:
+    """Resolve one approved BUILD_TASK through the Factory runtime boundary."""
+    result = _run_bridge(
+        working_directory=working_directory,
+        payload={
+            "action": "resolve_build_task",
+            "thread_id": thread_id,
+            "references": list(references),
+        },
+    )
+    if result.get("status") != "resolved":
+        raise RuntimeError("Agent Factory returned an invalid build-task resolution")
+    return result
 
 
 def _run_bridge(*, working_directory: str, payload: dict[str, Any]) -> dict[str, Any]:

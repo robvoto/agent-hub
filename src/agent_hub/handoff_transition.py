@@ -11,6 +11,7 @@ import json
 import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from langchain_core.callbacks import UsageMetadataCallbackHandler
@@ -27,13 +28,14 @@ from pydantic import (
 )
 
 from .config import (
+    AGENT_FACTORY_ROOT,
     configured_handoff_reviewer_max_tokens,
     configured_handoff_reviewer_model,
     configured_handoff_reviewer_timeout_seconds,
     handoff_reviewer_model_kwargs,
 )
 from .cost_log import extract_usage_metadata, record_llm_run
-from .project_context import ProjectContext
+from .project_context import ProjectContext, get_project_context_registry
 from .specialist_result import NextTaskContract
 
 logger = logging.getLogger(__name__)
@@ -56,6 +58,9 @@ class HandoffEvidenceResolver(Protocol):
         references: Sequence[str],
         next_task: NextTaskContract,
         project_context: ProjectContext | None,
+        *,
+        originating_agent_id: str | None = None,
+        factory_thread_id: str | None = None,
     ) -> Mapping[str, Any]: ...
 
 
@@ -67,11 +72,200 @@ class UnavailableHandoffEvidenceResolver:
         references: Sequence[str],
         next_task: NextTaskContract,
         project_context: ProjectContext | None,
+        *,
+        originating_agent_id: str | None = None,
+        factory_thread_id: str | None = None,
     ) -> Mapping[str, Any]:
+        del references, next_task, project_context, originating_agent_id, factory_thread_id
         raise HandoffEvidenceError(
             "authoritative Factory design evidence is unavailable; refusing to use "
             "producer-supplied handoff evidence"
         )
+
+
+class FactoryHandoffEvidenceResolver:
+    """Resolve Factory BUILD_TASK evidence through Factory-owned validation."""
+
+    def __init__(self, factory_root: Path | None = None) -> None:
+        self.factory_root = (factory_root or AGENT_FACTORY_ROOT).expanduser().resolve()
+
+    def _factory_agent_id(self) -> str:
+        from .factory_bridge import build_factory_agent_spec
+
+        spec = build_factory_agent_spec(self.factory_root)
+        if spec is None:
+            raise HandoffEvidenceError(
+                f"configured Agent Factory root is unavailable: {self.factory_root}"
+            )
+        return spec.id
+
+    def target_project_context(
+        self,
+        references: Sequence[str],
+        originating_project_context: ProjectContext | None,
+        *,
+        originating_agent_id: str | None = None,
+    ) -> ProjectContext:
+        del references, originating_project_context
+        if originating_agent_id != self._factory_agent_id():
+            raise HandoffEvidenceError(
+                "Factory BUILD_TASK evidence requires Agent Factory as the originating specialist"
+            )
+        resolution = get_project_context_registry().resolve_known(str(self.factory_root))
+        if resolution.error or resolution.context is None:
+            raise HandoffEvidenceError(
+                resolution.error or "configured Agent Factory root could not be canonicalized"
+            )
+        return resolution.context
+
+    def resolve(
+        self,
+        references: Sequence[str],
+        next_task: NextTaskContract,
+        project_context: ProjectContext | None,
+        *,
+        originating_agent_id: str | None = None,
+        factory_thread_id: str | None = None,
+    ) -> Mapping[str, Any]:
+        if originating_agent_id != self._factory_agent_id():
+            raise HandoffEvidenceError(
+                "Factory BUILD_TASK evidence requires Agent Factory as the originating specialist"
+            )
+        if not factory_thread_id:
+            raise HandoffEvidenceError(
+                "Factory BUILD_TASK evidence requires the originating Factory thread"
+            )
+        if project_context is None or Path(project_context.root).resolve() != self.factory_root:
+            raise HandoffEvidenceError(
+                "Factory implementation evidence must target the configured Agent Factory root"
+            )
+
+        from .factory_bridge import resolve_factory_build_task
+
+        try:
+            resolved = resolve_factory_build_task(
+                working_directory=str(self.factory_root),
+                thread_id=factory_thread_id,
+                references=list(references),
+            )
+        except Exception as exc:
+            raise HandoffEvidenceError(
+                f"Factory BUILD_TASK evidence could not be validated: {exc}"
+            ) from exc
+
+        try:
+            encoded = json.dumps(resolved, ensure_ascii=False, sort_keys=True)
+        except (TypeError, ValueError) as exc:
+            raise HandoffEvidenceError(
+                "Factory BUILD_TASK evidence is not JSON-serializable"
+            ) from exc
+        if len(encoded.encode("utf-8")) > MAX_APPROVED_EVIDENCE_BYTES:
+            raise HandoffEvidenceError(
+                "Factory BUILD_TASK evidence exceeds the bounded 64 KiB limit"
+            )
+
+        factory_result = resolved.get("factory_result")
+        build_task = resolved.get("build_task")
+        manifest = resolved.get("manifest")
+        validated_references = resolved.get("validated_references")
+        if (
+            not isinstance(factory_result, Mapping)
+            or not isinstance(build_task, Mapping)
+            or not isinstance(manifest, Mapping)
+            or not isinstance(validated_references, list)
+        ):
+            raise HandoffEvidenceError("Factory returned incomplete validated BUILD_TASK evidence")
+        expected_next_task = factory_result.get("next_task")
+        if not isinstance(expected_next_task, Mapping):
+            raise HandoffEvidenceError("Factory evidence has no validated next_task")
+        try:
+            expected = NextTaskContract.model_validate(expected_next_task)
+        except ValidationError as exc:
+            raise HandoffEvidenceError("Factory returned an invalid validated next_task") from exc
+        if expected.model_dump(mode="json") != next_task.model_dump(mode="json"):
+            raise HandoffEvidenceError(
+                "Factory validated next_task does not exactly match the originating result"
+            )
+
+        artifact_reference = resolved.get("artifact_reference")
+        if (
+            not isinstance(artifact_reference, str)
+            or artifact_reference not in next_task.references
+        ):
+            raise HandoffEvidenceError(
+                "Factory evidence does not preserve the authoritative BUILD_TASK reference"
+            )
+        if factory_result.get("artifact_reference") != artifact_reference:
+            raise HandoffEvidenceError(
+                "Factory structured result does not match the authoritative BUILD_TASK reference"
+            )
+        if any(
+            not isinstance(reference, str) or reference not in validated_references
+            for reference in next_task.references or []
+        ):
+            raise HandoffEvidenceError(
+                "next_task contains a reference not validated by Factory"
+            )
+        if build_task.get("thread_id") != factory_thread_id:
+            raise HandoffEvidenceError("Factory build task thread does not match the Hub task")
+        if resolved.get("thread_id") != factory_thread_id:
+            raise HandoffEvidenceError("Factory evidence thread does not match the Hub task")
+        correlation_id = build_task.get("correlation_id")
+        agent_id = build_task.get("agent_id")
+        agent_version = build_task.get("agent_version")
+        manifest_sha256 = build_task.get("manifest_sha256")
+        if not all(
+            isinstance(value, str) and value.strip()
+            for value in (correlation_id, agent_id, agent_version, manifest_sha256)
+        ):
+            raise HandoffEvidenceError("Factory build task identity is incomplete")
+        if resolved.get("correlation_id") != correlation_id:
+            raise HandoffEvidenceError("Factory evidence correlation does not match BUILD_TASK")
+
+        required_manifest_fields = (
+            "id",
+            "version",
+            "manifest_schema_version",
+            "name",
+            "purpose",
+            "permissions",
+            "runtime",
+            "design",
+        )
+        if any(field not in manifest for field in required_manifest_fields):
+            raise HandoffEvidenceError("Factory staged manifest evidence is incomplete")
+        if manifest["id"] != agent_id or manifest["version"] != agent_version:
+            raise HandoffEvidenceError("Factory staged manifest identity does not match BUILD_TASK")
+
+        return {
+            "design_id": f"factory-build:{correlation_id}",
+            "package_id": f"{agent_id}@{agent_version}#{manifest_sha256}",
+            "task_kind": next_task.task_kind,
+            "task": next_task.task,
+            "target_project": project_context.to_dict(),
+            "references": list(next_task.references or []),
+            "purpose": manifest["purpose"],
+            "permissions": manifest["permissions"],
+            "runtime": manifest["runtime"],
+            "budgets": {
+                "token_budget": build_task.get("token_budget"),
+                "time_budget_seconds": build_task.get("time_budget_seconds"),
+            },
+            "acceptance_criteria": build_task.get("acceptance_criteria"),
+            "stop_conditions": build_task.get("stop_conditions"),
+            "other_constraints": {
+                "permitted_paths": build_task.get("permitted_paths"),
+                "test_commands": build_task.get("test_commands"),
+                "relevant_docs": build_task.get("relevant_docs"),
+                "relevant_skills": build_task.get("relevant_skills"),
+                "staging_target": build_task.get("staging_target"),
+                "runtime_pattern": build_task.get("runtime_pattern"),
+                "runtime_pattern_reason": build_task.get("runtime_pattern_reason"),
+                "manifest_sha256": manifest_sha256,
+                "manifest_schema_version": manifest["manifest_schema_version"],
+                "agent_version": agent_version,
+            },
+        }
 
 
 class TargetProjectEvidence(BaseModel):
