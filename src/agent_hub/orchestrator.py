@@ -28,13 +28,14 @@ from langgraph.types import Command
 from pydantic import BaseModel, ValidationError
 
 from .checkpointer import get_checkpointer
-from .config import chat_model_kwargs, configured_model
+from .config import AGENT_FACTORY_ROOT, chat_model_kwargs, configured_model
 from .cost_log import extract_usage_metadata, record_llm_run
 from .factory_bridge import (
     build_factory_agent_spec,
     invoke_factory_request,
     new_factory_thread_id,
     reject_factory_request,
+    relay_factory_build_result,
     resume_factory_request,
 )
 from .handoff_transition import (
@@ -44,6 +45,7 @@ from .handoff_transition import (
     HandoffFidelityReviewer,
     NextTaskContract,
     SourceAwareHandoffEvidenceResolver,
+    factory_execution_constraints,
     resolve_approved_design_evidence,
     validate_handoff_references,
 )
@@ -859,6 +861,7 @@ def _dispatch_subprocess(
     request_id: str | None = None,
     resume: Any | None = None,
     decision: dict[str, Any] | None = None,
+    execution_constraints: dict[str, Any] | None = None,
     project_root_override: str | None = None,
     project_context_override: ProjectContext | None = None,
     backlog_reference_override: dict[str, str] | None | object = _UNSET_RESOURCE_OVERRIDE,
@@ -965,27 +968,30 @@ def _dispatch_subprocess(
         )
 
     if task_run_id:
+        dispatch_context = {
+            "agent_request_id": request_id,
+            "runtime_mode": "subprocess",
+            "agent_dispatch_project_root": project_root,
+            "agent_dispatch_references": references,
+            "agent_dispatch_project_id": envelope_project_id,
+            "agent_dispatch_project_contract_version": envelope_project_contract_version,
+            "agent_dispatch_project_fingerprint": envelope_project_fingerprint,
+            "agent_dispatch_backlog_reference": backlog_reference,
+            "agent_dispatch_task_kind": task_kind,
+            "governed_skills": _governed_skill_metadata(governed_skills),
+            "pinned_agent_spec": dataclasses.asdict(spec),
+            "pinned_agent_version": spec.version,
+            "pinned_agent_fingerprint": spec_fingerprint(spec),
+        }
+        if execution_constraints is not None:
+            dispatch_context["agent_dispatch_execution_constraints"] = execution_constraints
         get_task_run_store().transition(
             task_run_id,
             TASK_STATE_DISPATCHED,
             detail=f"Dispatched task to specialist agent '{spec.id}'.",
             selected_agent_id=spec.id,
             dispatched_task=task,
-            context_updates={
-                "agent_request_id": request_id,
-                "runtime_mode": "subprocess",
-                "agent_dispatch_project_root": project_root,
-                "agent_dispatch_references": references,
-                "agent_dispatch_project_id": envelope_project_id,
-                "agent_dispatch_project_contract_version": envelope_project_contract_version,
-                "agent_dispatch_project_fingerprint": envelope_project_fingerprint,
-                "agent_dispatch_backlog_reference": backlog_reference,
-                "agent_dispatch_task_kind": task_kind,
-                "governed_skills": _governed_skill_metadata(governed_skills),
-                "pinned_agent_spec": dataclasses.asdict(spec),
-                "pinned_agent_version": spec.version,
-                "pinned_agent_fingerprint": spec_fingerprint(spec),
-            },
+            context_updates=dispatch_context,
             human_log=False,
         )
         get_task_run_store().transition(
@@ -1047,6 +1053,7 @@ def _dispatch_subprocess(
             resume=resume,
             decision=decision,
             governed_skills=governed_skills,
+            execution_constraints=execution_constraints,
         )
         input_file.write_text(json.dumps(input_data, indent=2), encoding="utf-8")
 
@@ -2509,17 +2516,33 @@ class HubOrchestrator:
         if isinstance(run.context.get("handoff_parent_run_id"), str):
             parent = store.get_run(run.context["handoff_parent_run_id"])
             if parent is not None:
-                store.update_run(
-                    parent.id,
-                    context_updates={
-                        "handoff_child_status": "cancelled",
-                        "handoff_cancellation_reason": reason,
-                    },
-                )
+                cancellation_updates = {
+                    "handoff_child_status": "cancelled",
+                    "handoff_cancellation_reason": reason,
+                }
+                if (
+                    isinstance(parent.context.get("execution_constraints"), dict)
+                    and not is_terminal_state(parent.state)
+                ):
+                    store.transition(
+                        parent.id,
+                        TASK_STATE_CANCELLED,
+                        detail=f"Factory manufacturing child was cancelled: {reason}",
+                        final_response=(
+                            "[Hub] Factory manufacturing handoff cancelled before "
+                            "validated BuildResult evidence was received."
+                        ),
+                        cancellation_reason=reason,
+                        context_updates=cancellation_updates,
+                        raw_result={
+                            "status": "cancelled",
+                            "summary": "Factory child cancelled before validation.",
+                        },
+                    )
+                else:
+                    store.update_run(parent.id, context_updates=cancellation_updates)
         elif sequential_children or (
-            is_terminal_state(run.state)
-            and isinstance(handoff_child_id, str)
-            and sequential_child_seen
+            isinstance(handoff_child_id, str) and sequential_child_seen
         ):
             store.update_run(
                 run.id,
@@ -2578,6 +2601,11 @@ class HubOrchestrator:
                     ),
                     task_kind=pending.context.get("agent_dispatch_task_kind"),
                     result_registry=self._registry,
+                    **(
+                        {"execution_constraints": pending.context["execution_constraints"]}
+                        if pending.context.get("execution_constraints") is not None
+                        else {}
+                    ),
                 )
         return self._finalize_specialist_follow_up(pending.id, spec, output)
 
@@ -2770,6 +2798,11 @@ class HubOrchestrator:
                     ),
                     task_kind=pending.context.get("agent_dispatch_task_kind"),
                     result_registry=self._registry,
+                    **(
+                        {"execution_constraints": pending.context["execution_constraints"]}
+                        if pending.context.get("execution_constraints") is not None
+                        else {}
+                    ),
                 )
             else:
                 resumed_task = (
@@ -2788,6 +2821,11 @@ class HubOrchestrator:
                     ),
                     task_kind=pending.context.get("agent_dispatch_task_kind"),
                     result_registry=self._registry,
+                    **(
+                        {"execution_constraints": pending.context["execution_constraints"]}
+                        if pending.context.get("execution_constraints") is not None
+                        else {}
+                    ),
                 )
         return self._finalize_specialist_follow_up(pending.id, spec, output)
 
@@ -2916,6 +2954,11 @@ class HubOrchestrator:
                 backlog_reference_override=pending.context.get("agent_dispatch_backlog_reference"),
                 task_kind=pending.context.get("agent_dispatch_task_kind"),
                 result_registry=self._registry,
+                **(
+                    {"execution_constraints": pending.context["execution_constraints"]}
+                    if pending.context.get("execution_constraints") is not None
+                    else {}
+                ),
             )
         return self._finalize_specialist_follow_up(pending.id, spec, output)
 
@@ -3199,6 +3242,13 @@ class HubOrchestrator:
         evidence = resolve_approved_design_evidence(
             authoritative_evidence, next_task, project_context
         )
+        execution_constraints = None
+        if run.selected_agent_id == "agent-factory":
+            execution_constraints = factory_execution_constraints(evidence)
+            if execution_constraints is None:
+                raise HandoffEvidenceError(
+                    "Factory manufacturing evidence has no explicit execution identity"
+                )
         eligible, choices = self._eligible_handoff_choices(next_task.task_kind)
         if not eligible:
             raise HandoffEvidenceError(
@@ -3235,6 +3285,8 @@ class HubOrchestrator:
             "review": review.model_dump(mode="json"),
             "decision": "waiting",
         }
+        if execution_constraints is not None:
+            handoff["execution_constraints"] = execution_constraints
         handoff["fingerprint"] = self._handoff_fingerprint(handoff)
         packet = self._format_handoff_packet(handoff)
         get_task_run_store().transition(
@@ -3478,6 +3530,12 @@ class HubOrchestrator:
         unsigned = dict(approved)
         unsigned.pop("fingerprint", None)
         approved["fingerprint"] = self._handoff_fingerprint(unsigned)
+        execution_constraints = approved.get("execution_constraints")
+        factory_handoff = execution_constraints is not None
+        if factory_handoff and not isinstance(pending.context.get("agent_thread_id"), str):
+            raise HandoffEvidenceError(
+                "Factory manufacturing handoff has no originating Factory thread"
+            )
         child_context = {
             "target_project": pending.context.get("target_project"),
             "originating_project_context": pending.context.get("originating_project_context"),
@@ -3486,6 +3544,13 @@ class HubOrchestrator:
             "handoff_originating_run_id": handoff.get("originating_run_id", pending.id),
             "handoff_parent_decision": approved,
         }
+        if factory_handoff:
+            child_context.update(
+                {
+                    "execution_constraints": execution_constraints,
+                    "handoff_factory_thread_id": pending.context["agent_thread_id"],
+                }
+            )
         store.update_run(child.id, context_updates=child_context)
         store.transition(
             child.id,
@@ -3498,35 +3563,49 @@ class HubOrchestrator:
             dispatched_task=next_task.task,
             context_updates=child_context,
         )
-        store.transition(
-            pending.id,
-            TASK_STATE_SUCCEEDED,
-            detail=(
-                f"Human approved the handoff; implementation child run '{child.id}' "
-                "was created."
-            ),
-            context_updates={
-                "hub_transition_decision": approved,
-                "handoff_child_run_id": child.id,
-            },
-            raw_result={"status": "handoff_approved", "child_run_id": child.id},
-        )
+        approval_updates = {
+            "hub_transition_decision": approved,
+            "handoff_child_run_id": child.id,
+        }
+        if factory_handoff:
+            store.transition(
+                pending.id,
+                TASK_STATE_IN_PROGRESS,
+                detail=(
+                    f"Human approved the Factory manufacturing handoff; implementation child "
+                    f"run '{child.id}' is awaiting validated Factory evidence."
+                ),
+                context_updates=approval_updates,
+                raw_result={"status": "handoff_approved", "child_run_id": child.id},
+            )
+        else:
+            store.transition(
+                pending.id,
+                TASK_STATE_SUCCEEDED,
+                detail=(
+                    f"Human approved the handoff; implementation child run '{child.id}' "
+                    "was created."
+                ),
+                context_updates=approval_updates,
+                raw_result={"status": "handoff_approved", "child_run_id": child.id},
+            )
         with (
             _registered_resumed_run(child.id),
             active_task_run(child.id, progress_callback=progress_notify),
         ):
             try:
                 if spec.runtime["mode"] == "subprocess":
-                    output = _dispatch_subprocess(
-                        spec,
-                        next_task.task,
-                        references=next_task.references,
-                        project_root_override=project_context.root if project_context else "",
-                        project_context_override=project_context,
-                        backlog_reference_override=None,
-                        task_kind=next_task.task_kind,
-                        result_registry=self._registry,
-                    )
+                    dispatch_kwargs = {
+                        "references": next_task.references,
+                        "project_root_override": project_context.root if project_context else "",
+                        "project_context_override": project_context,
+                        "backlog_reference_override": None,
+                        "task_kind": next_task.task_kind,
+                        "result_registry": self._registry,
+                    }
+                    if factory_handoff:
+                        dispatch_kwargs["execution_constraints"] = execution_constraints
+                    output = _dispatch_subprocess(spec, next_task.task, **dispatch_kwargs)
                 elif spec.runtime["mode"] == "factory_brain":
                     output = _dispatch_factory_brain(spec, next_task.task)
                 else:
@@ -3538,15 +3617,28 @@ class HubOrchestrator:
                 )
                 current_child = store.get_run(child.id)
                 if current_child is not None and not is_terminal_state(current_child.state):
-                    store.transition(
+                    try:
+                        store.transition(
+                            child.id,
+                            TASK_STATE_CANCELLED,
+                            detail=cancellation_message,
+                            final_response=cancellation_message,
+                            cancellation_reason="Stopped by user",
+                            raw_result={"status": "cancelled", "summary": "Stopped by user"},
+                        )
+                    except ValueError:
+                        latest_child = store.get_run(child.id)
+                        if latest_child is None or not is_terminal_state(latest_child.state):
+                            raise
+                if factory_handoff:
+                    self._fail_factory_handoff(
                         child.id,
-                        TASK_STATE_CANCELLED,
-                        detail=cancellation_message,
-                        final_response=cancellation_message,
-                        cancellation_reason="Stopped by user",
-                        raw_result={"status": "cancelled", "summary": "Stopped by user"},
+                        cancellation_message,
+                        output={"status": "cancelled", "summary": cancellation_message},
+                        cancelled=True,
                     )
-                store.update_run(pending.id, final_response=cancellation_message)
+                else:
+                    store.update_run(pending.id, final_response=cancellation_message)
                 raise
             except Exception as exc:
                 failure_message = f"[Hub] Follow-on implementation child failed: {exc}"
@@ -3560,7 +3652,10 @@ class HubOrchestrator:
                         error_message=str(exc),
                         raw_result={"status": "failed", "summary": str(exc)},
                     )
-                store.update_run(pending.id, final_response=failure_message)
+                if factory_handoff:
+                    self._fail_factory_handoff(child.id, failure_message, output=output)
+                else:
+                    store.update_run(pending.id, final_response=failure_message)
                 return failure_message
         reply = self._finalize_specialist_follow_up(child.id, spec, output)
         store.update_run(pending.id, final_response=reply)
@@ -3843,6 +3938,33 @@ class HubOrchestrator:
                 return self._handoff_failure(current, exc)
             if packet is not None:
                 return packet
+        factory_receipt = None
+        if current is not None and self._is_factory_child(current):
+            final_execution_result = (
+                current.state in {TASK_STATE_SUCCEEDED, TASK_STATE_FAILED}
+                or (
+                    is_active_state(current.state)
+                    and output.get("status") in {"success", "failed"}
+                    and _valid_pending_decision(output.get("pending_decision")) is None
+                )
+            )
+            if final_execution_result:
+                try:
+                    factory_receipt = self._relay_factory_build_result(current, output)
+                except Exception as exc:
+                    return self._fail_factory_handoff(
+                        run_id,
+                        f"[Hub] Factory manufacturing handoff failed closed: {exc}",
+                        output=output,
+                    )
+                audit = self._factory_audit(current, output, receipt=factory_receipt)
+                child_raw = dict(current.raw_result or {})
+                child_raw.update(audit)
+                get_task_run_store().update_run(
+                    run_id,
+                    context_updates=audit,
+                    raw_result=child_raw,
+                )
         reply = _format_output(spec, output)
         store = get_task_run_store()
         current = store.get_run(run_id)
@@ -3863,7 +3985,138 @@ class HubOrchestrator:
             )
         elif is_paused_state(current.state):
             store.update_run(run_id, final_response=reply)
+        if factory_receipt is not None:
+            self._complete_factory_parent(current, reply, output, factory_receipt)
         return reply
+
+    @staticmethod
+    def _is_factory_child(run: TaskRun) -> bool:
+        return isinstance(run.context.get("execution_constraints"), dict) and isinstance(
+            run.context.get("handoff_parent_run_id"), str
+        )
+
+    def _relay_factory_build_result(self, child: TaskRun, output: dict) -> dict[str, Any]:
+        build_result = output.get("build_result")
+        if not isinstance(build_result, dict):
+            raise HandoffEvidenceError(
+                "ATL terminal implementation result has no build_result"
+            )
+        constraints = child.context.get("execution_constraints")
+        if not isinstance(constraints, dict):
+            raise HandoffEvidenceError("Factory child has no frozen execution constraints")
+        thread_id = child.context.get("handoff_factory_thread_id")
+        if not isinstance(thread_id, str) or not thread_id:
+            raise HandoffEvidenceError("Factory handoff has no originating Factory thread")
+        artifact_reference = constraints.get("artifact_reference")
+        if not isinstance(artifact_reference, str) or not artifact_reference:
+            raise HandoffEvidenceError("Factory handoff has no frozen BUILD_TASK reference")
+        return relay_factory_build_result(
+            working_directory=str(AGENT_FACTORY_ROOT),
+            thread_id=thread_id,
+            artifact_reference=artifact_reference,
+            build_result=build_result,
+        )
+
+    def _factory_audit(
+        self,
+        child: TaskRun,
+        output: dict,
+        *,
+        receipt: dict[str, Any] | None = None,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        audit = {
+            "factory_build_result_reference": (
+                child.context.get("execution_constraints", {}).get("artifact_reference")
+                if isinstance(child.context.get("execution_constraints"), dict)
+                else None
+            ),
+            "factory_validation_receipt": receipt,
+            "factory_build_result": output.get("build_result"),
+        }
+        if error:
+            audit["factory_validation_error"] = error
+        return audit
+
+    def _fail_factory_handoff(
+        self,
+        child_id: str,
+        message: str,
+        *,
+        output: dict,
+        cancelled: bool = False,
+    ) -> str:
+        store = get_task_run_store()
+        child = store.get_run(child_id)
+        if child is None:
+            return message
+        audit = self._factory_audit(child, output, error=message)
+        child_raw = dict(child.raw_result or {})
+        child_raw.update(audit)
+        if is_active_state(child.state):
+            store.transition(
+                child.id,
+                TASK_STATE_FAILED,
+                detail=message,
+                final_response=message,
+                error_message=message,
+                context_updates=audit,
+                raw_result=child_raw,
+            )
+        else:
+            store.update_run(
+                child.id,
+                context_updates=audit,
+                raw_result=child_raw,
+                final_response=message,
+                error_message=message,
+            )
+        parent_id = child.context.get("handoff_parent_run_id")
+        parent = store.get_run(parent_id) if isinstance(parent_id, str) else None
+        if parent is not None and not is_terminal_state(parent.state):
+            parent_raw = dict(parent.raw_result or {})
+            parent_raw.update(audit)
+            parent_raw["status"] = "cancelled" if cancelled else "failed"
+            parent_state = TASK_STATE_CANCELLED if cancelled else TASK_STATE_FAILED
+            store.transition(
+                parent.id,
+                parent_state,
+                detail=message,
+                final_response=message,
+                error_message=message if not cancelled else None,
+                cancellation_reason=message if cancelled else None,
+                context_updates=audit,
+                raw_result=parent_raw,
+            )
+        return message
+
+    def _complete_factory_parent(
+        self,
+        child: TaskRun,
+        reply: str,
+        output: dict,
+        receipt: dict[str, Any],
+    ) -> None:
+        parent_id = child.context.get("handoff_parent_run_id")
+        if not isinstance(parent_id, str):
+            raise HandoffEvidenceError("Factory child has no handoff parent")
+        store = get_task_run_store()
+        parent = store.get_run(parent_id)
+        if parent is None or is_terminal_state(parent.state):
+            raise HandoffEvidenceError("Factory handoff parent is unavailable for validation")
+        audit = self._factory_audit(child, output, receipt=receipt)
+        store.transition(
+            parent.id,
+            TASK_STATE_SUCCEEDED,
+            detail="Factory validated the terminal ATL BuildResult.",
+            final_response=reply,
+            context_updates=audit,
+            raw_result={
+                "status": "validated",
+                "child_run_id": child.id,
+                **audit,
+            },
+        )
 
     def _require_spec(self, pending: TaskRun) -> AgentSpec:
         """Return the agent spec a paused task should resume against.

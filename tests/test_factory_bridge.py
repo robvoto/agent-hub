@@ -94,6 +94,32 @@ class _FakeProcess:
         self.returncode = -9
 
 
+class _RelayFakeProcess(_FakeProcess):
+    def __init__(self, command: list[str], **kwargs: Any) -> None:
+        input_file = Path(command[-2])
+        output_file = Path(command[-1])
+        payload = json.loads(input_file.read_text(encoding="utf-8"))
+        self.stdout = io.StringIO("")
+        self.stderr = io.StringIO("")
+        self.returncode = 0
+        self.pid = 12345
+        output_file.write_text(
+            json.dumps(
+                {
+                    "status": "validated",
+                    "thread_id": payload["thread_id"],
+                    "correlation_id": "corr-1",
+                    "agent_id": "example-agent",
+                    "artifact_reference": payload["artifact_reference"],
+                    "build_result_reference": (
+                        "staging/agents/example-agent/BUILD_RESULT.json"
+                    ),
+                }
+            ),
+            encoding="utf-8",
+        )
+
+
 def test_factory_bridge_streams_progress_and_preserves_final_result(monkeypatch) -> None:
     captured_payload: dict[str, Any] = {}
 
@@ -185,6 +211,35 @@ def test_factory_bridge_resume_and_reject_preserve_structured_result(monkeypatch
     assert result["summary"] == "Factory result"
     assert result["next_task"]["task_kind"] == "coding_task"
     assert result["artifact_reference"].endswith("/BUILD_TASK.json")
+
+
+def test_factory_bridge_relays_exact_terminal_result_and_returns_receipt(monkeypatch):
+    captured_payload: dict[str, Any] = {}
+
+    def fake_popen(command: list[str], **kwargs: Any) -> _RelayFakeProcess:
+        captured_payload.update(json.loads(Path(command[-2]).read_text(encoding="utf-8")))
+        return _RelayFakeProcess(command, **kwargs)
+
+    monkeypatch.setattr(factory_bridge.subprocess, "Popen", fake_popen)
+    build_result = {"schema_version": 1, "status": "success", "errors": []}
+    result = factory_bridge.relay_factory_build_result(
+        working_directory="/tmp/agent-factory",
+        thread_id="hub-factory-thread-1",
+        artifact_reference="staging/agents/example-agent/BUILD_TASK.json",
+        build_result=build_result,
+    )
+
+    assert captured_payload["action"] == "consume_build_result"
+    assert captured_payload["thread_id"] == "hub-factory-thread-1"
+    assert captured_payload["artifact_reference"] == (
+        "staging/agents/example-agent/BUILD_TASK.json"
+    )
+    assert captured_payload["build_result"] == build_result
+    assert result["status"] == "validated"
+
+
+def test_embedded_factory_bridge_compiles():
+    compile(factory_bridge._BRIDGE_SCRIPT, "<factory-bridge>", "exec")
 
 
 @pytest.mark.parametrize(

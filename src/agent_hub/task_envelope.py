@@ -35,6 +35,7 @@ def build_task_envelope(
     resume: Any | None = None,
     decision: dict[str, Any] | None = None,
     governed_skills: list[dict[str, Any]] | None = None,
+    execution_constraints: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the JSON payload written to a subprocess specialist's input file.
 
@@ -103,4 +104,6 @@ def build_task_envelope(
         envelope["decision"] = decision
     if governed_skills:
         envelope["governed_skills"] = list(governed_skills)
+    if execution_constraints is not None:
+        envelope["execution_constraints"] = dict(execution_constraints)
     return envelope

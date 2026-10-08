@@ -299,6 +299,8 @@ class FactoryHandoffEvidenceResolver:
             "acceptance_criteria": build_task.get("acceptance_criteria"),
             "stop_conditions": build_task.get("stop_conditions"),
             "other_constraints": {
+                "artifact_reference": artifact_reference,
+                "correlation_id": correlation_id,
                 "permitted_paths": build_task.get("permitted_paths"),
                 "test_commands": build_task.get("test_commands"),
                 "relevant_docs": build_task.get("relevant_docs"),
@@ -311,6 +313,39 @@ class FactoryHandoffEvidenceResolver:
                 "agent_version": agent_version,
             },
         }
+
+
+def factory_execution_constraints(evidence: ApprovedDesignEvidence) -> dict[str, Any] | None:
+    """Build the opaque ATL envelope only from explicit Factory evidence identity."""
+    constraints = evidence.other_constraints
+    artifact_reference = constraints.get("artifact_reference")
+    correlation_id = constraints.get("correlation_id")
+    if artifact_reference is None and correlation_id is None:
+        return None
+    if not isinstance(artifact_reference, str) or not artifact_reference.strip():
+        raise HandoffEvidenceError("Factory execution constraints have no artifact reference")
+    if not isinstance(correlation_id, str) or not correlation_id.strip():
+        raise HandoffEvidenceError("Factory execution constraints have no correlation id")
+    token_budget = evidence.budgets.get("token_budget")
+    time_budget_seconds = evidence.budgets.get("time_budget_seconds")
+    test_commands = constraints.get("test_commands")
+    permitted_paths = constraints.get("permitted_paths")
+    if not isinstance(token_budget, int) or isinstance(token_budget, bool):
+        raise HandoffEvidenceError("Factory execution constraints have no token budget")
+    if not isinstance(time_budget_seconds, int) or isinstance(time_budget_seconds, bool):
+        raise HandoffEvidenceError("Factory execution constraints have no time budget")
+    if not isinstance(test_commands, list) or not isinstance(permitted_paths, list):
+        raise HandoffEvidenceError("Factory execution constraints are incomplete")
+    return {
+        "schema_version": 1,
+        "token_budget": token_budget,
+        "time_budget_seconds": time_budget_seconds,
+        "test_commands": list(test_commands),
+        "permitted_paths": list(permitted_paths),
+        "stop_conditions": list(evidence.stop_conditions),
+        "correlation_id": correlation_id,
+        "artifact_reference": artifact_reference,
+    }
 
 
 class SourceAwareHandoffEvidenceResolver:

@@ -56,6 +56,7 @@ _BRIDGE_SCRIPT = textwrap.dedent(
     )
     from agent_factory.progress_events import progress_reporter_from_ids
     from agent_factory.storage import get_build_task
+    from agent_factory import consume_agent_build_result
 
     payload = json.loads(input_file.read_text(encoding="utf-8"))
     action = payload["action"]
@@ -152,6 +153,16 @@ _BRIDGE_SCRIPT = textwrap.dedent(
 
     if action == "resolve_build_task":
         result = _resolve_build_task(payload.get("references", []), thread_id)
+        output_file.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+        raise SystemExit(0)
+
+    if action == "consume_build_result":
+        result = consume_agent_build_result(
+            thread_id,
+            payload["artifact_reference"],
+            payload["build_result"],
+            project_root=root,
+        )
         output_file.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
         raise SystemExit(0)
 
@@ -332,6 +343,38 @@ def resolve_factory_build_task(
     )
     if result.get("status") != "resolved":
         raise RuntimeError("Agent Factory returned an invalid build-task resolution")
+    return result
+
+
+def relay_factory_build_result(
+    *,
+    working_directory: str,
+    thread_id: str,
+    artifact_reference: str,
+    build_result: dict[str, Any],
+) -> dict[str, Any]:
+    """Submit one terminal ATL BuildResult to Factory for authoritative validation."""
+    try:
+        json.dumps(build_result, ensure_ascii=False)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("ATL build_result is not JSON-safe") from exc
+    result = _run_bridge(
+        working_directory=working_directory,
+        payload={
+            "action": "consume_build_result",
+            "thread_id": thread_id,
+            "artifact_reference": artifact_reference,
+            "build_result": build_result,
+        },
+    )
+    if result.get("status") != "validated":
+        raise RuntimeError("Agent Factory returned no validated build-result receipt")
+    try:
+        encoded = json.dumps(result, ensure_ascii=False)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("Agent Factory validation receipt is not JSON-safe") from exc
+    if len(encoded.encode("utf-8")) > 16 * 1024:
+        raise RuntimeError("Agent Factory validation receipt exceeds the bounded limit")
     return result
 
 

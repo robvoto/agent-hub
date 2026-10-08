@@ -81,3 +81,14 @@ def test_backlog_reference_is_included_only_when_resolved():
 def test_advertised_task_kind_is_included_when_classified():
     assert _base_envelope(task_kind="backlog_refinement")["task_kind"] == "backlog_refinement"
     assert "task_kind" not in _base_envelope(task_kind=None)
+
+
+def test_execution_constraints_are_optional_and_opaque():
+    constraints = {
+        "schema_version": 1,
+        "token_budget": 12000,
+        "artifact_reference": "staging/agents/example-agent/BUILD_TASK.json",
+    }
+
+    assert "execution_constraints" not in _base_envelope()
+    assert _base_envelope(execution_constraints=constraints)["execution_constraints"] == constraints
