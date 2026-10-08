@@ -16,7 +16,9 @@ def test_langgraph_config_points_to_real_hub_graph() -> None:
     assert config["python_version"] == "3.13"
 
 
-def test_studio_graph_matches_real_react_topology() -> None:
+def test_studio_graph_matches_real_react_topology(monkeypatch) -> None:
+    # Construct the graph without requiring a real credential; no API call is made.
+    monkeypatch.setenv("OPENAI_API_KEY", "test-only-not-a-real-key")
     from agent_hub.studio_graph import graph
 
     rendered = graph.get_graph()
