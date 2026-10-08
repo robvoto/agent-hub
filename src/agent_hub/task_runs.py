@@ -604,6 +604,8 @@ class TaskRunStore:
             raise ValueError(f"Unknown task state: {to_state}")
 
         with _connect(self._db_path) as conn:
+            # Lock before reading: concurrent stop/dispatch updates must not lose context.
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT * FROM task_runs WHERE id=?", (run_id,)).fetchone()
             if row is None:
                 raise KeyError(f"Unknown task run: {run_id}")
@@ -759,6 +761,7 @@ class TaskRunStore:
         cost: dict | None = None,
     ) -> TaskRun:
         with _connect(self._db_path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT * FROM task_runs WHERE id=?", (run_id,)).fetchone()
             if row is None:
                 raise KeyError(f"Unknown task run: {run_id}")

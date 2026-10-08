@@ -1,5 +1,8 @@
 """Tests for the task-run lifecycle store."""
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+
 import pytest
 
 from agent_hub.task_runs import (
@@ -19,6 +22,19 @@ from agent_hub.task_runs import (
 @pytest.fixture()
 def task_store(tmp_path):
     return TaskRunStore(tmp_path / "task_runs.sqlite3")
+
+
+def test_concurrent_updates_preserve_all_context_fields(task_store):
+    run = task_store.create_run(session_id="concurrent", user_message="Bounded update proof")
+    barrier = Barrier(8)
+
+    def update(index):
+        barrier.wait(timeout=5)
+        return task_store.update_run(run.id, context_updates={str(index): index})
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(update, range(8)))
+    assert task_store.get_run(run.id).context == {str(index): index for index in range(8)}
 
 
 def test_create_run_records_received_event(task_store):

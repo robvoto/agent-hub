@@ -3606,6 +3606,7 @@ class HubOrchestrator:
                     }
                     if factory_handoff:
                         dispatch_kwargs["execution_constraints"] = execution_constraints
+                        dispatch_kwargs["human_approved"] = True
                     output = _dispatch_subprocess(spec, next_task.task, **dispatch_kwargs)
                 elif spec.runtime["mode"] == "factory_brain":
                     output = _dispatch_factory_brain(spec, next_task.task)

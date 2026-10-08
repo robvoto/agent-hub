@@ -652,6 +652,7 @@ def test_factory_handoff_approves_child_with_factory_root_context(monkeypatch, t
     )
     assert "Implemented." in orch.approve_pending()
     assert calls[0][0] == "ai-tech-lead"
+    assert calls[0][2]["human_approved"] is True
     assert calls[0][2]["project_root_override"] == str(root)
     assert calls[0][2]["project_context_override"].root == str(root)
     assert calls[0][2]["task_kind"] == "coding_task"
