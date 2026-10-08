@@ -1803,6 +1803,7 @@ class HubOrchestrator:
         self,
         model: str | None = None,
         *,
+        session_id: str | None = None,
         semantic_extractor: Any = None,
         learning_analyzer: Any = None,
         skill_store: Any = None,
@@ -1815,7 +1816,7 @@ class HubOrchestrator:
         self._registry = _load_specialists()
         self._registry_errors: list[RegistryLoadError] = _load_registry_errors()
         self._registry_last_refreshed = _utcnow_iso()
-        self._session_id = load_or_create_session_id()
+        self._session_id = session_id or load_or_create_session_id()
         self._semantic_extractor = semantic_extractor or extract_semantic_candidates
         self._learning_analyzer = learning_analyzer or analyze_learning
         self._skill_store = skill_store or HubSkillStore()

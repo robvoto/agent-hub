@@ -85,7 +85,9 @@ Open the real Hub specialist graph in LangGraph Studio:
 uv run --with 'langgraph-cli[inmem]' langgraph dev --host 127.0.0.1 --port 2024
 ```
 
-Studio uses `langgraph.json` and `src/agent_hub/studio_graph.py`. The Studio adapter keeps the real Hub specialist tools and ReAct `agent`/`tools` topology, while leaving persistence to Studio and excluding Hub-only support tools that start external gateways.
+Studio uses `langgraph.json` and `src/agent_hub/studio_graph.py`. Each Studio turn delegates to the production `HubOrchestrator` lifecycle, including its task-run persistence, routing, specialist dispatch, pending clarification/decision/approval continuation, and terminal-state handling. Plain-text continuation and `/approve`, `/reject`, and `/stop` follow the same lifecycle methods as CLI/Telegram. Studio's async node is only the thread boundary needed to run Hub's synchronous SQLite and subprocess workflow safely.
+
+The Studio chat graph intentionally shows one `hub` boundary node. That is an honest view of the runtime adapter: rendering `agent`/`tools` as extra Studio nodes would either be cosmetic or create a second executable orchestration path. For useful specialist-level visibility, use the authoritative compiled Hub export (`07-HUB-COMPILED-LANGGRAPH`) and the callable-tool diagrams below. A future Studio graph-view improvement should derive from the same production compiled graph/export metadata while keeping this adapter as the only chat execution path.
 
 Export the compiled graph itself to Mermaid and SVG:
 
