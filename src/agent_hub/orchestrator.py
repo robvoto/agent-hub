@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import uuid
+from collections.abc import Mapping
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,13 +38,12 @@ from .factory_bridge import (
     resume_factory_request,
 )
 from .handoff_transition import (
-    FactoryHandoffEvidenceResolver,
     HandoffEvidenceError,
     HandoffEvidenceResolver,
     HandoffFidelityReview,
     HandoffFidelityReviewer,
     NextTaskContract,
-    UnavailableHandoffEvidenceResolver,  # noqa: F401 - retained module compatibility
+    SourceAwareHandoffEvidenceResolver,
     resolve_approved_design_evidence,
     validate_handoff_references,
 )
@@ -1822,7 +1822,7 @@ class HubOrchestrator:
         self._handoff_evidence_resolver = (
             handoff_evidence_resolver
             if handoff_evidence_resolver is not None
-            else FactoryHandoffEvidenceResolver()
+            else SourceAwareHandoffEvidenceResolver()
         )
         self._learning_notify: Any = None
         self._learning_watermark: dict[str, Any] = {}
@@ -1843,7 +1843,7 @@ class HubOrchestrator:
         *,
         include_memory_tools: bool = True,
         task_kind: str | None = None,
-    ) -> Any:
+    ) -> Mapping[str, Any]:
         store = get_knowledge_store()
         checkpointer = get_checkpointer()
         active_registry = self._registry if registry is None else registry
@@ -3050,6 +3050,26 @@ class HubOrchestrator:
             originating_agent_id=run.selected_agent_id,
         )
 
+    def _resolve_handoff_evidence(
+        self,
+        references: Sequence[str],
+        next_task: NextTaskContract,
+        project_context: ProjectContext | None,
+        *,
+        originating_agent_id: str | None,
+        factory_thread_id: str | None,
+    ) -> Any:
+        resolver = self._handoff_evidence_resolver
+        if isinstance(resolver, SourceAwareHandoffEvidenceResolver):
+            return resolver.resolve(
+                references,
+                next_task,
+                project_context,
+                originating_agent_id=originating_agent_id,
+                factory_thread_id=factory_thread_id,
+            )
+        return resolver.resolve(references, next_task, project_context)
+
     def _eligible_handoff_choices(
         self, task_kind: str
     ) -> tuple[list[AgentSpec], list[dict[str, str]]]:
@@ -3169,7 +3189,7 @@ class HubOrchestrator:
             next_task.references or [],
             originating_project_context,
         )
-        authoritative_evidence = self._handoff_evidence_resolver.resolve(
+        authoritative_evidence = self._resolve_handoff_evidence(
             next_task.references or [],
             next_task,
             project_context,

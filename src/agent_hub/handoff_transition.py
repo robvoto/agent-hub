@@ -11,7 +11,7 @@ import json
 import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal, Protocol
 
 from langchain_core.callbacks import UsageMetadataCallbackHandler
@@ -58,9 +58,6 @@ class HandoffEvidenceResolver(Protocol):
         references: Sequence[str],
         next_task: NextTaskContract,
         project_context: ProjectContext | None,
-        *,
-        originating_agent_id: str | None = None,
-        factory_thread_id: str | None = None,
     ) -> Mapping[str, Any]: ...
 
 
@@ -72,15 +69,45 @@ class UnavailableHandoffEvidenceResolver:
         references: Sequence[str],
         next_task: NextTaskContract,
         project_context: ProjectContext | None,
-        *,
-        originating_agent_id: str | None = None,
-        factory_thread_id: str | None = None,
     ) -> Mapping[str, Any]:
-        del references, next_task, project_context, originating_agent_id, factory_thread_id
+        del references, next_task, project_context
         raise HandoffEvidenceError(
             "authoritative Factory design evidence is unavailable; refusing to use "
             "producer-supplied handoff evidence"
         )
+
+
+def _is_canonical_factory_agent_id(value: str) -> bool:
+    """Mirror Factory's explicit staged-agent identifier syntax for routing only."""
+    return (
+        value.isascii()
+        and 1 <= len(value) <= 64
+        and value[0].islower()
+        and all(
+            character.islower() or character.isdigit() or character == "-"
+            for character in value
+        )
+    )
+
+
+def _canonical_factory_build_task_references(
+    references: Sequence[str],
+) -> list[str]:
+    """Return references with AF-048's exact, bounded BUILD_TASK path shape."""
+    candidates: list[str] = []
+    for reference in references:
+        if not isinstance(reference, str) or not reference:
+            continue
+        path = PurePosixPath(reference)
+        if (
+            str(path) == reference
+            and path.parts[:2] == ("staging", "agents")
+            and len(path.parts) == 4
+            and _is_canonical_factory_agent_id(path.parts[2])
+            and path.parts[3] == "BUILD_TASK.json"
+        ):
+            candidates.append(reference)
+    return candidates
 
 
 class FactoryHandoffEvidenceResolver:
@@ -99,6 +126,22 @@ class FactoryHandoffEvidenceResolver:
             )
         return spec.id
 
+    def can_resolve(
+        self,
+        references: Sequence[str],
+        *,
+        originating_agent_id: str | None = None,
+    ) -> bool:
+        """Identify the explicit Factory source contract without inspecting task prose."""
+        if originating_agent_id is None:
+            return False
+        if len(_canonical_factory_build_task_references(references)) != 1:
+            return False
+        try:
+            return originating_agent_id == self._factory_agent_id()
+        except HandoffEvidenceError:
+            return False
+
     def target_project_context(
         self,
         references: Sequence[str],
@@ -106,10 +149,11 @@ class FactoryHandoffEvidenceResolver:
         *,
         originating_agent_id: str | None = None,
     ) -> ProjectContext:
-        del references, originating_project_context
-        if originating_agent_id != self._factory_agent_id():
+        del originating_project_context
+        if not self.can_resolve(references, originating_agent_id=originating_agent_id):
             raise HandoffEvidenceError(
-                "Factory BUILD_TASK evidence requires Agent Factory as the originating specialist"
+                "Factory BUILD_TASK evidence requires Agent Factory and one canonical "
+                "staging/agents/<id>/BUILD_TASK.json reference"
             )
         resolution = get_project_context_registry().resolve_known(str(self.factory_root))
         if resolution.error or resolution.context is None:
@@ -127,9 +171,10 @@ class FactoryHandoffEvidenceResolver:
         originating_agent_id: str | None = None,
         factory_thread_id: str | None = None,
     ) -> Mapping[str, Any]:
-        if originating_agent_id != self._factory_agent_id():
+        if not self.can_resolve(references, originating_agent_id=originating_agent_id):
             raise HandoffEvidenceError(
-                "Factory BUILD_TASK evidence requires Agent Factory as the originating specialist"
+                "Factory BUILD_TASK evidence requires Agent Factory and one canonical "
+                "staging/agents/<id>/BUILD_TASK.json reference"
             )
         if not factory_thread_id:
             raise HandoffEvidenceError(
@@ -266,6 +311,69 @@ class FactoryHandoffEvidenceResolver:
                 "agent_version": agent_version,
             },
         }
+
+
+class SourceAwareHandoffEvidenceResolver:
+    """Select an authoritative source by explicit producer identity and syntax."""
+
+    def __init__(
+        self,
+        *,
+        factory_resolver: FactoryHandoffEvidenceResolver | None = None,
+        unavailable_resolver: UnavailableHandoffEvidenceResolver | None = None,
+    ) -> None:
+        self._factory_resolver = factory_resolver or FactoryHandoffEvidenceResolver()
+        self._unavailable_resolver = unavailable_resolver or UnavailableHandoffEvidenceResolver()
+
+    def _select(
+        self,
+        references: Sequence[str],
+        *,
+        originating_agent_id: str | None,
+    ) -> HandoffEvidenceResolver:
+        if self._factory_resolver.can_resolve(
+            references,
+            originating_agent_id=originating_agent_id,
+        ):
+            return self._factory_resolver
+        return self._unavailable_resolver
+
+    def resolve(
+        self,
+        references: Sequence[str],
+        next_task: NextTaskContract,
+        project_context: ProjectContext | None,
+        *,
+        originating_agent_id: str | None = None,
+        factory_thread_id: str | None = None,
+    ) -> Mapping[str, Any]:
+        resolver = self._select(references, originating_agent_id=originating_agent_id)
+        if resolver is self._factory_resolver:
+            return resolver.resolve(
+                references,
+                next_task,
+                project_context,
+                originating_agent_id=originating_agent_id,
+                factory_thread_id=factory_thread_id,
+            )
+        return resolver.resolve(references, next_task, project_context)
+
+    def target_project_context(
+        self,
+        references: Sequence[str],
+        originating_project_context: ProjectContext | None,
+        *,
+        originating_agent_id: str | None = None,
+    ) -> ProjectContext | None:
+        resolver = self._select(references, originating_agent_id=originating_agent_id)
+        resolver_method = getattr(resolver, "target_project_context", None)
+        if not callable(resolver_method):
+            return originating_project_context
+        return resolver_method(
+            references,
+            originating_project_context,
+            originating_agent_id=originating_agent_id,
+        )
 
 
 class TargetProjectEvidence(BaseModel):

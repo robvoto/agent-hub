@@ -15,6 +15,7 @@ from agent_hub.handoff_transition import (
     HandoffEvidenceError,
     HandoffFidelityReviewer,
     NextTaskContract,
+    UnavailableHandoffEvidenceResolver,
 )
 from agent_hub.orchestrator import HubOrchestrator, RoutingDecision
 from agent_hub.project_context import ProjectContext, ProjectContextResolution
@@ -182,9 +183,6 @@ class _FixtureEvidenceResolver:
         references,
         next_task,
         project_context,
-        *,
-        originating_agent_id=None,
-        factory_thread_id=None,
     ):
         self.calls.append((list(references), next_task, project_context))
         return self.evidence
@@ -210,11 +208,14 @@ class _FakeProjectRegistry:
         return self.live_context
 
 
+_DEFAULT_RESOLVER = object()
+
+
 def _orchestrator(
     monkeypatch,
     reviewer,
     specs=None,
-    resolver=None,
+    resolver=_DEFAULT_RESOLVER,
     project_registry=None,
     routing_classifier=None,
     graph=None,
@@ -232,12 +233,16 @@ def _orchestrator(
         "get_project_context_registry",
         lambda: project_registry or _FakeProjectRegistry(),
     )
-    return HubOrchestrator(
-        model="test",
-        routing_classifier=routing_classifier,
-        handoff_reviewer=reviewer,
-        handoff_evidence_resolver=resolver or _FixtureEvidenceResolver(),
-    )
+    kwargs: dict[str, object] = {
+        "model": "test",
+        "routing_classifier": routing_classifier,
+        "handoff_reviewer": reviewer,
+    }
+    if resolver is _DEFAULT_RESOLVER:
+        kwargs["handoff_evidence_resolver"] = _FixtureEvidenceResolver()
+    elif resolver is not None:
+        kwargs["handoff_evidence_resolver"] = resolver
+    return HubOrchestrator(**kwargs)
 
 
 def _paused_origin(
@@ -582,6 +587,7 @@ def test_factory_handoff_approves_child_with_factory_root_context(monkeypatch, t
     monkeypatch.setattr(
         "agent_hub.handoff_transition.get_project_context_registry", lambda: registry
     )
+    monkeypatch.setattr("agent_hub.handoff_transition.AGENT_FACTORY_ROOT", root)
     resolved = _factory_resolution()
     monkeypatch.setattr(
         "agent_hub.factory_bridge.resolve_factory_build_task",
@@ -595,8 +601,8 @@ def test_factory_handoff_approves_child_with_factory_root_context(monkeypatch, t
         monkeypatch,
         HandoffFidelityReviewer(review_callable=lambda _payload: REVIEW_SUPPORTED),
         specs=specs,
-        resolver=FactoryHandoffEvidenceResolver(root),
         project_registry=registry,
+        resolver=None,
     )
     run = _paused_origin(
         orch,
@@ -631,6 +637,20 @@ def test_factory_handoff_approves_child_with_factory_root_context(monkeypatch, t
     assert calls[0][2]["references"] == next_task.references
 
 
+def test_default_handoff_resolver_fails_closed_for_non_factory_source(monkeypatch):
+    orch = _orchestrator(
+        monkeypatch,
+        HandoffFidelityReviewer(review_callable=lambda _payload: REVIEW_SUPPORTED),
+        resolver=None,
+    )
+    run = _paused_origin(orch)
+
+    with pytest.raises(HandoffEvidenceError, match="authoritative Factory design evidence"):
+        orch._prepare_handoff_transition(run, {"status": "success", "next_task": NEXT_TASK})
+
+    assert get_task_run_store().get_run(run.id).state == TASK_STATE_IN_PROGRESS
+
+
 def test_deterministic_validation_precedes_reviewer_and_missing_evidence_fails_closed(monkeypatch):
     called = False
 
@@ -642,7 +662,7 @@ def test_deterministic_validation_precedes_reviewer_and_missing_evidence_fails_c
     orch = _orchestrator(
         monkeypatch,
         HandoffFidelityReviewer(review_callable=review),
-        resolver=orchestrator_module.UnavailableHandoffEvidenceResolver(),
+        resolver=UnavailableHandoffEvidenceResolver(),
     )
     run = _paused_origin(orch)
     assert run is not None
