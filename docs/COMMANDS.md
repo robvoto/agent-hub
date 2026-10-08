@@ -38,14 +38,21 @@ The `./run.sh` wrapper accepts the same `chat`, `telegram` and `--debug` choices
 | `/new` | Start a fresh thread; do not cancel active work |
 | `/stop` | Cancel current work and keep the same conversation |
 | `/reset` | Cancel current work and start a fresh conversation |
-| `/approve` | Resume an approval pause |
-| `/reject [reason]` | Reject and close an approval pause |
+| `/approve` | Approve the current approval pause or exact Hub transition handoff |
+| `/reject [reason]` | Reject and close the current approval pause or Hub transition handoff |
 | `/learn <lesson>` | Store authoritative memory, analyse it and apply only governed skill actions |
 | `/memory` | List stored Hub learnings |
 | `/forget <memory-id>` | Remove one stored learning |
 | `/learn-mode [on|off]` | Show or change automatic background semantic learning for this session |
 
-A normal message resumes an active clarification or decision pause. For decisions, reply with the option number or name.
+A normal message resumes an active clarification or specialist decision pause. For a Hub-owned
+cross-specialist transition, the packet is the frozen approval surface: use `/approve` when one
+specialist is resolved, or reply `APPROVE <exact-specialist-id>` when several eligible choices
+are shown. Approval completes the originating design parent and dispatches a separate Hub child
+run. Use `REQUEST_CHANGES <correction>` to send the correction back through the originating
+Factory thread for a fresh reviewed handoff, or `REJECT <reason>` to prevent dispatch and cancel
+the proposed continuation. `/stop` cancels an active sequential child when issued against its
+parent or child run.
 
 Not implemented: `/fork`, generic `/resume`, `/model`, `/med`, `/high`.
 
@@ -122,7 +129,16 @@ HUB_BOT_TOKEN=...
 HUB_ALLOWED_CHAT_IDS=...
 HUB_MODEL=<approved-model-id>
 HUB_REASONING_EFFORT=<optional: none|low|medium|high>
+HUB_HANDOFF_REVIEW_MODEL=<optional approved priced reviewer model; defaults to HUB_MODEL>
+HUB_HANDOFF_REVIEW_REASONING_EFFORT=<reviewer-only: none|low|medium|high>
+HUB_HANDOFF_REVIEW_TIMEOUT_SECONDS=<optional bounded reviewer timeout>
+HUB_HANDOFF_REVIEW_MAX_TOKENS=<optional bounded reviewer output limit>
 HUB_HUMAN_MCP_ENABLED=<true locally when the configured stdio bridge exists; false in CI>
 ```
 
 `HUB_ALLOWED_CHAT_IDS` is comma-separated. Optional integration settings are documented in `.env.example`; treat that file and `src/agent_hub/config.py` as current truth rather than duplicating every variable here.
+
+The deterministic reviewer runtime bound is the configured priced model, at most 64 KiB of
+complete reviewer input, the configured output cap (maximum 4000 tokens), one request with
+retries disabled, and the configured timeout (maximum 120 seconds). Hub does not invent a
+monetary cap; normal cost logging records actual usage.

@@ -50,6 +50,66 @@ def chat_model_kwargs(model: str) -> dict[str, str]:
         kwargs["reasoning_effort"] = reasoning_effort
     return kwargs
 
+
+def configured_handoff_reviewer_model() -> str:
+    """Return the configured model for the independent handoff reviewer."""
+    return os.getenv("HUB_HANDOFF_REVIEW_MODEL", "").strip() or configured_model()
+
+
+def configured_handoff_reviewer_reasoning_effort() -> str:
+    """Return the reviewer's explicit reasoning-effort setting.
+
+    The reviewer deliberately does not inherit ``HUB_REASONING_EFFORT``;
+    its reasoning budget is an independently governed runtime setting.
+    """
+    value = os.getenv("HUB_HANDOFF_REVIEW_REASONING_EFFORT", "none").strip().lower()
+    allowed = {"none", "low", "medium", "high"}
+    if value not in allowed:
+        raise ConfigurationError(
+            "HUB_HANDOFF_REVIEW_REASONING_EFFORT must be one of: none, low, medium, high."
+        )
+    return value
+
+
+def handoff_reviewer_model_kwargs(model: str) -> dict[str, str]:
+    """Build reviewer-only model kwargs without inheriting Hub turn settings."""
+    return {
+        "model": model,
+        "reasoning_effort": configured_handoff_reviewer_reasoning_effort(),
+    }
+
+
+def configured_handoff_reviewer_timeout_seconds() -> float:
+    """Return the bounded reviewer request timeout."""
+    value = os.getenv("HUB_HANDOFF_REVIEW_TIMEOUT_SECONDS", "30").strip()
+    try:
+        timeout = float(value)
+    except ValueError as exc:
+        raise ConfigurationError(
+            "HUB_HANDOFF_REVIEW_TIMEOUT_SECONDS must be a positive number."
+        ) from exc
+    if timeout <= 0 or timeout > 120:
+        raise ConfigurationError(
+            "HUB_HANDOFF_REVIEW_TIMEOUT_SECONDS must be greater than 0 and at most 120."
+        )
+    return timeout
+
+
+def configured_handoff_reviewer_max_tokens() -> int:
+    """Return the bounded reviewer output-token limit."""
+    value = os.getenv("HUB_HANDOFF_REVIEW_MAX_TOKENS", "1200").strip()
+    try:
+        max_tokens = int(value)
+    except ValueError as exc:
+        raise ConfigurationError(
+            "HUB_HANDOFF_REVIEW_MAX_TOKENS must be a positive integer."
+        ) from exc
+    if max_tokens <= 0 or max_tokens > 4000:
+        raise ConfigurationError(
+            "HUB_HANDOFF_REVIEW_MAX_TOKENS must be greater than 0 and at most 4000."
+        )
+    return max_tokens
+
 # Agent Factory — hub reads the agent registry from here.
 # Override with AGENT_FACTORY_ROOT env var if agent-factory lives elsewhere.
 AGENT_FACTORY_ROOT = Path(

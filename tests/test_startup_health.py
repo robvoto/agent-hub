@@ -52,7 +52,9 @@ def _configure_valid_startup(monkeypatch, tmp_path: Path) -> dict[str, Path]:
             {
                 "models": {
                     "gpt-4.1-mini": {
-                        "status": "unknown",
+                        "input_per_1m": 0.4,
+                        "cached_input_per_1m": 0.1,
+                        "output_per_1m": 1.6,
                     }
                 }
             }
@@ -87,6 +89,7 @@ def _configure_valid_startup(monkeypatch, tmp_path: Path) -> dict[str, Path]:
         ),
     )
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    monkeypatch.setenv("HUB_MODEL", "gpt-4.1-mini")
     monkeypatch.setenv("HUB_BOT_TOKEN", "test-telegram-token")
     monkeypatch.setenv("HUB_ALLOWED_CHAT_IDS", "1001,1002")
 
@@ -167,6 +170,62 @@ def test_startup_healthcheck_rejects_model_missing_from_cost_catalog(monkeypatch
 
     assert report.has_failures
     assert "not listed in the LLM cost catalog" in _failure_detail(report, "HUB_MODEL")
+
+
+def test_startup_healthcheck_rejects_unpriced_handoff_reviewer_model(monkeypatch, tmp_path):
+    ctx = _configure_valid_startup(monkeypatch, tmp_path)
+    ctx["cost_catalog"].write_text(
+        json.dumps(
+            {
+                "models": {
+                    "gpt-4.1-mini": {"status": "unknown"},
+                    "gpt-5.4": {
+                        "input_per_1m": 2.5,
+                        "cached_input_per_1m": 0.25,
+                        "output_per_1m": 15.0,
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HUB_HANDOFF_REVIEW_MODEL", "gpt-4.1-mini")
+
+    report = run_startup_healthcheck("chat")
+
+    assert report.has_failures
+    assert "missing from the approved priced" in _failure_detail(
+        report, "HUB_HANDOFF_REVIEW_MODEL"
+    )
+
+
+def test_startup_healthcheck_accepts_separately_configured_priced_reviewer(monkeypatch, tmp_path):
+    ctx = _configure_valid_startup(monkeypatch, tmp_path)
+    ctx["cost_catalog"].write_text(
+        json.dumps(
+            {
+                "models": {
+                    "gpt-4.1-mini": {"status": "unknown"},
+                    "gpt-5.4": {
+                        "input_per_1m": 2.5,
+                        "cached_input_per_1m": 0.25,
+                        "output_per_1m": 15.0,
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HUB_HANDOFF_REVIEW_MODEL", "gpt-5.4")
+    monkeypatch.setenv("HUB_REASONING_EFFORT", "high")
+    monkeypatch.setenv("HUB_HANDOFF_REVIEW_REASONING_EFFORT", "low")
+
+    report = run_startup_healthcheck("chat")
+
+    assert not report.has_failures
+    detail = _failure_detail(report, "HUB_HANDOFF_REVIEW_MODEL")
+    assert "reasoning effort low" in detail
+    assert "output cap 1200 tokens" in detail
 
 
 def test_telegram_healthcheck_warns_without_allowlist(monkeypatch, tmp_path):

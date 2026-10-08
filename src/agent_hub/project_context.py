@@ -256,6 +256,10 @@ class ProjectContextRegistry:
 
         return self._revalidate(stored)
 
+    def revalidate_context(self, context: ProjectContext) -> ProjectContextResolution:
+        """Revalidate one frozen context without consulting current session selection."""
+        return self._revalidate(context)
+
     def resolve_for_request(self, session_id: str, request_text: str) -> ProjectContextResolution:
         """Resolve a project named by a request, bounded by known contexts.
 
