@@ -699,6 +699,60 @@ def test_generic_handoff_does_not_invent_factory_constraints(monkeypatch):
     assert "execution_constraints" not in calls[0]
 
 
+def test_factory_decision_resume_reuses_checkpoint_constraints_and_approval(monkeypatch):
+    spec = _spec("ai-tech-lead")
+    orch = _orchestrator(
+        monkeypatch,
+        HandoffFidelityReviewer(review_callable=lambda _payload: REVIEW_SUPPORTED),
+        specs=[spec],
+    )
+    store = get_task_run_store()
+    run = store.create_run(orch.session_id, "Implement the approved staged package")
+    store.transition(run.id, TASK_STATE_ROUTED, selected_agent_id=spec.id)
+    store.transition(run.id, TASK_STATE_DISPATCHED, selected_agent_id=spec.id)
+    store.transition(run.id, TASK_STATE_IN_PROGRESS, selected_agent_id=spec.id)
+    store.transition(
+        run.id,
+        TASK_STATE_WAITING_DECISION,
+        selected_agent_id=spec.id,
+        context_updates={
+            "agent_request_id": "atl-request-1",
+            "agent_dispatch_task_kind": "coding_task",
+            "specialist_pending_decision": {"options": [{"name": "answer"}]},
+            "execution_constraints": {
+                "schema_version": 1,
+                "token_budget": 250000,
+                "time_budget_seconds": 900,
+                "correlation_id": "corr-1",
+                "artifact_reference": "staging/agents/example-agent/BUILD_TASK.json",
+            },
+        },
+    )
+
+    calls = []
+    monkeypatch.setattr(
+        orchestrator_module,
+        "_dispatch_subprocess",
+        lambda _spec, _task, **kwargs: calls.append(kwargs)
+        or {"status": "success", "summary": "Resumed."},
+    )
+
+    assert orch.provide_decision("answer") == "[Ai Tech Lead] Resumed."
+    assert calls == [
+        {
+            "request_id": "atl-request-1",
+            "decision": {"option": "answer", "text": "", "actor": "human"},
+            "project_root_override": None,
+            "project_context_override": None,
+            "references": None,
+            "backlog_reference_override": None,
+            "task_kind": "coding_task",
+            "result_registry": orch._registry,
+            "human_approved": True,
+        }
+    ]
+
+
 @pytest.mark.parametrize("build_status", ["failed", "stopped"])
 def test_factory_build_failure_is_authoritative_even_when_atl_reports_success(
     monkeypatch, tmp_path, build_status

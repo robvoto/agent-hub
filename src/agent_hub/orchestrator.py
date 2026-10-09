@@ -2940,6 +2940,14 @@ class HubOrchestrator:
             selected_agent_id=spec.id,
         )
         decision = {"option": option, "text": text, "actor": actor}
+        # Decision resumes reuse the specialist's existing request checkpoint.
+        # The coding backend must load the already-approved Factory controls
+        # from that checkpoint rather than receiving them as a new envelope
+        # field.  Preserve the approval marker for Factory manufacturing
+        # children without re-submitting immutable execution constraints.
+        resume_kwargs: dict[str, Any] = {}
+        if pending.context.get("execution_constraints") is not None:
+            resume_kwargs["human_approved"] = True
         with (
             _registered_resumed_run(pending.id),
             active_task_run(pending.id, progress_callback=progress_notify),
@@ -2955,11 +2963,7 @@ class HubOrchestrator:
                 backlog_reference_override=pending.context.get("agent_dispatch_backlog_reference"),
                 task_kind=pending.context.get("agent_dispatch_task_kind"),
                 result_registry=self._registry,
-                **(
-                    {"execution_constraints": pending.context["execution_constraints"]}
-                    if pending.context.get("execution_constraints") is not None
-                    else {}
-                ),
+                **resume_kwargs,
             )
         return self._finalize_specialist_follow_up(pending.id, spec, output)
 
