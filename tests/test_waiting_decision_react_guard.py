@@ -563,3 +563,62 @@ def test_stream_loop_is_not_stopped_by_a_clarification_pause(monkeypatch, tmp_pa
     assert len(runs) == 1
     assert runs[0].state == TASK_STATE_WAITING_CLARIFICATION
     assert runs[0].final_response == EXPECTED_CLARIFICATION_REPLY
+
+
+def test_concurrent_direct_dispatch_cannot_bypass_pending_decision(monkeypatch, tmp_path):
+    """Two overlapping tool calls share a run; the second must not re-dispatch.
+
+    The first call is held inside an inert Popen double while the second starts.
+    This reproduced in_progress -> routed before per-run serialization existed.
+    """
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    fake_popen = _scripted_popen([DECISION_OUTPUT, DECISION_OUTPUT])
+    original_init = fake_popen.__init__
+    first_in_subprocess = threading.Event()
+    release_first = threading.Event()
+    second_started = threading.Event()
+
+    def blocked_init(self, *args, **kwargs):
+        if not first_in_subprocess.is_set():
+            first_in_subprocess.set()
+            assert release_first.wait(timeout=5)
+        return original_init(self, *args, **kwargs)
+
+    fake_popen.__init__ = blocked_init
+    monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", fake_popen)
+    spec = _atl_spec(tmp_path)
+    orchestrator = _orchestrator(monkeypatch, specialists=[spec])
+    run = get_task_run_store().create_run(
+        session_id=orchestrator.session_id, user_message="Parallel tools"
+    )
+    tool = _make_agent_tool(spec)
+
+    def call():
+        with active_task_run(run.id):
+            return tool.invoke({"task": "Clean up dead code"})
+
+    def second_call():
+        second_started.set()
+        return call()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(call)
+        assert first_in_subprocess.wait(timeout=5)
+        second = pool.submit(second_call)
+        try:
+            assert second_started.wait(timeout=5)
+            time.sleep(0.1)  # Let the sibling contend while the first is blocked.
+            assert not second.done()
+        finally:
+            release_first.set()
+        first_reply = first.result(timeout=5)
+        second_reply = second.result(timeout=5)
+
+    assert first_reply == EXPECTED_DECISION_REPLY
+    assert "already pending" in second_reply
+    assert len(fake_popen.calls) == 1
+    paused = get_task_run_store().get_run(run.id)
+    assert paused is not None and paused.state == TASK_STATE_WAITING_DECISION
