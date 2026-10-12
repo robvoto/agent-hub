@@ -11,11 +11,13 @@ from langchain_core.messages import AIMessage
 
 import agent_hub.orchestrator as orchestrator_module
 from agent_hub.handoff_transition import (
+    ApprovedDesignEvidence,
     FactoryHandoffEvidenceResolver,
     HandoffEvidenceError,
     HandoffFidelityReviewer,
     NextTaskContract,
     UnavailableHandoffEvidenceResolver,
+    factory_execution_constraints,
 )
 from agent_hub.orchestrator import HubOrchestrator, RoutingDecision
 from agent_hub.project_context import ProjectContext, ProjectContextResolution
@@ -72,7 +74,13 @@ FACTORY_ROOT_CONTEXT = ProjectContext(
 )
 
 
-def _factory_resolution(next_task=None, *, thread_id=FACTORY_THREAD, correlation_id="corr-1"):
+def _factory_resolution(
+    next_task=None,
+    *,
+    thread_id=FACTORY_THREAD,
+    correlation_id="corr-1",
+    token_budget=12000,
+):
     next_task = next_task or {
         "task_kind": "coding_task",
         "task": "Implement the approved staged package.",
@@ -90,7 +98,7 @@ def _factory_resolution(next_task=None, *, thread_id=FACTORY_THREAD, correlation
         "test_commands": ["uv run pytest staging/agents/example-agent/tests -q"],
         "relevant_docs": ["docs/agent-contract.md"],
         "relevant_skills": ["skills/agent-authoring/SKILL.md"],
-        "token_budget": 12000,
+        "token_budget": token_budget,
         "time_budget_seconds": 1800,
         "stop_conditions": ["Stop when validation cannot be satisfied."],
         "runtime_pattern": "deterministic_workflow",
@@ -466,7 +474,10 @@ def test_valid_next_task_becomes_persisted_hub_transition(monkeypatch):
     }
 
 
-def test_factory_resolver_maps_factory_validated_build_task_to_evidence(monkeypatch, tmp_path):
+@pytest.mark.parametrize("token_budget", [12000, None])
+def test_factory_resolver_maps_factory_validated_build_task_to_evidence(
+    monkeypatch, tmp_path, token_budget
+):
     root = tmp_path / "agent-factory"
     root.mkdir()
     factory_project = replace(FACTORY_ROOT_CONTEXT, root=str(root))
@@ -483,7 +494,7 @@ def test_factory_resolver_maps_factory_validated_build_task_to_evidence(monkeypa
             resolution=ProjectContextResolution(context=factory_project, error=None)
         ),
     )
-    resolved = _factory_resolution()
+    resolved = _factory_resolution(token_budget=token_budget)
     monkeypatch.setattr(
         "agent_hub.factory_bridge.resolve_factory_build_task",
         lambda **_kwargs: resolved,
@@ -508,7 +519,14 @@ def test_factory_resolver_maps_factory_validated_build_task_to_evidence(monkeypa
     assert evidence["package_id"] == f"example-agent@1.0.0#{'a' * 64}"
     assert evidence["target_project"]["root"] == str(root)
     assert evidence["references"] == resolved["factory_result"]["next_task"]["references"]
-    assert evidence["budgets"] == {"token_budget": 12000, "time_budget_seconds": 1800}
+    assert evidence["budgets"] == {
+        "token_budget": token_budget,
+        "time_budget_seconds": 1800,
+    }
+    execution_constraints = factory_execution_constraints(
+        ApprovedDesignEvidence.model_validate(evidence)
+    )
+    assert execution_constraints["token_budget"] == token_budget
     assert evidence["other_constraints"]["correlation_id"] == "corr-1"
     assert evidence["other_constraints"]["artifact_reference"] == (
         "staging/agents/example-agent/BUILD_TASK.json"
@@ -516,6 +534,34 @@ def test_factory_resolver_maps_factory_validated_build_task_to_evidence(monkeypa
     assert evidence["other_constraints"]["permitted_paths"] == [
         "staging/agents/example-agent/src/**"
     ]
+
+
+def test_factory_execution_constraints_reject_missing_token_budget():
+    build_task = _factory_resolution()["build_task"]
+    approved_evidence = ApprovedDesignEvidence.model_validate(
+        {
+            "design_id": "factory-build:corr-1",
+            "package_id": "example-agent@1.0.0",
+            "task_kind": "coding_task",
+            "task": "Implement the approved staged package.",
+            "references": ["staging/agents/example-agent/BUILD_TASK.json"],
+            "purpose": "Implement the approved example package.",
+            "permissions": {"filesystem": "write", "network": False},
+            "runtime": {"mode": "subprocess"},
+            "budgets": {"time_budget_seconds": build_task["time_budget_seconds"]},
+            "acceptance_criteria": ["The package tests pass."],
+            "stop_conditions": build_task["stop_conditions"],
+            "other_constraints": {
+                "artifact_reference": "staging/agents/example-agent/BUILD_TASK.json",
+                "correlation_id": "corr-1",
+                "test_commands": build_task["test_commands"],
+                "permitted_paths": build_task["permitted_paths"],
+            },
+        }
+    )
+
+    with pytest.raises(HandoffEvidenceError, match="no token budget"):
+        factory_execution_constraints(approved_evidence)
 
 
 @pytest.mark.parametrize(
