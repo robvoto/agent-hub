@@ -1,11 +1,12 @@
 {
   "enabled": false,
   "transport": {
-    "command": "powershell.exe",
+    "command": "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
     "args": [
       "-NoProfile",
-      "-Command",
-      "uv run --directory 'E:\\Programming\\MCP-server\\claude-human-mcp' server/main.py"
+      "-NonInteractive",
+      "-File",
+      "C:\\Users\\thewr\\AppData\\Local\\OpenCode\\start-human-mcp.ps1"
     ]
   },
   "allowed_tools": [
