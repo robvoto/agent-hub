@@ -38,6 +38,29 @@ Exercise only paths supported by the selected specialist. Treat the specialist p
 
 Changing `/project` while a task is paused must not change the project context pinned to that task.
 
+## Specialist approval-decision acceptance (AGENT-HUB-015 / AGENT-HUB-053)
+
+Purpose: prove the AI Tech Lead approval path in real Telegram, and confirm Hub keeps `/approve` and `/reject` reserved for true `waiting_approval` runs.
+
+Preflight: `uv run pytest -q`; start `uv run agent-hub --debug telegram`; `/agents` lists AI Tech Lead; select a target project.
+
+Approve — same-run resume via the reported option:
+
+1. Send a bounded coding task that reaches an AI Tech Lead approval pause.
+2. Confirm the reply is `[AI Tech Lead] Decision needed: …` listing `approve`, `request_changes (needs text)`, `ask_question (needs text)`, `cancel`. Record the run id; `/status` shows `waiting_decision`.
+3. While paused, send `/approve` and `/reject`. Each must reply `No task is currently waiting for approval.` and must not resume the run — this proves those commands stay reserved and that approval is not inferred from the prompt.
+4. Reply `approve`. The same run resumes (same run id and request id) and reaches a terminal state; exactly one final reply, no duplicates.
+5. Confirm the same run id in `task_runs.sqlite3` moves `waiting_decision → routed → dispatched → in_progress → …`.
+
+Cancel — safe close via the reported option:
+
+1. Send another bounded task to the AI Tech Lead approval pause; `/status` shows `waiting_decision`.
+2. Reply `cancel`. The run closes without executing the action and no late result is delivered.
+
+Reserved-path guard: on a true `waiting_approval` run (Factory or Human MCP), `/approve` resumes and `/reject <reason>` closes it, confirming those commands still work for their own path.
+
+Evidence: Telegram replies (redacted), run ids and states, bounded log excerpts, and the `uv run pytest -q` result. Never capture bot tokens, API keys or full prompts.
+
 ## Short-term memory
 
 1. Start with `/new`.
