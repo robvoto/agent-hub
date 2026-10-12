@@ -1592,6 +1592,26 @@ def _make_agent_tool(
                 spec.id,
             )
         task_run_id = get_current_task_run_id()
+        if task_run_id:
+            paused_run = get_task_run_store().get_run(task_run_id)
+            if paused_run is not None and paused_run.state == TASK_STATE_WAITING_DECISION:
+                # AGENT-HUB-053: this run already holds a structured decision
+                # request from a specialist. Dispatching again would let the
+                # ReAct loop re-invoke the specialist (or auto-answer) before
+                # the operator replied, so refuse instead of transitioning to
+                # routed — including for parallel tool calls emitted in the
+                # same superstep.
+                detail = (
+                    f"A decision from {spec.name} is already pending for this run; "
+                    "no new specialist call was made."
+                )
+                logger.info("Task %s: %s", task_run_id, detail)
+                _human_task_log(
+                    task_run_id,
+                    "%s Replying to the pending decision resumes it.",
+                    detail,
+                )
+                return f"[{spec.name}] {detail} Reply to the pending decision to resume it."
         dispatch_task = _dispatch_task_with_operator_source(task, task_run_id)
         if task_run_id:
             get_task_run_store().transition(
@@ -3782,6 +3802,25 @@ class HubOrchestrator:
                         )
                         if streamed_values is not None:
                             result = streamed_values
+                            # AGENT-HUB-053: a specialist's structured decision
+                            # pauses this run. The stream generator runs each
+                            # superstep lazily, so stopping here keeps the LLM
+                            # from getting another turn — no automatic
+                            # re-dispatch, no auto-answer — before the operator
+                            # replies through provide_decision[_reply]. The
+                            # decision pause itself is already human-logged by
+                            # the waiting_decision transition.
+                            current_state = task_store.get_run(task_run.id)
+                            if (
+                                current_state is not None
+                                and current_state.state == TASK_STATE_WAITING_DECISION
+                            ):
+                                logger.info(
+                                    "Task %s: stopping graph stream — specialist "
+                                    "decision pending; waiting for the operator.",
+                                    task_run.id,
+                                )
+                                break
                     interrupts = _graph_interrupts(request_graph, config)
                     if interrupts:
                         value = interrupts[0].value
