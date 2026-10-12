@@ -61,6 +61,16 @@ Reserved-path guard: on a true `waiting_approval` run (Factory or Human MCP), `/
 
 Evidence: Telegram replies (redacted), run ids and states, bounded log excerpts, and the `uv run pytest -q` result. Never capture bot tokens, API keys or full prompts.
 
+### Live acceptance status (2026-10-12)
+
+Cancel path — PASSED. Run `fbb0096c-318d-4850-aad6-7058817ed77b` (request `5c5550f3-b9f5-41b3-8666-809dcaeeaed4`): AI Tech Lead surfaced a real approval as `waiting_decision` with options `approve`, `request_changes (needs text)`, `ask_question (needs text)`, `cancel`; the operator replied `cancel`; Hub resumed the same run; AI Tech Lead ended `terminal_failure` "Workflow completed without producing an instruction." with `execution_performed=false`. Hub did not return "No task is currently waiting for approval." Lifecycle: `asked -> routed:ai-tech-lead -> dispatched -> running -> decision -> routed -> dispatched -> running -> failed`. `/approve` and `/reject` were not exercised on a true `waiting_approval` run in this session.
+
+Approve path — NOT PROVEN. A live `approve` could not be exercised safely: the fail-closed setting (`execute_coding_agent=false`) was silently reverted mid-session (the settings file was rewritten by the ATL admin server/operator) and even read-only recon starts a real coding-agent (`codex`) process, so an approval could execute code. Do not claim the approve path until it is proven with the coding agent reliably disabled.
+
+Observed behaviour (investigation only, no runtime change) — Hub's orchestrator ReAct loop (`create_react_agent` in `orchestrator.py`) can treat a specialist's `waiting_decision` as an ordinary tool result and auto-reply: it re-dispatches to the specialist with synthesized guidance, with no operator input, and can repeat (three times in run `9f4fa67e` and three times in run `e48eca10`) until it emits a final surfaced decision message or the operator sends `/stop`. This is distinct from the operator-driven `provide_decision_reply` path used in the cancel proof.
+
+Regression lock: `tests/test_approval_decision_contract.py` (5 passed), full Hub suite 468 passed, `ruff` clean. Recorded on branch `test/agent-hub-053-approval-contract` (commits `dde6f40`, `48c66b0`, `38313d8`). Backlog: AGENT-HUB-015 and AGENT-HUB-053 both remain `Blocked`.
+
 ## Short-term memory
 
 1. Start with `/new`.
