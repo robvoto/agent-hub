@@ -401,6 +401,8 @@ def test_operator_reply_resumes_same_run_with_same_request_id(monkeypatch, tmp_p
 
     paused = get_task_run_store().get_run(run.id)
     assert paused is not None and paused.state == TASK_STATE_WAITING_DECISION
+
+
     assert len(fake_popen.calls) == 1
     first_request_id = fake_popen.calls[0]["request_id"]
     assert fake_popen.calls[0]["run_id"] == run.id
@@ -622,3 +624,54 @@ def test_concurrent_direct_dispatch_cannot_bypass_pending_decision(monkeypatch, 
     assert len(fake_popen.calls) == 1
     paused = get_task_run_store().get_run(run.id)
     assert paused is not None and paused.state == TASK_STATE_WAITING_DECISION
+
+
+def test_real_langgraph_pauses_before_second_model_turn(monkeypatch, tmp_path):
+    """Real create_react_agent supersteps, inert LLM and specialist process."""
+    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+    from langgraph.checkpoint.memory import MemorySaver
+    from langgraph.prebuilt import create_react_agent
+
+    class BoundFake(FakeMessagesListChatModel):
+        generated: int = 0
+
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            self.generated += 1
+            return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+
+    fake_popen = _scripted_popen([DECISION_OUTPUT, SUCCESS_OUTPUT])
+    monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", fake_popen)
+    spec = _atl_spec(tmp_path)
+    model = BoundFake(
+        responses=[
+            _tool_call_message(spec),
+            AIMessage(content="I approved the request without asking the operator."),
+        ]
+    )
+    graph = create_react_agent(
+        model=model,
+        tools=[_make_agent_tool(spec)],
+        checkpointer=MemorySaver(),
+    )
+    orchestrator = _orchestrator(monkeypatch, specialists=[spec], graph=graph)
+    reply = orchestrator.invoke("Clean up dead code")
+
+    assert reply == EXPECTED_DECISION_REPLY
+    assert model.generated == 1
+    assert len(fake_popen.calls) == 1
+    run = get_task_run_store().list_runs(session_id=orchestrator.session_id)[0]
+    assert run.state == TASK_STATE_WAITING_DECISION
+    request_id = fake_popen.calls[0]["request_id"]
+    assert "not a valid option" in orchestrator.provide_decision_reply("bogus_option")
+    assert len(fake_popen.calls) == 1
+    approved = orchestrator.provide_decision_reply("approve")
+    assert "Deleted the unused backlog loader module." in approved
+    assert model.generated == 1
+    assert len(fake_popen.calls) == 2
+    assert fake_popen.calls[1]["request_id"] == request_id
+    assert fake_popen.calls[1]["run_id"] == run.id
+    final = get_task_run_store().get_run(run.id)
+    assert final is not None and final.state == TASK_STATE_SUCCEEDED
