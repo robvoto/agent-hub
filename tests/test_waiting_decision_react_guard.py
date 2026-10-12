@@ -675,3 +675,17 @@ def test_real_langgraph_pauses_before_second_model_turn(monkeypatch, tmp_path):
     assert fake_popen.calls[1]["run_id"] == run.id
     final = get_task_run_store().get_run(run.id)
     assert final is not None and final.state == TASK_STATE_SUCCEEDED
+
+
+
+def test_missing_run_record_fails_closed_before_dispatch(monkeypatch, tmp_path):
+    """A run id without a persisted record cannot dispatch a specialist."""
+    import pytest
+
+    fake_popen = _scripted_popen([SUCCESS_OUTPUT])
+    monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", fake_popen)
+    tool = _make_agent_tool(_atl_spec(tmp_path))
+    with active_task_run("nonexistent-run-id"):
+        with pytest.raises(KeyError, match="Unknown task run"):
+            tool.invoke({"task": "Do not dispatch"})
+    assert len(fake_popen.calls) == 0
