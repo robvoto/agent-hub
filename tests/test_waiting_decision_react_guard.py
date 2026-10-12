@@ -665,10 +665,24 @@ def test_real_langgraph_pauses_before_second_model_turn(monkeypatch, tmp_path):
     run = get_task_run_store().list_runs(session_id=orchestrator.session_id)[0]
     assert run.state == TASK_STATE_WAITING_DECISION
     request_id = fake_popen.calls[0]["request_id"]
-    assert "not a valid option" in orchestrator.provide_decision_reply("bogus_option")
+
+    # Exercise Telegram's real incoming-message path, but mock outbound
+    # delivery so there are no network requests or production credentials.
+    from agent_hub.telegram_gateway import TelegramGateway
+
+    delivered = []
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway._send_message",
+        lambda token, chat_id, text, *, parse_mode="Markdown": delivered.append(
+            (chat_id, text)
+        ),
+    )
+    gateway = TelegramGateway("inert-test-token", orchestrator)
+    gateway._process_user_message(42, "bogus_option")
+    assert any("not a valid option" in text for _, text in delivered)
     assert len(fake_popen.calls) == 1
-    approved = orchestrator.provide_decision_reply("approve")
-    assert "Deleted the unused backlog loader module." in approved
+    gateway._process_user_message(42, "approve")
+    assert any("Deleted the unused backlog loader module." in text for _, text in delivered)
     assert model.generated == 1
     assert len(fake_popen.calls) == 2
     assert fake_popen.calls[1]["request_id"] == request_id
