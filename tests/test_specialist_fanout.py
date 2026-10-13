@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from agent_hub.orchestrator import _serialise_run_dispatch
 from agent_hub.project_context import ProjectContext, ProjectContextResolution
 from agent_hub.registry import AgentSpec
 from agent_hub.specialist_fanout import FanoutConfig, FanoutError, run_specialist_fanout
@@ -214,6 +215,64 @@ def test_fanout_honours_max_concurrency(monkeypatch):
     )
 
     assert maximum == 2
+
+
+def test_parallel_fanout_is_not_serialised_by_the_per_run_dispatch_lock(monkeypatch):
+    """Legitimate parallel specialist execution stays parallel under AGENT-HUB-053.
+
+    The per-run dispatch lock introduced by AGENT-HUB-053 is scoped to
+    ``_make_agent_tool._call_agent``'s ReAct tool. The
+    ``parallel_specialist_fanout`` tool dispatches its branches directly through
+    ``_dispatch_subprocess``, so it never enters that lock. Holding the lock for
+    a whole specialist subprocess — exactly what a paused decision does — must
+    therefore leave fan-out branches running concurrently.
+    """
+    contexts = {name: _context(name) for name in ("a", "b")}
+    fake_registry = SimpleNamespace(
+        resolve_known=lambda value: ProjectContextResolution(
+            context=contexts[value], error=None
+        )
+    )
+    monkeypatch.setattr(
+        "agent_hub.specialist_fanout.get_project_context_registry",
+        lambda: fake_registry,
+    )
+    parent = get_task_run_store().create_run(session_id="session", user_message="fan out")
+
+    counter_lock = threading.Lock()
+    current = 0
+    maximum = 0
+
+    def dispatch(spec, task, task_kind, project):
+        nonlocal current, maximum
+        with counter_lock:
+            current += 1
+            maximum = max(maximum, current)
+        time.sleep(0.05)
+        with counter_lock:
+            current -= 1
+        return {"status": "success", "summary": f"done {task}"}
+
+    with _serialise_run_dispatch(parent.id):
+        run_specialist_fanout(
+            session_id="session",
+            parent_run_id=parent.id,
+            registry=[_spec()],
+            branches=[
+                {
+                    "agent_id": "worker",
+                    "task_kind": "analysis",
+                    "task": name,
+                    "project": name,
+                }
+                for name in ("a", "b")
+            ],
+            dispatch=dispatch,
+            format_output=lambda spec, output: output["summary"],
+            config=FanoutConfig(max_branches=4, max_concurrency=2),
+        )
+
+    assert maximum == 2, "Fan-out branches were serialised by the AGENT-HUB-053 lock."
 
 
 def test_fanout_surfaces_one_branch_failure_without_retry(monkeypatch):

@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import uuid
+import weakref
 from collections.abc import Mapping
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -120,6 +121,55 @@ from .task_runs import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Serialize direct specialist calls for the same run, so a structured decision
+# from one call is observed before any sibling call can dispatch.
+#
+# Deliberate trade-off (AGENT-HUB-053; recorded in docs/VALIDATION.md): the lock
+# is held for the whole specialist subprocess, so if a single ReAct superstep ever
+# emits two *different* specialists and the first pauses on `waiting_decision`, the
+# sibling dispatch is refused and its result never reaches the model — the operator's
+# decision resume re-dispatches only the first specialist, so the sibling task has to
+# be re-asked. The parallel fanout tool is unaffected (it dispatches directly through
+# _dispatch/_dispatch_subprocess, and run_specialist_fanout fails closed for a
+# decision-paused child). Dropping a possible sibling is preferred over letting a
+# specialist decision be answered without the operator, which is the defect this fix
+# exists to prevent.
+#
+# Review findings (2026-10-13, closing the "untested" caveat above):
+#   * langgraph's sync ToolNode runs the tool calls of one superstep on a
+#     ThreadPoolExecutor (get_executor_for_config + executor.map), and Hub never
+#     sets max_concurrency on the ReAct graph — so the TOCTOU this lock closes is
+#     genuinely reachable, not theoretical. Locked by
+#     test_concurrent_direct_dispatch_cannot_bypass_pending_decision.
+#   * The sibling drop is not a regression this lock introduced: in_progress ->
+#     routed is not an allowed task-run transition, so a same-run sibling was
+#     never dispatchable except through the waiting_* -> routed pause edge that
+#     this fix refuses. Locked by test_same_run_sibling_dispatch_was_already_
+#     impossible_before_the_guard.
+#   * Legitimate parallel specialist execution is the fan-out tool, which
+#     dispatches outside this lock and stays parallel. Locked by
+#     test_parallel_fanout_is_not_serialised_by_the_per_run_dispatch_lock.
+_run_dispatch_locks_guard = threading.Lock()
+_run_dispatch_locks: weakref.WeakValueDictionary[str, threading.RLock] = (
+    weakref.WeakValueDictionary()
+)
+
+
+@contextmanager
+def _serialise_run_dispatch(run_id: str | None):
+    if not run_id:
+        yield
+        return
+    with _run_dispatch_locks_guard:
+        lock = _run_dispatch_locks.get(run_id)
+        if lock is None:
+            lock = threading.RLock()
+            _run_dispatch_locks[run_id] = lock
+    with lock:
+        yield
+
+
 human_logger = get_human_logger()
 
 
@@ -1592,32 +1642,53 @@ def _make_agent_tool(
                 spec.id,
             )
         task_run_id = get_current_task_run_id()
-        dispatch_task = _dispatch_task_with_operator_source(task, task_run_id)
-        if task_run_id:
-            get_task_run_store().transition(
-                task_run_id,
-                TASK_STATE_ROUTED,
-                detail=f"Routed to {spec.name}.",
-                selected_agent_id=spec.id,
-            )
-        if mode == "subprocess":
-            return _format_output(
-                spec,
-                _dispatch_subprocess(
+        with _serialise_run_dispatch(task_run_id):
+            if task_run_id:
+                paused_run = get_task_run_store().get_run(task_run_id)
+                if paused_run is not None and paused_run.state == TASK_STATE_WAITING_DECISION:
+                    # AGENT-HUB-053: this run already holds a structured decision
+                    # request from a specialist. Dispatching again would let the
+                    # ReAct loop re-invoke the specialist (or auto-answer) before
+                    # the operator replied, so refuse instead of transitioning to
+                    # routed — including for parallel tool calls emitted in the
+                    # same superstep.
+                    detail = (
+                        f"A decision from {spec.name} is already pending for this run; "
+                        "no new specialist call was made."
+                    )
+                    logger.info("Task %s: %s", task_run_id, detail)
+                    _human_task_log(
+                        task_run_id,
+                        "%s Replying to the pending decision resumes it.",
+                        detail,
+                    )
+                    return f"[{spec.name}] {detail} Reply to the pending decision to resume it."
+            dispatch_task = _dispatch_task_with_operator_source(task, task_run_id)
+            if task_run_id:
+                get_task_run_store().transition(
+                    task_run_id,
+                    TASK_STATE_ROUTED,
+                    detail=f"Routed to {spec.name}.",
+                    selected_agent_id=spec.id,
+                )
+            if mode == "subprocess":
+                return _format_output(
                     spec,
-                    dispatch_task,
-                    references=(
-                        resolved_references
-                        if references is not None or resolved_references
-                        else None
+                    _dispatch_subprocess(
+                        spec,
+                        dispatch_task,
+                        references=(
+                            resolved_references
+                            if references is not None or resolved_references
+                            else None
+                        ),
+                        task_kind=task_kind,
+                        result_registry=registry_for_results,
                     ),
-                    task_kind=task_kind,
-                    result_registry=registry_for_results,
-                ),
-            )
-        if mode == "factory_brain":
-            return _format_output(spec, _dispatch_factory_brain(spec, dispatch_task))
-        raise RuntimeError(f"Unsupported runtime mode: {mode}")
+                )
+            if mode == "factory_brain":
+                return _format_output(spec, _dispatch_factory_brain(spec, dispatch_task))
+            raise RuntimeError(f"Unsupported runtime mode: {mode}")
 
     return _call_agent
 
@@ -3782,6 +3853,25 @@ class HubOrchestrator:
                         )
                         if streamed_values is not None:
                             result = streamed_values
+                            # AGENT-HUB-053: a specialist's structured decision
+                            # pauses this run. The stream generator runs each
+                            # superstep lazily, so stopping here keeps the LLM
+                            # from getting another turn — no automatic
+                            # re-dispatch, no auto-answer — before the operator
+                            # replies through provide_decision[_reply]. The
+                            # decision pause itself is already human-logged by
+                            # the waiting_decision transition.
+                            current_state = task_store.get_run(task_run.id)
+                            if (
+                                current_state is not None
+                                and current_state.state == TASK_STATE_WAITING_DECISION
+                            ):
+                                logger.info(
+                                    "Task %s: stopping graph stream — specialist "
+                                    "decision pending; waiting for the operator.",
+                                    task_run.id,
+                                )
+                                break
                     interrupts = _graph_interrupts(request_graph, config)
                     if interrupts:
                         value = interrupts[0].value

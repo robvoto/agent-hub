@@ -202,7 +202,12 @@ def _write_progress_events(scenario: str, input_data: dict) -> None:
                 human_summary="Running the verification step.",
             ),
         )
-        time.sleep(0.65)
+        release_path = Path("heartbeat-release")
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not release_path.exists():
+            time.sleep(0.01)
+        if not release_path.exists():
+            raise RuntimeError("Hub did not release the heartbeat test subprocess.")
         return
 
     if scenario == "progress_invalid":

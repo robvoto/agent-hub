@@ -201,7 +201,42 @@ def test_dispatch_subprocess_emits_quiet_heartbeat(tmp_path, monkeypatch):
     monkeypatch.setattr(progress_events, "PROGRESS_HEARTBEAT_INTERVAL_SECONDS", 0.1)
 
     spec = _make_spec(tmp_path)
-    run, output = _run(spec, "SCENARIO:progress_heartbeat do the thing")
+    run = get_task_run_store().create_run(
+        session_id="session-1",
+        user_message="SCENARIO:progress_heartbeat do the thing",
+    )
+    get_task_control_registry().register_run(run.id)
+    result: dict[str, object] = {}
+
+    def _dispatch() -> None:
+        try:
+            with active_task_run(run.id):
+                result["output"] = _dispatch_subprocess(
+                    spec, "SCENARIO:progress_heartbeat do the thing"
+                )
+        except Exception as exc:
+            result["error"] = exc
+        finally:
+            get_task_control_registry().unregister_run(run.id)
+
+    worker = threading.Thread(target=_dispatch)
+    worker.start()
+
+    deadline = time.monotonic() + 5
+    heartbeat_events = []
+    while time.monotonic() < deadline:
+        events = get_task_run_store().list_progress_events(run.id)
+        heartbeat_events = [event for event in events if event.event_type == "heartbeat"]
+        if heartbeat_events:
+            break
+        time.sleep(0.01)
+
+    (tmp_path / "heartbeat-release").touch()
+    worker.join(timeout=5)
+
+    assert not worker.is_alive(), "Heartbeat test subprocess did not exit."
+    assert "error" not in result, result.get("error")
+    output = result["output"]
 
     assert output["status"] == "success"
 
