@@ -124,6 +124,17 @@ logger = logging.getLogger(__name__)
 
 # Serialize direct specialist calls for the same run, so a structured decision
 # from one call is observed before any sibling call can dispatch.
+#
+# Deliberate trade-off (AGENT-HUB-053; recorded in docs/VALIDATION.md): the lock
+# is held for the whole specialist subprocess, so if a single ReAct superstep ever
+# emits two *different* specialists and the first pauses on `waiting_decision`, the
+# sibling dispatch is refused and its result never reaches the model — the operator's
+# decision resume re-dispatches only the first specialist, so the sibling task has to
+# be re-asked. The parallel fanout tool is unaffected (it dispatches directly through
+# _dispatch/_dispatch_subprocess, and run_specialist_fanout fails closed for a
+# decision-paused child). Dropping a possible sibling is preferred over letting a
+# specialist decision be answered without the operator, which is the defect this fix
+# exists to prevent. This path is currently untested.
 _run_dispatch_locks_guard = threading.Lock()
 _run_dispatch_locks: weakref.WeakValueDictionary[str, threading.RLock] = (
     weakref.WeakValueDictionary()
@@ -142,6 +153,8 @@ def _serialise_run_dispatch(run_id: str | None):
             _run_dispatch_locks[run_id] = lock
     with lock:
         yield
+
+
 human_logger = get_human_logger()
 
 
