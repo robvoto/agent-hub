@@ -134,7 +134,22 @@ logger = logging.getLogger(__name__)
 # _dispatch/_dispatch_subprocess, and run_specialist_fanout fails closed for a
 # decision-paused child). Dropping a possible sibling is preferred over letting a
 # specialist decision be answered without the operator, which is the defect this fix
-# exists to prevent. This path is currently untested.
+# exists to prevent.
+#
+# Review findings (2026-10-13, closing the "untested" caveat above):
+#   * langgraph's sync ToolNode runs the tool calls of one superstep on a
+#     ThreadPoolExecutor (get_executor_for_config + executor.map), and Hub never
+#     sets max_concurrency on the ReAct graph — so the TOCTOU this lock closes is
+#     genuinely reachable, not theoretical. Locked by
+#     test_concurrent_direct_dispatch_cannot_bypass_pending_decision.
+#   * The sibling drop is not a regression this lock introduced: in_progress ->
+#     routed is not an allowed task-run transition, so a same-run sibling was
+#     never dispatchable except through the waiting_* -> routed pause edge that
+#     this fix refuses. Locked by test_same_run_sibling_dispatch_was_already_
+#     impossible_before_the_guard.
+#   * Legitimate parallel specialist execution is the fan-out tool, which
+#     dispatches outside this lock and stays parallel. Locked by
+#     test_parallel_fanout_is_not_serialised_by_the_per_run_dispatch_lock.
 _run_dispatch_locks_guard = threading.Lock()
 _run_dispatch_locks: weakref.WeakValueDictionary[str, threading.RLock] = (
     weakref.WeakValueDictionary()

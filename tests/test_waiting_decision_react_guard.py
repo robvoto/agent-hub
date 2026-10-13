@@ -36,8 +36,11 @@ from langchain_core.messages import AIMessage, ToolMessage
 from agent_hub.orchestrator import HubOrchestrator, _make_agent_tool
 from agent_hub.registry import AgentSpec
 from agent_hub.task_runs import (
+    _ALLOWED_TRANSITIONS,
     TASK_STATE_CANCELLED,
     TASK_STATE_FAILED,
+    TASK_STATE_IN_PROGRESS,
+    TASK_STATE_ROUTED,
     TASK_STATE_SUCCEEDED,
     TASK_STATE_WAITING_APPROVAL,
     TASK_STATE_WAITING_CLARIFICATION,
@@ -624,6 +627,27 @@ def test_concurrent_direct_dispatch_cannot_bypass_pending_decision(monkeypatch, 
     assert len(fake_popen.calls) == 1
     paused = get_task_run_store().get_run(run.id)
     assert paused is not None and paused.state == TASK_STATE_WAITING_DECISION
+
+
+def test_same_run_sibling_dispatch_was_already_impossible_before_the_guard():
+    """The documented AGENT-HUB-053 MEDIUM is not a regression the lock created.
+
+    The trade-off recorded on ``_serialise_run_dispatch`` says a sibling
+    specialist emitted in the same ReAct superstep is refused when the first
+    pauses on ``waiting_decision``. That behaviour predates the guard and is a
+    property of the task-run state machine itself: ``in_progress -> routed`` has
+    never been an allowed transition, and ``_call_agent`` re-enters the run
+    through exactly that transition. Only a pause permits a second dispatch,
+    because ``waiting_* -> routed`` is allowed — and that permissive edge is
+    precisely the auto-redispatch defect this ticket closes.
+
+    So the lock removed no capability that previously worked: a same-run sibling
+    could only ever "succeed" by exploiting the pause edge the fix now refuses.
+    Legitimate parallel specialist execution is the dedicated fan-out tool, which
+    ``test_specialist_fanout.py`` proves is unaffected by the lock.
+    """
+    assert TASK_STATE_ROUTED not in _ALLOWED_TRANSITIONS[TASK_STATE_IN_PROGRESS]
+    assert TASK_STATE_ROUTED in _ALLOWED_TRANSITIONS[TASK_STATE_WAITING_DECISION]
 
 
 def test_real_langgraph_pauses_before_second_model_turn(monkeypatch, tmp_path):
