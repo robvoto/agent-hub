@@ -326,11 +326,15 @@ def factory_execution_constraints(evidence: ApprovedDesignEvidence) -> dict[str,
         raise HandoffEvidenceError("Factory execution constraints have no artifact reference")
     if not isinstance(correlation_id, str) or not correlation_id.strip():
         raise HandoffEvidenceError("Factory execution constraints have no correlation id")
+    token_budget_present = "token_budget" in evidence.budgets
     token_budget = evidence.budgets.get("token_budget")
     time_budget_seconds = evidence.budgets.get("time_budget_seconds")
     test_commands = constraints.get("test_commands")
     permitted_paths = constraints.get("permitted_paths")
-    if not isinstance(token_budget, int) or isinstance(token_budget, bool):
+    if not token_budget_present or (
+        token_budget is not None
+        and (not isinstance(token_budget, int) or isinstance(token_budget, bool))
+    ):
         raise HandoffEvidenceError("Factory execution constraints have no token budget")
     if not isinstance(time_budget_seconds, int) or isinstance(time_budget_seconds, bool):
         raise HandoffEvidenceError("Factory execution constraints have no time budget")
