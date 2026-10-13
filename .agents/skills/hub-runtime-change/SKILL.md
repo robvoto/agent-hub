@@ -62,3 +62,10 @@ Report:
 - Behavior changed
 - Validation command/result
 - Remaining risk or follow-up (e.g. "needs a live smoke test" — flag it, don't claim it's proven)
+
+
+## Prove a specialist dispatch end to end
+
+An agent listed in the registry is registered, not necessarily eligible. Confirm its manifest command and task contract declare the task kind Hub routes before treating it as callable. For acceptance, verify the current Hub and Factory revisions, correlate route selection with dispatch and specialist output, and inspect the exact task payload the subprocess received.
+
+Keep literal task input separate from caller context. If Hub rewriting adds context to `task`, the specialist's exact echo is correct for the composite payload but the user's literal-input acceptance has not passed. Test the actual contract and describe precisely which payload was accepted. When another worker owns the Telegram bot conversation, open a workflow-owned tab/window and use a separate supported chat/session; a fresh tab alone does not isolate the bot conversation. Use Hub's native specialist interface for agent dispatch; use MCP only when no suitable native interface exists.
