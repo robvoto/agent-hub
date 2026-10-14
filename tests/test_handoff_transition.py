@@ -80,6 +80,7 @@ def _factory_resolution(
     thread_id=FACTORY_THREAD,
     correlation_id="corr-1",
     token_budget=12000,
+    time_budget_seconds=1800,
 ):
     next_task = next_task or {
         "task_kind": "coding_task",
@@ -99,7 +100,7 @@ def _factory_resolution(
         "relevant_docs": ["docs/agent-contract.md"],
         "relevant_skills": ["skills/agent-authoring/SKILL.md"],
         "token_budget": token_budget,
-        "time_budget_seconds": 1800,
+        "time_budget_seconds": time_budget_seconds,
         "stop_conditions": ["Stop when validation cannot be satisfied."],
         "runtime_pattern": "deterministic_workflow",
         "runtime_pattern_reason": "The package workflow is fixed and inspectable.",
@@ -474,9 +475,12 @@ def test_valid_next_task_becomes_persisted_hub_transition(monkeypatch):
     }
 
 
-@pytest.mark.parametrize("token_budget", [12000, None])
+@pytest.mark.parametrize(
+    ("token_budget", "time_budget_seconds"),
+    [(12000, 1800), (None, 1800), (None, None)],
+)
 def test_factory_resolver_maps_factory_validated_build_task_to_evidence(
-    monkeypatch, tmp_path, token_budget
+    monkeypatch, tmp_path, token_budget, time_budget_seconds
 ):
     root = tmp_path / "agent-factory"
     root.mkdir()
@@ -494,7 +498,9 @@ def test_factory_resolver_maps_factory_validated_build_task_to_evidence(
             resolution=ProjectContextResolution(context=factory_project, error=None)
         ),
     )
-    resolved = _factory_resolution(token_budget=token_budget)
+    resolved = _factory_resolution(
+        token_budget=token_budget, time_budget_seconds=time_budget_seconds
+    )
     monkeypatch.setattr(
         "agent_hub.factory_bridge.resolve_factory_build_task",
         lambda **_kwargs: resolved,
@@ -521,12 +527,13 @@ def test_factory_resolver_maps_factory_validated_build_task_to_evidence(
     assert evidence["references"] == resolved["factory_result"]["next_task"]["references"]
     assert evidence["budgets"] == {
         "token_budget": token_budget,
-        "time_budget_seconds": 1800,
+        "time_budget_seconds": time_budget_seconds,
     }
     execution_constraints = factory_execution_constraints(
         ApprovedDesignEvidence.model_validate(evidence)
     )
     assert execution_constraints["token_budget"] == token_budget
+    assert execution_constraints["time_budget_seconds"] == time_budget_seconds
     assert evidence["other_constraints"]["correlation_id"] == "corr-1"
     assert evidence["other_constraints"]["artifact_reference"] == (
         "staging/agents/example-agent/BUILD_TASK.json"

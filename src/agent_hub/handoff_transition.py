@@ -328,6 +328,7 @@ def factory_execution_constraints(evidence: ApprovedDesignEvidence) -> dict[str,
         raise HandoffEvidenceError("Factory execution constraints have no correlation id")
     token_budget_present = "token_budget" in evidence.budgets
     token_budget = evidence.budgets.get("token_budget")
+    time_budget_present = "time_budget_seconds" in evidence.budgets
     time_budget_seconds = evidence.budgets.get("time_budget_seconds")
     test_commands = constraints.get("test_commands")
     permitted_paths = constraints.get("permitted_paths")
@@ -336,8 +337,11 @@ def factory_execution_constraints(evidence: ApprovedDesignEvidence) -> dict[str,
         and (not isinstance(token_budget, int) or isinstance(token_budget, bool))
     ):
         raise HandoffEvidenceError("Factory execution constraints have no token budget")
-    if not isinstance(time_budget_seconds, int) or isinstance(time_budget_seconds, bool):
-        raise HandoffEvidenceError("Factory execution constraints have no time budget")
+    if not time_budget_present or (
+        time_budget_seconds is not None
+        and (not isinstance(time_budget_seconds, int) or isinstance(time_budget_seconds, bool))
+    ):
+        raise HandoffEvidenceError("Factory execution constraints have an invalid time budget")
     if not isinstance(test_commands, list) or not isinstance(permitted_paths, list):
         raise HandoffEvidenceError("Factory execution constraints are incomplete")
     return {
