@@ -461,6 +461,180 @@ def _eligible_agents_for_task_kind(registry: list[AgentSpec], task_kind: str) ->
     ]
 
 
+_EXPLICIT_AGENT_ACTION_BEFORE_NAME = re.compile(
+    r"(?:^|[\n.!?;,]\s*|\b(?:please|can\s+you|could\s+you|would\s+you|then|now)\s+|"
+    r"\b(?:I\s+want\s+you\s+to|I\s+need\s+you\s+to)\s+)"
+    r"(?:call|use|run|invoke|execute|assign|send|route|dispatch|delegate)"
+    r"(?:\s+(?:this|it|the|task|to|registered|callable|agent|specialist)){0,6}\s*$",
+    re.IGNORECASE,
+)
+_EXPLICIT_HUMAN_MCP_ACTION_BEFORE_NAME = re.compile(
+    r"(?:^|[\n.!?;,]\s*|\b(?:please|can\s+you|could\s+you|would\s+you|then|now)\s+|"
+    r"\b(?:I\s+want\s+you\s+to|I\s+need\s+you\s+to)\s+)"
+    r"(?:call|use|run|invoke|execute|check|test|verify|inspect|read|search|list|open|"
+    r"show|get|find|navigate|click|fill|reload|send|connect)"
+    r"(?:\s+(?:this|it|the|task|to|registered|callable|agent|specialist|tool)){0,8}\s*$",
+    re.IGNORECASE,
+)
+_EXPLICIT_FANOUT_REQUEST = re.compile(
+    r"\b(?:fan[\s-]?out|run\s+multiple\s+independent\s+specialist\s+tasks|"
+    r"parallel\s+(?:specialist\s+)?(?:work|branches)\s+across\s+"
+    r"(?:multiple|several|two)\s+projects)\b",
+    re.IGNORECASE,
+)
+
+
+def _agent_identity_values(spec: AgentSpec) -> list[str]:
+    """Return the exact registry-declared strings operators can use for an agent."""
+    values = [spec.id, spec.name]
+    aliases = spec.extensions.get("aliases", [])
+    if isinstance(aliases, str):
+        values.append(aliases)
+    elif isinstance(aliases, (list, tuple)):
+        values.extend(alias for alias in aliases if isinstance(alias, str))
+    return list(dict.fromkeys(value.strip() for value in values if value.strip()))
+
+
+def _action_cue_precedes_identity(
+    message: str, name_start: int, action_pattern: re.Pattern[str]
+) -> bool:
+    """Check for a nearby affirmative action cue before an exact identity."""
+    prefix = message[:name_start]
+    window = prefix[-140:]
+    match = action_pattern.search(window)
+    if match is None:
+        return False
+    cue_start = len(prefix) - len(window) + match.start()
+    before_cue = prefix[:cue_start].rstrip(" .!?,;:")
+    if re.search(r"\b(?:do\s+not|don't|dont|never|avoid|not\s+to)\s*$", before_cue, re.I):
+        return False
+    return True
+
+
+def _explicit_agent_action_precedes(message: str, name_start: int, name_end: int) -> bool:
+    """Recognize a direct action cue immediately before a registered identity.
+
+    Keeping the cue close to the exact name/id/alias avoids routing ordinary
+    discussion about an agent. Negative forms such as "do not call" do not
+    match the affirmative action grammar.
+    """
+    if not _action_cue_precedes_identity(
+        message, name_start, _EXPLICIT_AGENT_ACTION_BEFORE_NAME
+    ):
+        return False
+    after_name = message[name_end : name_end + 60]
+    if re.match(
+        r"\s*['’]s\s+(?:approach|api|contract|documentation|docs|guide|instructions|"
+        r"manifest|package|policy|prompt|skill|tool)\b",
+        after_name,
+        re.IGNORECASE,
+    ):
+        return False
+    return True
+
+
+def _explicit_human_mcp_named_request(message: str) -> bool:
+    """Match an affirmative operation on Human MCP, not a passive mention."""
+    pattern = re.compile(r"(?<![\w-])human\s+mcp(?![\w-])", re.IGNORECASE)
+    return any(
+        _action_cue_precedes_identity(
+            message, match.start(), _EXPLICIT_HUMAN_MCP_ACTION_BEFORE_NAME
+        )
+        for match in pattern.finditer(message)
+    )
+
+
+def _explicit_human_mcp_tool_request(message: str, allowed_tools: Sequence[str]) -> bool:
+    """Match an allowed MCP tool only when the request asks to use it."""
+    for tool_name in allowed_tools:
+        pattern = re.compile(
+            rf"(?<![\w-]){re.escape(tool_name)}(?![\w-])", re.IGNORECASE
+        )
+        for match in pattern.finditer(message):
+            if _action_cue_precedes_identity(
+                message, match.start(), _EXPLICIT_HUMAN_MCP_ACTION_BEFORE_NAME
+            ):
+                return True
+            prefix = message[: match.start()]
+            human_mcp_matches = list(
+                re.finditer(r"(?<![\w-])human\s+mcp(?![\w-])", prefix, re.IGNORECASE)
+            )
+            if human_mcp_matches and _explicit_human_mcp_named_request(
+                message[: match.start()]
+            ):
+                return True
+    return False
+
+
+def _explicit_agent_routing_decision(
+    message: str, registry: list[AgentSpec]
+) -> RoutingDecision | None:
+    """Resolve one affirmative exact agent call from live manifest identities.
+
+    A declared valid default task kind wins; otherwise a sole advertised kind
+    is safe. Multiple possible kinds require clarification rather than guessing.
+    """
+    if _EXPLICIT_FANOUT_REQUEST.search(message):
+        return None
+
+    explicitly_called: dict[str, AgentSpec] = {}
+    for spec in registry:
+        for identity in _agent_identity_values(spec):
+            pattern = re.compile(
+                rf"(?<![A-Za-z0-9_-]){re.escape(identity)}(?![A-Za-z0-9_-])",
+                re.IGNORECASE,
+            )
+            if any(
+                _explicit_agent_action_precedes(message, match.start(), match.end())
+                for match in pattern.finditer(message)
+            ):
+                explicitly_called[spec.id] = spec
+                break
+
+    if not explicitly_called:
+        return None
+    if len(explicitly_called) > 1:
+        names = ", ".join(spec.name for spec in explicitly_called.values())
+        return RoutingDecision(
+            route="clarify",
+            task_kind=None,
+            reason=f"The request explicitly names multiple specialists: {names}.",
+        )
+
+    spec = next(iter(explicitly_called.values()))
+    if spec.runtime.get("mode") not in {"subprocess", "factory_brain"}:
+        return RoutingDecision(
+            route="clarify",
+            task_kind=None,
+            reason=f"{spec.name} is registered but has no callable Hub runtime.",
+        )
+
+    raw_kinds = spec.task_contract.get("task_kinds", []) or []
+    if not isinstance(raw_kinds, (list, tuple)):
+        raw_kinds = []
+    kinds = [kind for kind in raw_kinds if isinstance(kind, str) and kind.strip()]
+    default_kind = spec.task_contract.get("default_task_kind")
+    if isinstance(default_kind, str) and default_kind in kinds:
+        task_kind = default_kind
+    elif len(kinds) == 1:
+        task_kind = kinds[0]
+    else:
+        return RoutingDecision(
+            route="clarify",
+            task_kind=None,
+            reason=(
+                f"{spec.name} does not declare one unambiguous default task kind. "
+                f"Its advertised kinds are: {', '.join(kinds) or 'none'}."
+            ),
+        )
+
+    return RoutingDecision(
+        route="specialist",
+        task_kind=task_kind,
+        reason=f"Operator explicitly requested registered specialist {spec.name}.",
+    )
+
+
 def _classify_routing_request(
     message: str,
     registry: list[AgentSpec],
@@ -473,14 +647,19 @@ def _classify_routing_request(
     specialist task taxonomy is discovered from manifests at runtime; Hub has
     no agent-name or task-keyword mapping.
     """
-    normalized_message = message.casefold()
     human_mcp_config = load_human_mcp_config()
-    explicit_human_mcp = "human mcp" in normalized_message
-    explicit_tool = any(
-        re.search(rf"(?<!\w){re.escape(name.casefold())}(?!\w)", normalized_message)
-        for name in human_mcp_config.allowed_tools
-    )
-    if explicit_human_mcp or explicit_tool:
+    if _explicit_human_mcp_tool_request(message, human_mcp_config.allowed_tools):
+        return RoutingDecision(
+            route="direct",
+            task_kind=None,
+            reason="Operator explicitly requested a named Hub-owned Human MCP tool.",
+        )
+
+    explicit_agent = _explicit_agent_routing_decision(message, registry)
+    if explicit_agent is not None:
+        return explicit_agent
+
+    if _explicit_human_mcp_named_request(message):
         return RoutingDecision(
             route="direct",
             task_kind=None,

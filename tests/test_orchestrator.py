@@ -2514,6 +2514,369 @@ def test_routing_keeps_named_human_mcp_tool_in_hub(monkeypatch):
     assert decision.task_kind is None
 
 
+@pytest.mark.parametrize(
+    "operator_message",
+    [
+        "Please call AI Tech Lead to review Human MCP precedence.",
+        "Please call AI Tech Lead to review the docs_read_text name handling.",
+    ],
+)
+def test_explicit_agent_call_wins_over_passive_human_mcp_mentions(
+    monkeypatch, operator_message
+):
+    from agent_hub.orchestrator import _classify_routing_request
+
+    spec = AgentSpec(
+        id="ai-tech-lead",
+        name="AI Tech Lead",
+        purpose="Implements technical work.",
+        task_contract={"task_kinds": ["coding_task"]},
+        runtime={"mode": "subprocess"},
+    )
+
+    class _Config:
+        allowed_tools = frozenset({"docs_read_text", "browser_status"})
+
+    monkeypatch.setattr("agent_hub.orchestrator.load_human_mcp_config", lambda: _Config())
+    monkeypatch.setattr(
+        "agent_hub.orchestrator.ChatOpenAI",
+        lambda **kwargs: pytest.fail(
+            "An exact agent request must route without LLM classification."
+        ),
+    )
+    decision = _classify_routing_request(operator_message, [spec], model="test")
+
+    assert decision.route == "specialist"
+    assert decision.task_kind == "coding_task"
+
+
+def test_passive_human_mcp_mention_uses_semantic_classifier(monkeypatch):
+    from agent_hub.orchestrator import RoutingDecision, _classify_routing_request
+
+    class _Config:
+        allowed_tools = frozenset({"docs_read_text", "browser_status"})
+
+    spec = AgentSpec(
+        id="ai-tech-lead",
+        name="AI Tech Lead",
+        purpose="Implements technical work.",
+        task_contract={"task_kinds": ["coding_task"]},
+        runtime={"mode": "subprocess"},
+    )
+
+    class _StructuredModel:
+        def with_structured_output(self, _schema):
+            return self
+
+        def invoke(self, _messages):
+            calls.append(1)
+            return RoutingDecision(route="direct", task_kind=None, reason="discussion")
+
+    calls = []
+    monkeypatch.setattr("agent_hub.orchestrator.load_human_mcp_config", lambda: _Config())
+    monkeypatch.setattr("agent_hub.orchestrator.ChatOpenAI", lambda **kwargs: _StructuredModel())
+    decision = _classify_routing_request(
+        "Human MCP returned a 400 earlier; explain how its transport works.",
+        [spec],
+        model="test",
+    )
+
+    assert calls == [1]
+    assert decision.route == "direct"
+
+
+@pytest.mark.parametrize(
+    "operator_message",
+    [
+        "Please call the registered callable agent echo-agent to implement this.",
+        "Use the Echo Agent to implement this.",
+        "Please invoke the echo-worker specialist for this task.",
+    ],
+)
+def test_explicit_agent_id_name_or_alias_uses_manifest_default_without_llm(
+    monkeypatch, operator_message
+):
+    from agent_hub.orchestrator import _classify_routing_request
+
+    spec = AgentSpec(
+        id="echo-agent",
+        name="Echo Agent",
+        purpose="Completes an explicitly assigned task.",
+        task_contract={
+            "task_kinds": ["echo_task", "technical_analysis"],
+            "default_task_kind": "echo_task",
+        },
+        runtime={"mode": "subprocess"},
+        extensions={"aliases": ["echo-worker"]},
+    )
+
+    class _Config:
+        allowed_tools = frozenset()
+
+    monkeypatch.setattr("agent_hub.orchestrator.load_human_mcp_config", lambda: _Config())
+    monkeypatch.setattr(
+        "agent_hub.orchestrator.ChatOpenAI",
+        lambda **kwargs: pytest.fail(
+            "An exact agent call should not depend on LLM classification."
+        ),
+    )
+
+    decision = _classify_routing_request(operator_message, [spec], model="test")
+
+    assert decision.route == "specialist"
+    assert decision.task_kind == "echo_task"
+
+
+def test_explicit_agent_uses_sole_task_kind_when_manifest_has_no_default(monkeypatch):
+    from agent_hub.orchestrator import _classify_routing_request
+
+    spec = AgentSpec(
+        id="echo-agent",
+        name="Echo Agent",
+        purpose="Completes an explicitly assigned task.",
+        task_contract={"task_kinds": ["echo_task"]},
+        runtime={"mode": "subprocess"},
+    )
+
+    class _Config:
+        allowed_tools = frozenset()
+
+    monkeypatch.setattr("agent_hub.orchestrator.load_human_mcp_config", lambda: _Config())
+    decision = _classify_routing_request("Call Echo Agent with this input.", [spec], model="test")
+
+    assert decision.route == "specialist"
+    assert decision.task_kind == "echo_task"
+
+
+@pytest.mark.parametrize(
+    "task_contract",
+    [
+        {"task_kinds": ["coding_task", "technical_analysis"]},
+        {
+            "task_kinds": ["coding_task", "technical_analysis"],
+            "default_task_kind": "unsupported_kind",
+        },
+    ],
+)
+def test_explicit_agent_with_ambiguous_task_kinds_requests_clarification(
+    monkeypatch, task_contract
+):
+    from agent_hub.orchestrator import _classify_routing_request
+
+    spec = AgentSpec(
+        id="ai-tech-lead",
+        name="AI Tech Lead",
+        purpose="Implements technical work.",
+        task_contract=task_contract,
+        runtime={"mode": "subprocess"},
+    )
+
+    class _Config:
+        allowed_tools = frozenset()
+
+    monkeypatch.setattr("agent_hub.orchestrator.load_human_mcp_config", lambda: _Config())
+    decision = _classify_routing_request(
+        "Please call AI Tech Lead for this task.", [spec], model="test"
+    )
+
+    assert decision.route == "clarify"
+    assert decision.task_kind is None
+    assert "coding_task" in decision.reason
+    assert "technical_analysis" in decision.reason
+
+
+def test_ordinary_mentions_and_negated_calls_use_semantic_classifier(monkeypatch):
+    from agent_hub.orchestrator import RoutingDecision, _classify_routing_request
+
+    spec = AgentSpec(
+        id="ai-tech-lead",
+        name="AI Tech Lead",
+        purpose="Implements technical work.",
+        task_contract={"task_kinds": ["coding_task"]},
+        runtime={"mode": "subprocess"},
+    )
+
+    class _Config:
+        allowed_tools = frozenset()
+
+    class _StructuredModel:
+        def with_structured_output(self, _schema):
+            return self
+
+        def invoke(self, _messages):
+            calls.append(1)
+            return RoutingDecision(route="direct", task_kind=None, reason="ordinary discussion")
+
+    calls = []
+    monkeypatch.setattr("agent_hub.orchestrator.load_human_mcp_config", lambda: _Config())
+    monkeypatch.setattr("agent_hub.orchestrator.ChatOpenAI", lambda **kwargs: _StructuredModel())
+
+    requests = [
+        "AI Tech Lead is registered; explain its purpose.",
+        "Do not call AI Tech Lead; explain what blocked the earlier attempt.",
+        "Use AI Tech Lead's guide to understand the workflow.",
+    ]
+    decisions = [_classify_routing_request(request, [spec], model="test") for request in requests]
+
+    assert calls == [1, 1, 1]
+    assert [decision.route for decision in decisions] == ["direct", "direct", "direct"]
+
+
+def test_explicit_fanout_request_stays_on_normal_fanout_routing(monkeypatch):
+    from agent_hub.orchestrator import RoutingDecision, _classify_routing_request
+
+    spec = AgentSpec(
+        id="ai-tech-lead",
+        name="AI Tech Lead",
+        purpose="Implements code changes.",
+        task_contract={"task_kinds": ["coding_task"]},
+        runtime={"mode": "subprocess"},
+    )
+
+    class _Config:
+        allowed_tools = frozenset()
+
+    class _StructuredModel:
+        def with_structured_output(self, _schema):
+            return self
+
+        def invoke(self, _messages):
+            calls.append(1)
+            return RoutingDecision(route="direct", task_kind=None, reason="Hub owns fan-out")
+
+    calls = []
+    monkeypatch.setattr("agent_hub.orchestrator.load_human_mcp_config", lambda: _Config())
+    monkeypatch.setattr("agent_hub.orchestrator.ChatOpenAI", lambda **kwargs: _StructuredModel())
+    decision = _classify_routing_request(
+        "Please fan out across two projects and call AI Tech Lead for each branch.",
+        [spec],
+        model="test",
+    )
+
+    assert calls == [1]
+    assert decision.route == "direct"
+
+
+def test_explicit_human_mcp_still_precedes_named_agent_call(monkeypatch):
+    from agent_hub.orchestrator import _classify_routing_request
+
+    spec = AgentSpec(
+        id="ai-tech-lead",
+        name="AI Tech Lead",
+        purpose="Implements code changes.",
+        task_contract={"task_kinds": ["coding_task"]},
+        runtime={"mode": "subprocess"},
+    )
+
+    class _Config:
+        allowed_tools = frozenset({"browser_status"})
+
+    monkeypatch.setattr("agent_hub.orchestrator.load_human_mcp_config", lambda: _Config())
+    monkeypatch.setattr(
+        "agent_hub.orchestrator.ChatOpenAI",
+        lambda **kwargs: pytest.fail("Explicit Human MCP should remain a Hub-direct request."),
+    )
+    decision = _classify_routing_request(
+        "Use Human MCP browser_status, and also call AI Tech Lead about it.",
+        [spec],
+        model="test",
+    )
+
+    assert decision.route == "direct"
+    assert decision.task_kind is None
+
+
+def test_explicit_agent_route_invokes_only_that_tool_once_and_returns_its_result(
+    monkeypatch, tmp_path
+):
+    spec = AgentSpec(
+        id="ai-tech-lead",
+        name="AI Tech Lead",
+        purpose="Implements code changes.",
+        task_contract={
+            "task_kinds": ["coding_task", "technical_analysis"],
+            "default_task_kind": "coding_task",
+        },
+        runtime={
+            "mode": "subprocess",
+            "entrypoint": "fake-agent",
+            "working_directory": str(tmp_path),
+            "input_arg": "--input-json",
+            "output_arg": "--output-json",
+        },
+    )
+    monkeypatch.setattr("agent_hub.orchestrator._load_specialists", lambda: [spec])
+
+    dispatched = []
+
+    def _dispatch(called_spec, task, **kwargs):
+        dispatched.append((called_spec.id, task, kwargs.get("task_kind")))
+        return {"status": "success", "summary": "Explicit route implementation verified."}
+
+    monkeypatch.setattr("agent_hub.orchestrator._dispatch_subprocess", _dispatch)
+    built = []
+
+    class _AgentCallingGraph:
+        def __init__(self, tool):
+            self.tool = tool
+
+        def stream(self, payload, config, stream_mode):
+            assert stream_mode == ["tasks", "updates", "values"]
+            operator_request = payload["messages"][0].content
+            tool_task = "Implement generic explicit-agent routing in Hub."
+            call = AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": self.tool.name,
+                        "args": {"task": tool_task},
+                        "id": "call-route-1",
+                        "type": "tool_call",
+                    }
+                ],
+            )
+            yield ("tasks", {"name": "agent"})
+            yield ("updates", {"agent": {"messages": [call]}})
+            tool_result = self.tool.invoke({"task": tool_task})
+            tool_message = ToolMessage(
+                content=tool_result, tool_call_id="call-route-1", name=self.tool.name
+            )
+            yield ("tasks", {"name": "tools"})
+            yield ("updates", {"tools": {"messages": [tool_message]}})
+            final = AIMessage(content=tool_result)
+            yield ("tasks", {"name": "agent"})
+            yield ("updates", {"agent": {"messages": [final]}})
+            yield (
+                "values",
+                {"messages": [HumanMessage(content=operator_request), call, tool_message, final]},
+            )
+
+    def _build_graph(self, registry=None, *, include_memory_tools=True, task_kind=None):
+        active = self._registry if registry is None else registry
+        built.append(([agent.id for agent in active], task_kind, include_memory_tools))
+        if task_kind is None:
+            return _FakeGraph("unused")
+        assert len(active) == 1
+        tool = _make_agent_tool(active[0], task_kind=task_kind, result_registry=self._registry)
+        return _AgentCallingGraph(tool)
+
+    monkeypatch.setattr(HubOrchestrator, "_build_graph", _build_graph)
+    orchestrator = HubOrchestrator(model="test")
+    request = "Please call AI Tech Lead to implement explicit specialist routing."
+    reply = orchestrator.invoke(request)
+
+    assert built[-1] == (["ai-tech-lead"], "coding_task", False)
+    assert len(dispatched) == 1
+    assert dispatched[0][0] == "ai-tech-lead"
+    assert dispatched[0][2] == "coding_task"
+    assert request in dispatched[0][1]
+    assert reply == "[AI Tech Lead] Explicit route implementation verified."
+    run = get_task_run_store().list_runs(session_id=orchestrator.session_id)[-1]
+    assert run.state == TASK_STATE_SUCCEEDED
+    assert run.selected_agent_id == "ai-tech-lead"
+    assert run.final_response == reply
+
+
 def test_parallel_fanout_tool_passes_explicit_branches_to_executor(monkeypatch):
     from agent_hub.orchestrator import _make_parallel_specialist_fanout_tool
 
