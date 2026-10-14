@@ -23,6 +23,7 @@ def build_task_envelope(
     execution_mode: str,
     progress_jsonl: str,
     task_kind: str | None = None,
+    source_request: str | None = None,
     project_root: str | None = None,
     project_id: str | None = None,
     project_contract_version: int | None = None,
@@ -42,6 +43,10 @@ def build_task_envelope(
     `references` are user-provided or Hub-observed pointers (file paths,
     URLs, ticket IDs, etc.) passed through uninterpreted — Hub does not
     parse or act on their contents, only relays them.
+
+    `source_request` is the exact original operator input, separate from
+    `task`. The caller must pass it only when the specialist opted in through
+    `input_contract.accepted_context`.
 
     `project_id`/`project_contract_version`/`project_fingerprint` are the
     canonical `ProjectContext` Hub resolved and validated for `project_root`
@@ -80,6 +85,8 @@ def build_task_envelope(
     }
     if task_kind:
         envelope["task_kind"] = task_kind
+    if source_request:
+        envelope["source_request"] = source_request
     if project_root:
         envelope["project_root"] = project_root
         if project_id:

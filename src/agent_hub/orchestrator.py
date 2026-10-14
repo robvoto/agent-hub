@@ -936,6 +936,11 @@ def _dispatch_subprocess(
 
     request_id = request_id or str(uuid.uuid4())
     task_run_id = get_current_task_run_id()
+    source_request = None
+    if "source_request" in _accepted_context_keys(spec) and task_run_id:
+        source_run = get_task_run_store().get_run(task_run_id)
+        if source_run is not None and source_run.user_message.strip():
+            source_request = source_run.user_message
     if project_root_override is not None:
         project_root = project_root_override
         project_context = project_context_override
@@ -1091,6 +1096,7 @@ def _dispatch_subprocess(
             execution_mode=runtime["default_execution_mode"],
             progress_jsonl=str(progress_file),
             task_kind=task_kind,
+            source_request=source_request,
             project_root=project_root,
             project_id=envelope_project_id,
             project_contract_version=envelope_project_contract_version,
@@ -1608,11 +1614,11 @@ def _make_agent_tool(
     registry_for_results = result_registry if result_registry is not None else [spec]
 
     def _dispatch_task_with_operator_source(task: str, task_run_id: str | None) -> str:
-        """Preserve the exact operator request alongside Hub's bounded reformulation.
+        """Keep opted-in subprocess task strings separate from original source text.
 
-        The reformulated task remains the instruction. The verbatim operator request is
-        appended as source context so specialist handoffs cannot lose literal contracts,
-        evidence, or other payloads while the Hub is summarising the task for routing.
+        Specialists that declare source_request in input_contract.accepted_context
+        receive the unchanged task and the original request in a separate envelope field.
+        Other specialists keep the legacy appended-source behavior.
         """
 
         if not task_run_id:
@@ -1622,6 +1628,8 @@ def _make_agent_tool(
             return task
         operator_request = run.user_message.strip()
         if not operator_request or operator_request in task:
+            return task
+        if mode == "subprocess" and "source_request" in _accepted_context_keys(spec):
             return task
         return (
             f"{task.rstrip()}\n\n"

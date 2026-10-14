@@ -573,32 +573,82 @@ def test_specialist_dispatch_preserves_verbatim_operator_request(monkeypatch, tm
     _write_fake_specialist_manifest(registry_dir, working_directory)
     spec = load_registry(registry_dir)[0]
 
-    captured: dict[str, object] = {}
-
-    def fake_dispatch(spec, task, *, references=None, task_kind=None, **kwargs):
-        captured["task"] = task
-        return {"status": "success", "summary": "Reviewed."}
-
-    monkeypatch.setattr("agent_hub.orchestrator._dispatch_subprocess", fake_dispatch)
     operator_request = (
         "Review the implementation contract.\n\n"
         "FACTORY HANDOFF:\n"
         "must_preserve=exact variant, delivered price, and budget limits"
     )
+    _ScriptedFakePopen.calls = []
+    _ScriptedFakePopen.responses = [{"status": "success", "summary": "Reviewed."}]
+    monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
+    dispatched_task = "Review the supplied Factory handoff as an implementation contract."
     run = get_task_run_store().create_run(
         session_id="operator-source-preservation",
         user_message=operator_request,
     )
 
     with active_task_run(run.id):
-        _make_agent_tool(spec).invoke(
-            {"task": "Review the supplied Factory handoff as an implementation contract."}
+        _make_agent_tool(spec).invoke({"task": dispatched_task})
+
+    assert len(_ScriptedFakePopen.calls) == 1
+    payload = _ScriptedFakePopen.calls[0]
+    assert payload["task"].startswith(dispatched_task)
+    assert "ORIGINAL OPERATOR REQUEST (verbatim source context" in payload["task"]
+    assert operator_request in payload["task"]
+    assert "source_request" not in payload
+
+
+def test_source_request_opt_in_preserves_task_and_separates_original_input(
+    monkeypatch, tmp_path
+):
+    registry_dir = tmp_path / "agents"
+    working_directory = tmp_path / "workdir"
+    working_directory.mkdir()
+    _write_fake_specialist_manifest(
+        registry_dir,
+        working_directory,
+        input_contract_overrides={
+            "optional_fields": [
+                "request_id",
+                "run_id",
+                "source",
+                "execution_mode",
+                "progress_jsonl",
+                "project_root",
+                "references",
+                "human_approved",
+                "approval_token",
+                "source_request",
+            ],
+            "accepted_context": ["project_root", "references", "source_request"],
+        },
+    )
+    spec = load_registry(registry_dir)[0]
+    _ScriptedFakePopen.calls = []
+    _ScriptedFakePopen.responses = [{"status": "success", "summary": "Echoed."}]
+    monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
+
+    operator_request = "Please echo exactly: \nAF048_LITERAL_VALUE_42\n"
+    dispatched_task = "Echo the requested literal value."
+    run = get_task_run_store().create_run(
+        session_id="operator-source-opt-in",
+        user_message=operator_request,
+    )
+
+    with active_task_run(run.id):
+        reply = _make_agent_tool(spec, result_registry=[spec]).invoke(
+            {"task": dispatched_task}
         )
 
-    dispatched = str(captured["task"])
-    assert dispatched.startswith("Review the supplied Factory handoff")
-    assert "ORIGINAL OPERATOR REQUEST (verbatim source context" in dispatched
-    assert operator_request in dispatched
+    assert reply == "[Widget Forge] Echoed."
+    assert len(_ScriptedFakePopen.calls) == 1
+    payload = _ScriptedFakePopen.calls[0]
+    assert payload["task"] == dispatched_task
+    assert payload["source_request"] == operator_request
+    assert operator_request not in payload["task"]
+    recorded = get_task_run_store().get_run(run.id)
+    assert recorded is not None
+    assert recorded.dispatched_task == dispatched_task
 
 
 def test_specialist_dispatch_does_not_duplicate_identical_operator_request(
