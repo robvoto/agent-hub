@@ -839,7 +839,7 @@ def test_project_command_sets_shows_and_clears(monkeypatch):
     ]
 
 
-def test_learning_notifier_sends_to_last_seen_chat(monkeypatch):
+def test_learning_notifier_sends_to_originating_chat(monkeypatch):
     sent: list[dict] = []
 
     monkeypatch.setattr(
@@ -1415,3 +1415,120 @@ def test_waiting_progress_does_not_duplicate_terminal_decision_in_live_status(mo
     assert sent[-1]["text"] == decision
     assert sum(decision in item["text"] for item in sent) == 1
     assert all(decision not in item["text"] for item in edited)
+
+
+def test_chat_sessions_preserve_raw_messages_and_bind_learning_to_the_originating_chat(
+    monkeypatch,
+):
+    monkeypatch.setenv("HUB_ALLOWED_CHAT_IDS", "42,77")
+    monkeypatch.setenv("HUB_TELEGRAM_PRIMARY_CHAT_ID", "42")
+    sent: list[dict] = []
+    monkeypatch.setattr(
+        "agent_hub.telegram_gateway._send_message",
+        lambda token, chat_id, text, *, parse_mode="Markdown": (
+            sent.append({"chat_id": chat_id, "text": text}) or []
+        ),
+    )
+
+    class FakeOrchestrator:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.registry = []
+            self.messages: list[str] = []
+            self.new_sessions = 0
+            self.notifier = None
+
+        def set_learning_notifier(self, callback) -> None:
+            self.notifier = callback
+
+        def pending_run(self):
+            return None
+
+        def invoke(self, message: str, **kwargs) -> str:
+            self.messages.append(message)
+            return f"result:{self.name}"
+
+        def current_run_status(self) -> str:
+            return f"status:{self.name}"
+
+        def new_session(self) -> str:
+            self.new_sessions += 1
+            return f"new:{self.name}"
+
+    primary = FakeOrchestrator("primary")
+    secondary: dict[int, FakeOrchestrator] = {}
+
+    def create_orchestrator(chat_id: int) -> FakeOrchestrator:
+        secondary[chat_id] = FakeOrchestrator(str(chat_id))
+        return secondary[chat_id]
+
+    gateway = TelegramGateway(
+        "token-123",
+        primary,
+        primary_chat_id=42,
+        orchestrator_factory=create_orchestrator,
+    )
+
+    gateway._handle_message({"chat": {"id": 42}, "text": "  preserve these spaces  "})
+    gateway._handle_message({"chat": {"id": 77}, "text": "separate chat"})
+    gateway._handle_message({"chat": {"id": 77}, "text": "/status"})
+    for worker in gateway._workers:
+        worker.join(timeout=2)
+
+    assert primary.messages == ["  preserve these spaces  "]
+    assert secondary[77].messages == ["separate chat"]
+    assert sent[-1] == {"chat_id": 77, "text": "status:77"}
+
+    primary.notifier("learned in primary")
+    secondary[77].notifier("learned in secondary")
+    assert sent[-2:] == [
+        {"chat_id": 42, "text": "learned in primary"},
+        {"chat_id": 77, "text": "learned in secondary"},
+    ]
+
+    gateway._handle_message({"chat": {"id": 42}, "text": "/new"})
+    gateway._handle_message({"chat": {"id": 77}, "text": "/new"})
+    assert primary.new_sessions == 1
+    assert secondary[77].new_sessions == 1
+
+
+def test_multiple_allowed_chats_require_an_explicit_primary(monkeypatch):
+    monkeypatch.setenv("HUB_ALLOWED_CHAT_IDS", "42,77")
+    monkeypatch.delenv("HUB_TELEGRAM_PRIMARY_CHAT_ID", raising=False)
+    orch = SimpleNamespace(set_learning_notifier=lambda callback: None)
+
+    with pytest.raises(ValueError, match="HUB_TELEGRAM_PRIMARY_CHAT_ID"):
+        TelegramGateway("token-123", orch)
+
+
+def test_default_secondary_orchestrator_uses_stable_hashed_chat_scope(monkeypatch):
+    monkeypatch.setenv("HUB_ALLOWED_CHAT_IDS", "42,77")
+    monkeypatch.setenv("HUB_TELEGRAM_PRIMARY_CHAT_ID", "42")
+    created: list[dict] = []
+
+    class FakeOrchestrator:
+        registry = []
+
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+        def set_learning_notifier(self, callback) -> None:
+            self.notifier = callback
+
+    primary = FakeOrchestrator()
+
+    def create_orchestrator(**kwargs):
+        created.append(kwargs)
+        return FakeOrchestrator(**kwargs)
+
+    monkeypatch.setattr(telegram_gateway, "HubOrchestrator", create_orchestrator)
+    gateway = TelegramGateway("token-123", primary)
+
+    secondary = gateway._orchestrator_for_chat(77)
+
+    assert gateway._orchestrator_for_chat(42) is primary
+    assert secondary.kwargs == {
+        "session_scope": telegram_gateway._telegram_session_scope(77)
+    }
+    assert "77" not in secondary.kwargs["session_scope"]
+    assert created == [secondary.kwargs]

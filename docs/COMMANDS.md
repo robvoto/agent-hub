@@ -127,6 +127,7 @@ Copy `.env.example` to `.env`. Core values:
 OPENAI_API_KEY=...
 HUB_BOT_TOKEN=...
 HUB_ALLOWED_CHAT_IDS=...
+HUB_TELEGRAM_PRIMARY_CHAT_ID=<existing primary chat id; required when allowing multiple chats>
 HUB_MODEL=<approved-model-id>
 HUB_REASONING_EFFORT=<optional: none|low|medium|high>
 HUB_HANDOFF_REVIEW_MODEL=<optional approved priced reviewer model; defaults to HUB_MODEL>
@@ -136,7 +137,7 @@ HUB_HANDOFF_REVIEW_MAX_TOKENS=<optional bounded reviewer output limit>
 HUB_HUMAN_MCP_ENABLED=<true locally when the configured stdio bridge exists; false in CI>
 ```
 
-`HUB_ALLOWED_CHAT_IDS` is comma-separated. Optional integration settings are documented in `.env.example`; treat that file and `src/agent_hub/config.py` as current truth rather than duplicating every variable here.
+`HUB_ALLOWED_CHAT_IDS` is comma-separated. With one allowed ID, Hub keeps that chat on the existing session. If you allow multiple chats, set `HUB_TELEGRAM_PRIMARY_CHAT_ID` to the existing chat first; every other chat then gets its own persisted session. A second Telegram tab using the same DM is still the same chat. Other optional integration settings are documented in `.env.example`; treat that file and `src/agent_hub/config.py` as current truth rather than duplicating every variable here.
 
 The deterministic reviewer runtime bound is the configured priced model, at most 64 KiB of
 complete reviewer input, the configured output cap (maximum 4000 tokens), one request with

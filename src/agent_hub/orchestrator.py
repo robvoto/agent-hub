@@ -1883,6 +1883,7 @@ class HubOrchestrator:
         model: str | None = None,
         *,
         session_id: str | None = None,
+        session_scope: str = "current",
         semantic_extractor: Any = None,
         learning_analyzer: Any = None,
         skill_store: Any = None,
@@ -1895,7 +1896,8 @@ class HubOrchestrator:
         self._registry = _load_specialists()
         self._registry_errors: list[RegistryLoadError] = _load_registry_errors()
         self._registry_last_refreshed = _utcnow_iso()
-        self._session_id = session_id or load_or_create_session_id()
+        self._session_scope = session_scope
+        self._session_id = session_id or load_or_create_session_id(scope=session_scope)
         self._semantic_extractor = semantic_extractor or extract_semantic_candidates
         self._learning_analyzer = learning_analyzer or analyze_learning
         self._skill_store = skill_store or HubSkillStore()
@@ -1981,7 +1983,7 @@ class HubOrchestrator:
     def _rotate_session(self, *, carry_active_work: bool) -> None:
         previous_session_id = self._session_id
         self._session_id = str(uuid.uuid4())
-        persist_session_id(self._session_id)
+        persist_session_id(self._session_id, scope=self._session_scope)
         if carry_active_work:
             human_logger.info(
                 "Started a new hub conversation. Future turns use a fresh LangGraph thread "
