@@ -482,6 +482,19 @@ _EXPLICIT_FANOUT_REQUEST = re.compile(
     r"(?:multiple|several|two)\s+projects)\b",
     re.IGNORECASE,
 )
+_QUOTED_ACTION_TEXT = re.compile(
+    r'"[^"\n]*"|`[^`\n]*`|“[^”\n]*”|‘[^’\n]*’|(?<!\w)\'[^\'\n]*\'(?!\w)'
+)
+_REPORTED_ACTION_CONTEXT = re.compile(
+    r"\b(?:(?:the|my|our|their|his|her)\s+)?"
+    r"(?:(?:earlier|previous|prior|original|quoted|reported)\s+)?"
+    r"(?:prompt|request|message|instruction|log|transcript|example|text)\s+"
+    r"(?:said|says|read|reads|contained|contains|included|includes|asked|wrote|writes|"
+    r"mentioned|mentions|quoted)\b"
+    r"|\b(?:earlier|previous|prior|original|quoted|reported)\s+"
+    r"(?:prompt|request|message|instruction|log|transcript|example|text)\s*:\s*$",
+    re.IGNORECASE,
+)
 
 
 def _agent_identity_values(spec: AgentSpec) -> list[str]:
@@ -507,6 +520,16 @@ def _action_cue_precedes_identity(
     cue_start = len(prefix) - len(window) + match.start()
     before_cue = prefix[:cue_start].rstrip(" .!?,;:")
     if re.search(r"\b(?:do\s+not|don't|dont|never|avoid|not\s+to)\s*$", before_cue, re.I):
+        return False
+    if any(
+        span.start() <= cue_start < span.end()
+        for span in _QUOTED_ACTION_TEXT.finditer(message)
+    ):
+        return False
+    sentence_start = max(
+        prefix.rfind(mark) for mark in ("\n", ".", "!", "?", ";")
+    ) + 1
+    if _REPORTED_ACTION_CONTEXT.search(prefix[sentence_start:]):
         return False
     return True
 
@@ -1634,10 +1657,15 @@ def _format_output(spec: AgentSpec, output: dict) -> str:
 
     if status == "success":
         instruction = str(output.get("coding_agent_instruction", "")).strip()
+        brief = str(output.get("brief", "")).strip()
         if summary and instruction:
             return f"[{spec.name}] {summary}\n\n{instruction}".strip()
         if instruction:
             return f"[{spec.name}] {instruction}".strip()
+        if brief and summary:
+            return f"[{spec.name}] {summary}\n\n{brief}".strip()
+        if brief:
+            return f"[{spec.name}] {brief}".strip()
         return f"[{spec.name}] {summary}".strip()
 
     pending_decision = _valid_pending_decision(output.get("pending_decision"))

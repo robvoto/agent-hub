@@ -2550,7 +2550,17 @@ def test_explicit_agent_call_wins_over_passive_human_mcp_mentions(
     assert decision.task_kind == "coding_task"
 
 
-def test_passive_human_mcp_mention_uses_semantic_classifier(monkeypatch):
+@pytest.mark.parametrize(
+    "operator_message",
+    [
+        "Human MCP returned a 400 earlier; explain how its transport works.",
+        "Explain why 'Please use Human MCP' was in an earlier prompt.",
+        "The earlier prompt said please use Human MCP; explain the wording.",
+    ],
+)
+def test_passive_human_mcp_mention_uses_semantic_classifier(
+    monkeypatch, operator_message
+):
     from agent_hub.orchestrator import RoutingDecision, _classify_routing_request
 
     class _Config:
@@ -2576,7 +2586,7 @@ def test_passive_human_mcp_mention_uses_semantic_classifier(monkeypatch):
     monkeypatch.setattr("agent_hub.orchestrator.load_human_mcp_config", lambda: _Config())
     monkeypatch.setattr("agent_hub.orchestrator.ChatOpenAI", lambda **kwargs: _StructuredModel())
     decision = _classify_routing_request(
-        "Human MCP returned a 400 earlier; explain how its transport works.",
+        operator_message,
         [spec],
         model="test",
     )
@@ -2715,11 +2725,19 @@ def test_ordinary_mentions_and_negated_calls_use_semantic_classifier(monkeypatch
         "AI Tech Lead is registered; explain its purpose.",
         "Do not call AI Tech Lead; explain what blocked the earlier attempt.",
         "Use AI Tech Lead's guide to understand the workflow.",
+        "Explain why 'Please call AI Tech Lead' was in an earlier prompt.",
+        "The earlier prompt said please call AI Tech Lead; explain the wording.",
     ]
     decisions = [_classify_routing_request(request, [spec], model="test") for request in requests]
 
-    assert calls == [1, 1, 1]
-    assert [decision.route for decision in decisions] == ["direct", "direct", "direct"]
+    assert calls == [1, 1, 1, 1, 1]
+    assert [decision.route for decision in decisions] == [
+        "direct",
+        "direct",
+        "direct",
+        "direct",
+        "direct",
+    ]
 
 
 def test_explicit_fanout_request_stays_on_normal_fanout_routing(monkeypatch):
@@ -2875,6 +2893,30 @@ def test_explicit_agent_route_invokes_only_that_tool_once_and_returns_its_result
     assert run.state == TASK_STATE_SUCCEEDED
     assert run.selected_agent_id == "ai-tech-lead"
     assert run.final_response == reply
+
+
+def test_specialist_success_brief_is_returned_with_its_summary():
+    from agent_hub.orchestrator import _format_output
+
+    specialist = AgentSpec(
+        id="ai-tech-lead",
+        name="AI Tech Lead",
+        purpose="Reviews technical work.",
+        task_contract={"task_kinds": ["technical_analysis"]},
+        runtime={"mode": "subprocess"},
+    )
+    brief = "Actionable finding [P2]: quoted agent calls need a regression test."
+
+    reply = _format_output(
+        specialist,
+        {
+            "status": "success",
+            "summary": "Technical analysis completed.",
+            "brief": brief,
+        },
+    )
+
+    assert reply == f"[AI Tech Lead] Technical analysis completed.\n\n{brief}"
 
 
 def test_parallel_fanout_tool_passes_explicit_branches_to_executor(monkeypatch):
