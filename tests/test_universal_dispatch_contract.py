@@ -628,11 +628,10 @@ def test_source_request_opt_in_preserves_task_and_separates_original_input(
     _ScriptedFakePopen.responses = [{"status": "success", "summary": "Echoed."}]
     monkeypatch.setattr("agent_hub.orchestrator.subprocess.Popen", _ScriptedFakePopen)
 
-    orchestrator = HubOrchestrator()
     operator_request = "Please echo exactly: \nAF048_LITERAL_VALUE_42\n"
     dispatched_task = "Echo the requested literal value."
     run = get_task_run_store().create_run(
-        session_id=orchestrator.session_id,
+        session_id="operator-source-opt-in",
         user_message=operator_request,
     )
 
