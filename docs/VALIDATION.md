@@ -25,6 +25,15 @@ Stop if startup health fails or the required specialist is unavailable.
 6. Confirm the final result arrives once and the run is persisted.
 7. `/last` shows the terminal run.
 
+## Telegram chat isolation and input fidelity
+
+Run this only with the existing primary chat plus a separate private test chat/group. A second browser tab or a second DM from the same account is not a separate Telegram chat. Set `HUB_TELEGRAM_PRIMARY_CHAT_ID` to the existing primary chat before adding another ID to `HUB_ALLOWED_CHAT_IDS`; do not run the isolated-chat test in the active shared worker conversation.
+
+1. Send harmless distinct messages in both chats and confirm each result and `/status` belong to that chat's own run.
+2. Run `/new` in the test chat; confirm the primary chat's conversation and paused work remain unchanged.
+3. Restart the Hub gateway, then confirm each chat resumes its own conversation.
+4. For input-fidelity acceptance, send a test payload with leading and trailing spaces through a controlled echo specialist and verify the dispatched literal and final result preserve those spaces.
+
 ## Pause, resume and cancellation
 
 Exercise only paths supported by the selected specialist. Treat the specialist protocol as authoritative: `approval_required` / `waiting_approval` uses `/approve` and `/reject`; `waiting_decision` uses the reported option number or name, even when the prompt itself says "approval". Do not infer approval semantics from wording.
