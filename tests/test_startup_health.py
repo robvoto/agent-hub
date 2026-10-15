@@ -225,7 +225,7 @@ def test_startup_healthcheck_accepts_separately_configured_priced_reviewer(monke
     assert not report.has_failures
     detail = _failure_detail(report, "HUB_HANDOFF_REVIEW_MODEL")
     assert "reasoning effort low" in detail
-    assert "output cap 1200 tokens" in detail
+    assert "provider-default output length" in detail
 
 
 def test_telegram_healthcheck_warns_without_allowlist(monkeypatch, tmp_path):

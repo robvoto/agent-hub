@@ -29,7 +29,6 @@ from pydantic import (
 
 from .config import (
     AGENT_FACTORY_ROOT,
-    configured_handoff_reviewer_max_tokens,
     configured_handoff_reviewer_model,
     configured_handoff_reviewer_timeout_seconds,
     handoff_reviewer_model_kwargs,
@@ -716,7 +715,6 @@ class HandoffFidelityReviewer:
                 {
                     "timeout": self.timeout_seconds,
                     "max_retries": 0,
-                    "max_tokens": configured_handoff_reviewer_max_tokens(),
                 }
             )
             llm = ChatOpenAI(**kwargs).with_structured_output(HandoffFidelityReview)
