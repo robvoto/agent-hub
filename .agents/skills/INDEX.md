@@ -4,6 +4,7 @@ Pick the smallest skill that matches the task. Do not load every skill.
 
 - `agent-hub-work/SKILL.md` — repository boundary, orchestration ownership, and Hub-vs-specialist scope.
 - `hub-runtime-change/SKILL.md` — orchestrator, Telegram, CLI, dispatch, approvals, and task lifecycle.
+- `code-change/SKILL.md` — implementation and review workflow for ATL/Codex; pair it with the owning domain skill.
 - `instruction-maintenance/SKILL.md` — AGENTS.md, skills, instruction docs, and routing structure.
 - `git-lifecycle/SKILL.md` — branch/worktree, commit, push, PR, merge, and verified `main` integration.
 - `human-mcp-access/SKILL.md` — authorised Human MCP access and connected Google tooling.
