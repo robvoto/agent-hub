@@ -3512,7 +3512,7 @@ class HubOrchestrator:
 
     def _prepare_handoff_transition(self, run: TaskRun, output: dict[str, Any]) -> str | None:
         """Freeze, review, and persist one exact cross-specialist continuation."""
-        if output.get("status") != "success" or "next_task" not in output:
+        if output.get("status") != "success" or output.get("next_task") is None:
             return None
 
         depth = run.context.get("cross_specialist_follow_on_depth", 0)
@@ -3773,7 +3773,7 @@ class HubOrchestrator:
                 thread_id=thread_id,
                 action="invoke",
             )
-        if output.get("status") == "success" and "next_task" not in output:
+        if output.get("status") == "success" and output.get("next_task") is None:
             raise HandoffEvidenceError(
                 "the originating Factory revision returned success without a fresh next_task"
             )
@@ -4152,7 +4152,7 @@ class HubOrchestrator:
                 is_active_state(current.state)
                 and isinstance(current.raw_result, dict)
                 and current.raw_result.get("status") == "success"
-                and "next_task" in current.raw_result
+                and current.raw_result.get("next_task") is not None
             ):
                 try:
                     reply = self._prepare_handoff_transition(current, current.raw_result)
@@ -4250,7 +4250,7 @@ class HubOrchestrator:
             current is not None
             and is_active_state(current.state)
             and output.get("status") == "success"
-            and "next_task" in output
+            and output.get("next_task") is not None
         ):
             try:
                 packet = self._prepare_handoff_transition(current, output)

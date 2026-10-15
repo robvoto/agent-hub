@@ -1025,6 +1025,22 @@ def test_default_handoff_resolver_fails_closed_for_non_factory_source(monkeypatc
     assert get_task_run_store().get_run(run.id).state == TASK_STATE_IN_PROGRESS
 
 
+def test_null_next_task_is_treated_as_absent(monkeypatch):
+    orch = _orchestrator(
+        monkeypatch,
+        HandoffFidelityReviewer(review_callable=lambda _payload: REVIEW_SUPPORTED),
+    )
+    run = _paused_origin(orch)
+    assert run is not None
+    output = {"status": "success", "summary": "Build task prepared.", "next_task": None}
+
+    assert orch._prepare_handoff_transition(run, output) is None
+    assert "Build task prepared." in orch._finalize_specialist_follow_up(run.id, _spec(), output)
+    final_run = get_task_run_store().get_run(run.id)
+    assert final_run is not None and final_run.state == TASK_STATE_SUCCEEDED
+    assert "hub_transition_decision" not in final_run.context
+
+
 def test_deterministic_validation_precedes_reviewer_and_missing_evidence_fails_closed(monkeypatch):
     called = False
 
