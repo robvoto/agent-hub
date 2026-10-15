@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import signal
@@ -10,7 +11,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
@@ -168,25 +169,90 @@ def _allowed_chat_ids() -> set[int]:
         return set()
 
 
+def _telegram_session_scope(chat_id: int) -> str:
+    digest = hashlib.sha256(str(chat_id).encode("utf-8")).hexdigest()[:24]
+    return f"telegram-{digest}"
+
+
+def _resolve_primary_chat_id(allowed: set[int], primary_chat_id: int | None) -> int | None:
+    configured = os.getenv("HUB_TELEGRAM_PRIMARY_CHAT_ID", "").strip()
+    if primary_chat_id is None and configured:
+        try:
+            primary_chat_id = int(configured)
+        except ValueError as exc:
+            raise ValueError("HUB_TELEGRAM_PRIMARY_CHAT_ID must be an integer.") from exc
+    elif primary_chat_id is None and len(allowed) == 1:
+        primary_chat_id = next(iter(allowed))
+    elif primary_chat_id is None and len(allowed) > 1:
+        raise ValueError(
+            "Set HUB_TELEGRAM_PRIMARY_CHAT_ID before allowing multiple Telegram chats."
+        )
+
+    if primary_chat_id is not None and allowed and primary_chat_id not in allowed:
+        raise ValueError("HUB_TELEGRAM_PRIMARY_CHAT_ID must be in HUB_ALLOWED_CHAT_IDS.")
+    return primary_chat_id
+
+
 class TelegramGateway:
-    def __init__(self, token: str, orchestrator: HubOrchestrator) -> None:
+    def __init__(
+        self,
+        token: str,
+        orchestrator: HubOrchestrator,
+        *,
+        primary_chat_id: int | None = None,
+        orchestrator_factory: Callable[[int], HubOrchestrator] | None = None,
+    ) -> None:
         self._token = token
-        self._orch = orchestrator
         self._allowed = _allowed_chat_ids()
+        self._primary_chat_id = _resolve_primary_chat_id(self._allowed, primary_chat_id)
+        self._orchestrator_factory = orchestrator_factory or self._create_chat_orchestrator
+        self._orchestrator_lock = threading.RLock()
+        self._orchestrators: dict[int, HubOrchestrator] = {}
+        self._unassigned_orchestrator = orchestrator if self._primary_chat_id is None else None
+        if self._primary_chat_id is not None:
+            self._orchestrators[self._primary_chat_id] = orchestrator
+            self._bind_learning_notifier(self._primary_chat_id, orchestrator)
         self._workers_lock = threading.Lock()
         self._workers: list[threading.Thread] = []
-        self._last_chat_id: int | None = None
         self._seen_lock = threading.Lock()
         self._recent_update_ids: deque[int] = deque(maxlen=256)
         self._recent_message_keys: deque[tuple[int, int]] = deque(maxlen=256)
         self._progress_lock = threading.Lock()
         self._live_progress_messages: dict[str, _LiveProgressMessage] = {}
-        self._orch.set_learning_notifier(self._notify_learning)
 
-    def _notify_learning(self, message: str) -> None:
-        if self._last_chat_id is None:
-            return
-        _send_message(self._token, self._last_chat_id, message, parse_mode=None)
+    def _create_chat_orchestrator(self, chat_id: int) -> HubOrchestrator:
+        return HubOrchestrator(session_scope=_telegram_session_scope(chat_id))
+
+    def _bind_learning_notifier(self, chat_id: int, orchestrator: HubOrchestrator) -> None:
+        orchestrator.set_learning_notifier(
+            lambda message, chat_id=chat_id: self._notify_learning(chat_id, message)
+        )
+
+    def _orchestrator_for_chat(self, chat_id: int) -> HubOrchestrator:
+        with self._orchestrator_lock:
+            existing = self._orchestrators.get(chat_id)
+            if existing is not None:
+                return existing
+
+            if self._unassigned_orchestrator is not None:
+                orchestrator = self._unassigned_orchestrator
+                self._unassigned_orchestrator = None
+            else:
+                orchestrator = self._orchestrator_factory(chat_id)
+            self._orchestrators[chat_id] = orchestrator
+            self._bind_learning_notifier(chat_id, orchestrator)
+            return orchestrator
+
+    def _notify_learning(self, chat_id: int, message: str) -> None:
+        _send_message(self._token, chat_id, message, parse_mode=None)
+
+    def _clear_live_progress(self, chat_id: int) -> None:
+        with self._progress_lock:
+            self._live_progress_messages = {
+                run_id: progress
+                for run_id, progress in self._live_progress_messages.items()
+                if progress.chat_id != chat_id
+            }
 
     def _is_allowed(self, chat_id: int) -> bool:
         return not self._allowed or chat_id in self._allowed
@@ -251,46 +317,47 @@ class TelegramGateway:
 
     def _handle_message(self, msg: dict) -> None:
         chat_id = msg["chat"]["id"]
-        text = msg.get("text", "").strip()
+        raw_text = msg.get("text", "")
+        if not isinstance(raw_text, str):
+            return
+        text = raw_text.strip()
 
         if not self._is_allowed(chat_id):
             logger.info("Ignored message from unauthorized chat %d", chat_id)
             return
 
-        self._last_chat_id = chat_id
         human_logger.info("Telegram message from chat %d: %s", chat_id, _truncate(text))
 
         if text == "/help":
             _send_message(self._token, chat_id, self._help_text(), parse_mode=None)
             return
 
+        orch = self._orchestrator_for_chat(chat_id)
+
         if text == "/new":
-            summary = self._orch.new_session()
-            with self._progress_lock:
-                self._live_progress_messages.clear()
+            summary = orch.new_session()
+            self._clear_live_progress(chat_id)
             _send_message(self._token, chat_id, summary, parse_mode=None)
             return
 
         if text == "/hub-status":
-            _send_message(self._token, chat_id, self._orch.hub_status(), parse_mode=None)
+            _send_message(self._token, chat_id, orch.hub_status(), parse_mode=None)
             return
 
         if text == "/reset":
-            reply = self._orch.reset_session()
-            with self._progress_lock:
-                self._live_progress_messages.clear()
+            reply = orch.reset_session()
+            self._clear_live_progress(chat_id)
             _send_message(self._token, chat_id, reply, parse_mode=None)
             return
 
         if text == "/reset-all":
-            reply = self._orch.reset_all()
-            with self._progress_lock:
-                self._live_progress_messages.clear()
+            reply = orch.reset_all()
+            self._clear_live_progress(chat_id)
             _send_message(self._token, chat_id, reply, parse_mode=None)
             return
 
         if text == "/agents":
-            specs = self._orch.registry
+            specs = orch.registry
             if not specs:
                 reply = "No agents registered yet."
             else:
@@ -303,7 +370,7 @@ class TelegramGateway:
             _send_message(
                 self._token,
                 chat_id,
-                self._orch.refresh_registry(),
+                orch.refresh_registry(),
                 parse_mode=None,
             )
             return
@@ -312,7 +379,7 @@ class TelegramGateway:
             _send_message(
                 self._token,
                 chat_id,
-                self._orch.agents_status(),
+                orch.agents_status(),
                 parse_mode=None,
             )
             return
@@ -321,18 +388,18 @@ class TelegramGateway:
             _send_message(
                 self._token,
                 chat_id,
-                self._orch.current_run_status(),
+                orch.current_run_status(),
                 parse_mode=None,
             )
             return
 
         if text == "/tasks":
-            _send_message(self._token, chat_id, self._orch.tasks_status(), parse_mode=None)
+            _send_message(self._token, chat_id, orch.tasks_status(), parse_mode=None)
             return
 
         if text == "/resume" or text.startswith("/resume "):
             identifier = text[len("/resume") :].strip()
-            reply = "Usage: /resume <id>" if not identifier else self._orch.resume_task(identifier)
+            reply = "Usage: /resume <id>" if not identifier else orch.resume_task(identifier)
             _send_message(self._token, chat_id, reply, parse_mode=None)
             return
 
@@ -340,7 +407,7 @@ class TelegramGateway:
             _send_message(
                 self._token,
                 chat_id,
-                self._orch.last_run_status(),
+                orch.last_run_status(),
                 parse_mode=None,
             )
             return
@@ -350,23 +417,23 @@ class TelegramGateway:
             reply = (
                 "Usage: /learn <instruction or fact>"
                 if not value
-                else self._orch.learn(value, source=f"telegram chat {chat_id}")
+                else orch.learn(value, source=f"telegram chat {chat_id}")
             )
             _send_message(self._token, chat_id, reply, parse_mode=None)
             return
 
         if text == "/memory":
-            _send_message(self._token, chat_id, self._orch.memory(), parse_mode=None)
+            _send_message(self._token, chat_id, orch.memory(), parse_mode=None)
             return
 
         if text.startswith("/learn-mode"):
             arg = text[len("/learn-mode") :].strip().lower()
             if arg == "on":
-                reply = self._orch.set_learning_mode(True)
+                reply = orch.set_learning_mode(True)
             elif arg == "off":
-                reply = self._orch.set_learning_mode(False)
+                reply = orch.set_learning_mode(False)
             elif not arg:
-                reply = self._orch.learning_mode_status()
+                reply = orch.learning_mode_status()
             else:
                 reply = "Usage: /learn-mode [on|off]"
             _send_message(self._token, chat_id, reply, parse_mode=None)
@@ -377,7 +444,7 @@ class TelegramGateway:
             _send_message(
                 self._token,
                 chat_id,
-                self._orch.forget_learning(identifier),
+                orch.forget_learning(identifier),
                 parse_mode=None,
             )
             return
@@ -385,23 +452,23 @@ class TelegramGateway:
         if text.startswith("/project"):
             arg = text[len("/project") :].strip()
             if not arg:
-                reply = self._orch.current_project_status()
+                reply = orch.current_project_status()
             elif arg.lower() == "clear":
-                reply = self._orch.clear_current_project()
+                reply = orch.clear_current_project()
             else:
-                reply = self._orch.set_current_project(arg)
+                reply = orch.set_current_project(arg)
             _send_message(self._token, chat_id, reply, parse_mode=None)
             return
 
         if text == "/stop" or text.startswith("/stop "):
             identifier = text[len("/stop") :].strip() or None
-            reply = self._orch.stop_current_task(identifier=identifier)
+            reply = orch.stop_current_task(identifier=identifier)
             _send_message(self._token, chat_id, reply, parse_mode=None)
             return
 
         if text == "/approve":
             try:
-                reply = self._orch.approve_pending(
+                reply = orch.approve_pending(
                     progress_notify=lambda update: self._notify_progress(chat_id, update)
                 )
             except Exception as exc:
@@ -413,7 +480,7 @@ class TelegramGateway:
         if text.startswith("/reject"):
             reason = text[len("/reject") :].strip() or "Rejected by user"
             try:
-                reply = self._orch.reject_pending(reason)
+                reply = orch.reject_pending(reason)
             except Exception as exc:
                 logger.exception("Approval rejection error")
                 reply = f"Error: {exc}"
@@ -430,7 +497,7 @@ class TelegramGateway:
         request_started_at = datetime.now(timezone.utc)
         worker = threading.Thread(
             target=self._process_user_message,
-            args=(chat_id, text, request_started_at),
+            args=(chat_id, raw_text, request_started_at),
             daemon=True,
         )
         with self._workers_lock:
@@ -475,20 +542,21 @@ class TelegramGateway:
     def _process_user_message(
         self, chat_id: int, text: str, request_started_at: datetime | None = None
     ) -> None:
+        orch = self._orchestrator_for_chat(chat_id)
         try:
-            pending = self._orch.pending_run()
+            pending = orch.pending_run()
             if pending is not None and pending.state == "waiting_decision":
-                reply = self._orch.provide_decision_reply(
+                reply = orch.provide_decision_reply(
                     text,
                     progress_notify=lambda update: self._notify_progress(chat_id, update),
                 )
             elif pending is not None and pending.state == "waiting_clarification":
-                reply = self._orch.provide_clarification(
+                reply = orch.provide_clarification(
                     text,
                     progress_notify=lambda update: self._notify_progress(chat_id, update),
                 )
             else:
-                reply = self._orch.invoke(
+                reply = orch.invoke(
                     text,
                     progress_notify=lambda update: self._notify_progress(chat_id, update),
                     request_started_at=request_started_at,
@@ -577,9 +645,9 @@ class TelegramGateway:
             _API_BASE,
         )
         logger.info(
-            "Hub Telegram gateway starting (pid=%d, session %s, api=%s).",
+            "Hub Telegram gateway starting (pid=%d, primary chat configured=%s, api=%s).",
             os.getpid(),
-            self._orch.session_id,
+            self._primary_chat_id is not None,
             _API_BASE,
         )
         previous_sigterm_handler = signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
@@ -666,9 +734,14 @@ class TelegramGateway:
                 return name.strip()
         agent_id = run.selected_agent_id
         if isinstance(agent_id, str) and agent_id:
-            for spec in self._orch.registry:
-                if spec.id == agent_id and spec.name.strip():
-                    return spec.name.strip()
+            with self._orchestrator_lock:
+                orchestrators = list(self._orchestrators.values())
+                if self._unassigned_orchestrator is not None:
+                    orchestrators.append(self._unassigned_orchestrator)
+            for orchestrator in orchestrators:
+                for spec in orchestrator.registry:
+                    if spec.id == agent_id and spec.name.strip():
+                        return spec.name.strip()
             return agent_id
         return "Specialist"
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from langgraph.store.memory import InMemoryStore
+
 from agent_hub.session_state import load_or_create_session_id, persist_session_id
 
 
@@ -26,3 +28,19 @@ def test_persist_session_id_rolls_the_pointer_forward_for_the_next_start():
     persist_session_id("new-session-after-reset")
 
     assert load_or_create_session_id() == "new-session-after-reset"
+
+
+def test_scoped_session_ids_persist_independently():
+    store = InMemoryStore()
+
+    primary = load_or_create_session_id(store)
+    chat_a = load_or_create_session_id(store, scope="telegram-a")
+    chat_b = load_or_create_session_id(store, scope="telegram-b")
+
+    assert len({primary, chat_a, chat_b}) == 3
+
+    persist_session_id("new-chat-a-session", store, scope="telegram-a")
+
+    assert load_or_create_session_id(store, scope="telegram-a") == "new-chat-a-session"
+    assert load_or_create_session_id(store, scope="telegram-b") == chat_b
+    assert load_or_create_session_id(store) == primary
