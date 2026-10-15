@@ -95,21 +95,6 @@ def configured_handoff_reviewer_timeout_seconds() -> float:
     return timeout
 
 
-def configured_handoff_reviewer_max_tokens() -> int:
-    """Return the bounded reviewer output-token limit."""
-    value = os.getenv("HUB_HANDOFF_REVIEW_MAX_TOKENS", "1200").strip()
-    try:
-        max_tokens = int(value)
-    except ValueError as exc:
-        raise ConfigurationError(
-            "HUB_HANDOFF_REVIEW_MAX_TOKENS must be a positive integer."
-        ) from exc
-    if max_tokens <= 0 or max_tokens > 4000:
-        raise ConfigurationError(
-            "HUB_HANDOFF_REVIEW_MAX_TOKENS must be greater than 0 and at most 4000."
-        )
-    return max_tokens
-
 # Agent Factory — hub reads the agent registry from here.
 # Override with AGENT_FACTORY_ROOT env var if agent-factory lives elsewhere.
 AGENT_FACTORY_ROOT = Path(

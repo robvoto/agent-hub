@@ -22,7 +22,6 @@ from .config import (
     LLM_COST_CATALOG_FILE,
     TASK_RUN_DB,
     ConfigurationError,
-    configured_handoff_reviewer_max_tokens,
     configured_handoff_reviewer_model,
     configured_handoff_reviewer_reasoning_effort,
     configured_handoff_reviewer_timeout_seconds,
@@ -539,7 +538,6 @@ def _check_handoff_reviewer_config() -> HealthCheckResult:
         model = configured_handoff_reviewer_model()
         reasoning_effort = configured_handoff_reviewer_reasoning_effort()
         timeout_seconds = configured_handoff_reviewer_timeout_seconds()
-        max_tokens = configured_handoff_reviewer_max_tokens()
         if not LLM_COST_CATALOG_FILE.exists():
             raise FileNotFoundError(f"Cost catalog file does not exist: {LLM_COST_CATALOG_FILE}")
         catalog = load_cost_catalog(LLM_COST_CATALOG_FILE)
@@ -576,7 +574,7 @@ def _check_handoff_reviewer_config() -> HealthCheckResult:
         status="PASS",
         detail=(
             f"Handoff reviewer model configured as {model}; reasoning effort {reasoning_effort}; "
-            f"output cap {max_tokens} tokens; timeout {timeout_seconds:g}s; retries 0; "
+            f"provider-default output length; timeout {timeout_seconds:g}s; retries 0; "
             "priced model verified."
         ),
     )

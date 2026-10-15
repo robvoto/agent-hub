@@ -320,6 +320,41 @@ def test_default_handoff_reviewer_uses_dedicated_runtime_model(monkeypatch):
     assert orch._handoff_reviewer.model == "handoff-review-model"
 
 
+def test_default_handoff_review_call_does_not_impose_output_token_cap(monkeypatch):
+    from agent_hub import handoff_transition
+
+    captured = {}
+
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def with_structured_output(self, _schema):
+            return self
+
+        def invoke(self, *_args, **_kwargs):
+            return REVIEW_SUPPORTED
+
+    monkeypatch.setattr(handoff_transition, "ChatOpenAI", FakeChatOpenAI)
+    monkeypatch.setattr(handoff_transition, "record_llm_run", lambda **_kwargs: None)
+    monkeypatch.setenv("HUB_HANDOFF_REVIEW_REASONING_EFFORT", "none")
+
+    reviewer = HandoffFidelityReviewer(model="review-model", timeout_seconds=17)
+    reviewer.review(
+        ApprovedDesignEvidence.model_validate(EVIDENCE),
+        NextTaskContract.model_validate(NEXT_TASK),
+        PROJECT,
+        [{"id": "ai-tech-lead", "name": "AI Tech Lead"}],
+    )
+
+    assert captured == {
+        "model": "review-model",
+        "reasoning_effort": "none",
+        "timeout": 17,
+        "max_retries": 0,
+    }
+
+
 def _natural_language_orchestrator(monkeypatch):
     return _orchestrator(
         monkeypatch,
