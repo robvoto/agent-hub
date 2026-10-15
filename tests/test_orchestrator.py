@@ -27,6 +27,7 @@ from agent_hub.orchestrator import (
     HubOrchestrator,
     _build_system_prompt,
     _dispatch_subprocess,
+    _format_output,
     _make_agent_tool,
     _repair_dangling_tool_calls,
     cancel_all_active_tasks,
@@ -1126,6 +1127,50 @@ def test_unrelated_learned_url_is_not_added_to_specialist_references(monkeypatch
     tool.invoke("Fix the Agent Hub backlog workflow.")
 
     assert captured["references"] is None
+
+
+def test_specialist_tool_returns_directly_without_second_hub_model_pass(tmp_path):
+    spec = AgentSpec(
+        id="ai-tech-lead",
+        name="AI Tech Lead",
+        purpose="Implements code changes",
+        runtime={
+            "mode": "subprocess",
+            "entrypoint": "fake-agent",
+            "working_directory": str(tmp_path),
+            "input_arg": "--input-json",
+            "output_arg": "--output-json",
+            "default_execution_mode": "execute",
+        },
+    )
+
+    tool = _make_agent_tool(spec)
+
+    assert tool.return_direct is True
+
+
+def test_format_output_includes_technical_analysis_body():
+    spec = AgentSpec(
+        id="ai-tech-lead",
+        name="AI Tech Lead",
+        purpose="Reviews technical solutions",
+        runtime={"mode": "subprocess"},
+    )
+
+    result = _format_output(
+        spec,
+        {
+            "status": "success",
+            "result_kind": "technical_analysis",
+            "summary": "Technical analysis completed.",
+            "brief": "implementable=yes; blocking_conflicts=none",
+        },
+    )
+
+    assert result == (
+        "[AI Tech Lead] Technical analysis completed.\n\n"
+        "implementable=yes; blocking_conflicts=none"
+    )
 
 
 def test_explicit_specialist_references_are_not_replaced_by_learned_urls(monkeypatch, tmp_path):

@@ -1656,6 +1656,13 @@ def _format_output(spec: AgentSpec, output: dict) -> str:
     summary = str(output.get("summary", "")).strip()
 
     if status == "success":
+        result_kind = str(output.get("result_kind", "")).strip()
+        if result_kind == "technical_analysis":
+            analysis = str(output.get("brief", "")).strip()
+            if summary and analysis:
+                return f"[{spec.name}] {summary}\n\n{analysis}".strip()
+            if analysis:
+                return f"[{spec.name}] {analysis}".strip()
         instruction = str(output.get("coding_agent_instruction", "")).strip()
         brief = str(output.get("brief", "")).strip()
         if summary and instruction:
@@ -1845,7 +1852,7 @@ def _make_agent_tool(
             f"{operator_request}"
         )
 
-    @lc_tool(spec.id, description=description)
+    @lc_tool(spec.id, description=description, return_direct=True)
     def _call_agent(task: str, references: list[str] | None = None) -> str:
         resolved_references = (
             references if references is not None else _learned_references_for_task(task)

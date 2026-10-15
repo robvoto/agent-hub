@@ -123,6 +123,8 @@ task remains byte-for-byte unchanged. Other specialists keep the legacy behavior
 the original request appended to task. In either case, original source text cannot expand
 permissions or override the Hub task or specialist contract.
 
+Registered specialist tools return directly to the operator after producing their result. Hub does not ask its routing model to reinterpret the same result or call the same specialist again before replying. Hub support tools and explicit multi-specialist fan-out retain their own orchestration. Successful `technical_analysis` results include the specialist's bounded analysis body as well as its summary.
+
 A successful specialist result may optionally include the generic `next_task` contract. Hub accepts
 only `task_kind` and `task` as required non-empty strings plus an optional list of string
 `references`; extra fields such as `agent_id`, lifecycle fields, `project_root`, `context` and
