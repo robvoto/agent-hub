@@ -35,6 +35,8 @@ The `./run.sh` wrapper accepts the same `chat`, `telegram` and `--debug` choices
 | `/project [<path>|clear]` | Show, set or clear canonical project context |
 | `/status` | Show current active or paused task and latest progress |
 | `/last` | Show the most recent terminal task |
+| `/resume <id>` | Attach a paused task to this conversation |
+| `/factory-adopt <thread-id> <BUILD_TASK reference>` | Validate one exact approved Factory task and pause its implementation handoff for human review |
 | `/new` | Start a fresh thread; do not cancel active work |
 | `/stop` | Cancel current work and keep the same conversation |
 | `/reset` | Cancel current work and start a fresh conversation |
@@ -54,7 +56,13 @@ Factory thread for a fresh reviewed handoff, or `REJECT <reason>` to prevent dis
 the proposed continuation. `/stop` cancels an active sequential child when issued against its
 parent or child run.
 
-Not implemented: `/fork`, generic `/resume`, `/model`, `/med`, `/high`.
+`/factory-adopt` requires the exact existing Factory thread ID and one canonical
+`staging/agents/<agent-id>/BUILD_TASK.json` reference. It does not resume Factory or
+dispatch an implementation agent. Hub revalidates the Factory approval and routes the
+result through its normal evidence review and `/approve` gate. Repeating the same
+adoption returns the existing Hub run instead of creating another one.
+
+Not implemented: `/fork`, generic checkpoint `/resume`, `/model`, `/med`, `/high`.
 
 ## Memory behaviour
 

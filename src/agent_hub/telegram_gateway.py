@@ -296,6 +296,7 @@ class TelegramGateway:
             "/new - start a fresh conversation; paused work is preserved\n"
             "/tasks - list all active/paused tasks\n"
             "/resume <id> - select a paused task to continue\n"
+            "/factory-adopt <thread-id> <BUILD_TASK reference> - review one approved Factory task\n"
             "/status - show details for this conversation's current task\n"
             "/stop [id] - cancel the current task, or a specific task\n"
             "/reset - cancel the current task and start a fresh conversation\n"
@@ -400,6 +401,16 @@ class TelegramGateway:
         if text == "/resume" or text.startswith("/resume "):
             identifier = text[len("/resume") :].strip()
             reply = "Usage: /resume <id>" if not identifier else orch.resume_task(identifier)
+            _send_message(self._token, chat_id, reply, parse_mode=None)
+            return
+
+        if text == "/factory-adopt" or text.startswith("/factory-adopt "):
+            parts = text.split()
+            reply = (
+                "Usage: /factory-adopt <Factory-thread-id> <BUILD_TASK reference>"
+                if len(parts) != 3
+                else orch.adopt_factory_task(parts[1], parts[2])
+            )
             _send_message(self._token, chat_id, reply, parse_mode=None)
             return
 

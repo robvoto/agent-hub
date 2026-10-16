@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import threading
 import time
 from dataclasses import replace
@@ -318,6 +319,215 @@ def test_default_handoff_reviewer_uses_dedicated_runtime_model(monkeypatch):
     orch = _orchestrator(monkeypatch, reviewer=None)
 
     assert orch._handoff_reviewer.model == "handoff-review-model"
+
+
+def test_factory_adoption_validates_exact_task_and_pauses_before_dispatch(
+    monkeypatch, tmp_path
+):
+    root = tmp_path / "agent-factory"
+    root.mkdir()
+    factory_project = replace(FACTORY_ROOT_CONTEXT, root=str(root))
+    project_registry = _FakeProjectRegistry(
+        resolution=ProjectContextResolution(context=factory_project, error=None)
+    )
+    resolved = _factory_resolution(thread_id=FACTORY_THREAD)
+    resolver_calls = []
+
+    def resolve_factory(**kwargs):
+        resolver_calls.append(kwargs)
+        return resolved
+
+    monkeypatch.setattr(orchestrator_module, "AGENT_FACTORY_ROOT", root)
+    monkeypatch.setattr(orchestrator_module, "build_factory_agent_spec", lambda: _spec(
+        "agent-factory", task_kinds=("design_task",), runtime_mode="factory_brain"
+    ))
+    monkeypatch.setattr(orchestrator_module, "resolve_factory_build_task", resolve_factory)
+    monkeypatch.setattr("agent_hub.factory_bridge.AGENT_FACTORY_ROOT", root)
+    monkeypatch.setattr("agent_hub.factory_bridge.resolve_factory_build_task", resolve_factory)
+    monkeypatch.setattr("agent_hub.handoff_transition.AGENT_FACTORY_ROOT", root)
+    monkeypatch.setattr(
+        "agent_hub.handoff_transition.FactoryHandoffEvidenceResolver._factory_agent_id",
+        lambda _self: "agent-factory",
+    )
+    monkeypatch.setattr(
+        "agent_hub.handoff_transition.get_project_context_registry",
+        lambda: project_registry,
+    )
+    orch = _orchestrator(
+        monkeypatch,
+        HandoffFidelityReviewer(review_callable=lambda _payload: REVIEW_SUPPORTED),
+        specs=[
+            _spec("agent-factory", task_kinds=("design_task",), runtime_mode="factory_brain"),
+            _spec("ai-tech-lead"),
+        ],
+        resolver=None,
+        project_registry=project_registry,
+    )
+
+    reference = "staging/agents/example-agent/BUILD_TASK.json"
+    reply = orch.adopt_factory_task(FACTORY_THREAD, reference)
+
+    runs = get_task_run_store().list_runs(orch.session_id)
+    assert len(runs) == 1
+    adopted = runs[0]
+    assert adopted.state == TASK_STATE_WAITING_DECISION
+    assert adopted.selected_agent_id == "agent-factory"
+    assert adopted.context["agent_thread_id"] == FACTORY_THREAD
+    assert adopted.context["factory_adoption"] == {
+        "thread_id": FACTORY_THREAD,
+        "artifact_reference": reference,
+        "provenance": "explicit_operator_command",
+    }
+    assert "review the handoff below" in reply
+    assert "handoff_child_run_id" not in adopted.context
+    assert len(resolver_calls) == 2  # preflight and the ordinary handoff gate
+
+    replay = orch.adopt_factory_task(FACTORY_THREAD, reference)
+    assert "already waiting for review" in replay
+    assert len(get_task_run_store().list_runs(orch.session_id)) == 1
+    assert len(resolver_calls) == 2
+
+
+def _factory_adoption_orchestrator(monkeypatch, tmp_path):
+    root = tmp_path / "agent-factory"
+    root.mkdir()
+    factory_project = replace(FACTORY_ROOT_CONTEXT, root=str(root))
+    project_registry = _FakeProjectRegistry(
+        resolution=ProjectContextResolution(context=factory_project, error=None)
+    )
+    resolved = _factory_resolution(thread_id=FACTORY_THREAD)
+    monkeypatch.setattr(orchestrator_module, "AGENT_FACTORY_ROOT", root)
+    monkeypatch.setattr(
+        orchestrator_module,
+        "build_factory_agent_spec",
+        lambda: _spec(
+            "agent-factory", task_kinds=("design_task",), runtime_mode="factory_brain"
+        ),
+    )
+    monkeypatch.setattr(
+        orchestrator_module, "resolve_factory_build_task", lambda **_kwargs: resolved
+    )
+    monkeypatch.setattr("agent_hub.factory_bridge.AGENT_FACTORY_ROOT", root)
+    monkeypatch.setattr(
+        "agent_hub.factory_bridge.resolve_factory_build_task", lambda **_kwargs: resolved
+    )
+    monkeypatch.setattr("agent_hub.handoff_transition.AGENT_FACTORY_ROOT", root)
+    monkeypatch.setattr(
+        "agent_hub.handoff_transition.FactoryHandoffEvidenceResolver._factory_agent_id",
+        lambda _self: "agent-factory",
+    )
+    monkeypatch.setattr(
+        "agent_hub.handoff_transition.get_project_context_registry",
+        lambda: project_registry,
+    )
+    orch = _orchestrator(
+        monkeypatch,
+        HandoffFidelityReviewer(review_callable=lambda _payload: REVIEW_SUPPORTED),
+        specs=[
+            _spec("agent-factory", task_kinds=("design_task",), runtime_mode="factory_brain"),
+            _spec("ai-tech-lead"),
+        ],
+        resolver=None,
+        project_registry=project_registry,
+    )
+    return orch, "staging/agents/example-agent/BUILD_TASK.json"
+
+
+def test_adopted_factory_handoff_approves_one_child_with_constraints(monkeypatch, tmp_path):
+    orch, reference = _factory_adoption_orchestrator(monkeypatch, tmp_path)
+    orch.adopt_factory_task(FACTORY_THREAD, reference)
+    parent = get_task_run_store().list_runs(orch.session_id)[0]
+    dispatches = []
+    monkeypatch.setattr(
+        orchestrator_module,
+        "_dispatch_subprocess",
+        lambda spec, task, **kwargs: dispatches.append((spec.id, task, kwargs))
+        or {
+            "status": "success",
+            "summary": "Implemented.",
+            "build_result": {"status": "success", "tests_run": []},
+        },
+    )
+    monkeypatch.setattr(
+        orchestrator_module,
+        "relay_factory_build_result",
+        lambda **_kwargs: {
+            "status": "validated",
+            "thread_id": FACTORY_THREAD,
+            "correlation_id": "corr-1",
+            "agent_id": "example-agent",
+            "artifact_reference": reference,
+            "build_result_reference": "staging/agents/example-agent/BUILD_RESULT.json",
+        },
+    )
+
+    assert "Implemented." in orch.approve_pending()
+    updated = get_task_run_store().get_run(parent.id)
+    assert updated is not None and updated.state == TASK_STATE_SUCCEEDED
+    assert len(dispatches) == 1
+    assert dispatches[0][0] == "ai-tech-lead"
+    assert dispatches[0][2]["human_approved"] is True
+    assert dispatches[0][2]["execution_constraints"]["correlation_id"] == "corr-1"
+
+
+def test_adopted_factory_handoff_rejects_without_dispatch(monkeypatch, tmp_path):
+    orch, reference = _factory_adoption_orchestrator(monkeypatch, tmp_path)
+    orch.adopt_factory_task(FACTORY_THREAD, reference)
+    dispatches = []
+    monkeypatch.setattr(
+        orchestrator_module,
+        "_dispatch_subprocess",
+        lambda *args, **kwargs: dispatches.append((args, kwargs)),
+    )
+
+    assert "rejected" in orch.reject_pending("Do not build it.").lower()
+    run = get_task_run_store().list_runs(orch.session_id)[0]
+    assert run.state == TASK_STATE_CANCELLED
+    assert dispatches == []
+
+
+def test_failed_factory_adoption_releases_key_for_a_safe_retry(monkeypatch, tmp_path):
+    orch, reference = _factory_adoption_orchestrator(monkeypatch, tmp_path)
+    review_calls = 0
+
+    def review(*_args):
+        nonlocal review_calls
+        review_calls += 1
+        if review_calls == 1:
+            raise HandoffEvidenceError("temporary review failure")
+        return orchestrator_module.HandoffFidelityReview.model_validate(REVIEW_SUPPORTED)
+
+    orch._handoff_reviewer.review = review
+    first_reply = orch.adopt_factory_task(FACTORY_THREAD, reference)
+    runs = get_task_run_store().list_runs(orch.session_id)
+    assert len(runs) == 1 and runs[0].state == TASK_STATE_FAILED
+    key = hashlib.sha256(f"{FACTORY_THREAD}\0{reference}".encode("utf-8")).hexdigest()
+    assert get_task_run_store().get_run_by_idempotency_key(key) is None
+    assert "temporary review failure" in first_reply
+
+    second_reply = orch.adopt_factory_task(FACTORY_THREAD, reference)
+    runs = get_task_run_store().list_runs(orch.session_id)
+    assert len(runs) == 2
+    assert runs[1].state == TASK_STATE_WAITING_DECISION
+    assert "review the handoff below" in second_reply
+
+
+def test_factory_adoption_refuses_bad_reference_without_creating_a_run(monkeypatch):
+    orch = _orchestrator(
+        monkeypatch,
+        HandoffFidelityReviewer(review_callable=lambda _payload: REVIEW_SUPPORTED),
+        specs=[_spec("agent-factory", runtime_mode="factory_brain")],
+    )
+    monkeypatch.setattr(
+        orchestrator_module,
+        "build_factory_agent_spec",
+        lambda: _spec("agent-factory"),
+    )
+
+    reply = orch.adopt_factory_task(FACTORY_THREAD, "../BUILD_TASK.json")
+
+    assert "refused" in reply
+    assert get_task_run_store().list_runs(orch.session_id) == []
 
 
 def test_default_handoff_review_call_does_not_impose_output_token_cap(monkeypatch):

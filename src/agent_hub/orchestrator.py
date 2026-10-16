@@ -8,6 +8,7 @@ import json
 import logging
 import queue
 import re
+import sqlite3
 import subprocess
 import tempfile
 import threading
@@ -37,6 +38,7 @@ from .factory_bridge import (
     new_factory_thread_id,
     reject_factory_request,
     relay_factory_build_result,
+    resolve_factory_build_task,
     resume_factory_request,
 )
 from .handoff_transition import (
@@ -154,6 +156,10 @@ _run_dispatch_locks_guard = threading.Lock()
 _run_dispatch_locks: weakref.WeakValueDictionary[str, threading.RLock] = (
     weakref.WeakValueDictionary()
 )
+_factory_adoption_locks_guard = threading.Lock()
+_factory_adoption_locks: weakref.WeakValueDictionary[str, threading.RLock] = (
+    weakref.WeakValueDictionary()
+)
 
 
 @contextmanager
@@ -166,6 +172,18 @@ def _serialise_run_dispatch(run_id: str | None):
         if lock is None:
             lock = threading.RLock()
             _run_dispatch_locks[run_id] = lock
+    with lock:
+        yield
+
+
+@contextmanager
+def _serialise_factory_adoption(session_id: str):
+    """Keep one Hub conversation from adopting two tasks at the same time."""
+    with _factory_adoption_locks_guard:
+        lock = _factory_adoption_locks.get(session_id)
+        if lock is None:
+            lock = threading.RLock()
+            _factory_adoption_locks[session_id] = lock
     with lock:
         yield
 
@@ -2403,6 +2421,120 @@ class HubOrchestrator:
         else:
             next_action = "Reply with the requested clarification."
         return f"Resumed {task_id} — {attached.state}. {next_action}"
+
+    def adopt_factory_task(self, thread_id: str, artifact_reference: str) -> str:
+        """Bind one exact approved Factory task to Hub's normal review gate."""
+        thread_id = thread_id.strip()
+        artifact_reference = artifact_reference.strip()
+        if not thread_id or any(char.isspace() for char in thread_id):
+            return "Usage: /factory-adopt <Factory-thread-id> <BUILD_TASK reference>"
+        try:
+            validate_handoff_references([artifact_reference])
+        except (HandoffEvidenceError, ValueError) as exc:
+            return f"Factory task adoption refused: {exc}"
+
+        factory_spec = build_factory_agent_spec()
+        if factory_spec is None:
+            return "Factory task adoption refused: configured Agent Factory is unavailable."
+        if factory_spec.id not in {spec.id for spec in self._registry}:
+            return "Factory task adoption refused: Agent Factory is not in the live Hub registry."
+
+        adoption_key = hashlib.sha256(
+            f"{thread_id}\0{artifact_reference}".encode("utf-8")
+        ).hexdigest()
+        store = get_task_run_store()
+        with _serialise_factory_adoption(self._session_id):
+            existing = store.get_run_by_idempotency_key(adoption_key)
+            if existing is not None:
+                if existing.state == TASK_STATE_WAITING_DECISION:
+                    if existing.session_id == self._session_id:
+                        return (
+                            f"This Factory task is already waiting for review as Hub task "
+                            f"{existing.id[:8]}. Use /approve or /reject."
+                        )
+                    return (
+                        f"This Factory task is already adopted as Hub task {existing.id[:8]} "
+                        f"({existing.state}). Use /resume {existing.id[:8]} to review it "
+                        "in this conversation."
+                    )
+                return (
+                    f"This Factory task is already adopted as Hub task {existing.id[:8]} "
+                    f"({existing.state}); no second adoption was created."
+                )
+
+            current = store.get_latest_active_or_paused_run(self._session_id)
+            if current is not None:
+                return (
+                    f"This conversation already has task {current.id[:8]} ({current.state}). "
+                    "Stop it or start a new conversation first."
+                )
+
+            try:
+                resolved = resolve_factory_build_task(
+                    working_directory=str(AGENT_FACTORY_ROOT),
+                    thread_id=thread_id,
+                    references=[artifact_reference],
+                )
+            except Exception as exc:
+                logger.info("Factory task adoption validation failed: %s", exc)
+                return f"Factory task adoption refused: {exc}"
+
+            factory_result = resolved.get("factory_result") if isinstance(resolved, dict) else None
+            if (
+                not isinstance(factory_result, dict)
+                or factory_result.get("status") != "success"
+                or not isinstance(factory_result.get("next_task"), dict)
+            ):
+                return "Factory task adoption refused: Factory did not resolve this approved task."
+
+            try:
+                run = store.create_run(
+                    self._session_id,
+                    f"Adopt approved Factory task {artifact_reference}",
+                    idempotency_key=adoption_key,
+                )
+            except sqlite3.IntegrityError:
+                existing = store.get_run_by_idempotency_key(adoption_key)
+                if existing is not None:
+                    return (
+                        f"This Factory task is already adopted as Hub task {existing.id[:8]} "
+                        f"({existing.state}); no second adoption was created."
+                    )
+                raise
+            run = store.transition(
+                run.id,
+                TASK_STATE_ROUTED,
+                detail="Operator explicitly bound an existing approved Factory task.",
+                selected_agent_id=factory_spec.id,
+                context_updates={
+                    "agent_thread_id": thread_id,
+                    "cross_specialist_follow_on_depth": 0,
+                    "factory_adoption": {
+                        "thread_id": thread_id,
+                        "artifact_reference": artifact_reference,
+                        "provenance": "explicit_operator_command",
+                    },
+                },
+            )
+            try:
+                packet = self._prepare_handoff_transition(run, factory_result)
+                if packet is None:
+                    raise HandoffEvidenceError(
+                        "Factory returned no evidence-backed implementation handoff"
+                    )
+            except Exception as exc:
+                failed = store.get_run(run.id)
+                if failed is not None and failed.state == TASK_STATE_ROUTED:
+                    response = self._handoff_failure(failed, exc)
+                    store.release_idempotency_key(adoption_key, run.id)
+                    return response
+                logger.exception("Factory task adoption failed for Hub run %s", run.id)
+                return f"Factory task adoption failed closed: {exc}"
+
+            _human_task_log(
+                run.id, "Hub adopted approved Factory task %s for review.", artifact_reference
+            )
+            return f"Adopted as Hub task {run.id[:8]}; review the handoff below.\n\n{packet}"
 
     def last_run_status(self) -> str:
         run = get_task_run_store().get_latest_completed_or_failed_run(self._session_id)

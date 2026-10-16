@@ -1,5 +1,6 @@
 """Tests for the task-run lifecycle store."""
 
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
@@ -47,6 +48,51 @@ def test_create_run_records_received_event(task_store):
     events = task_store.list_events(run.id)
     assert [event.to_state for event in events] == [TASK_STATE_RECEIVED]
     assert events[0].detail == "Task received by hub orchestrator."
+
+
+def test_idempotency_key_is_unique_and_can_be_released(task_store):
+    first = task_store.create_run(
+        session_id="session-1",
+        user_message="Adopt approved Factory task",
+        idempotency_key="factory-task-key",
+    )
+
+    assert task_store.get_run_by_idempotency_key("factory-task-key").id == first.id
+    with pytest.raises(sqlite3.IntegrityError):
+        task_store.create_run(
+            session_id="session-2",
+            user_message="Duplicate adoption",
+            idempotency_key="factory-task-key",
+        )
+
+    task_store.release_idempotency_key("factory-task-key", first.id)
+    replacement = task_store.create_run(
+        session_id="session-2",
+        user_message="Retry adoption after failed review",
+        idempotency_key="factory-task-key",
+    )
+    assert task_store.get_run_by_idempotency_key("factory-task-key").id == replacement.id
+
+
+def test_concurrent_run_creation_cannot_claim_the_same_idempotency_key(task_store):
+    barrier = Barrier(2)
+
+    def create_run(session_id):
+        barrier.wait(timeout=5)
+        try:
+            return task_store.create_run(
+                session_id=session_id,
+                user_message="Concurrent exact Factory adoption",
+                idempotency_key="shared-factory-adoption",
+            ).id
+        except sqlite3.IntegrityError:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        run_ids = list(pool.map(create_run, ("session-a", "session-b")))
+
+    assert sum(run_id is not None for run_id in run_ids) == 1
+    assert task_store.get_run_by_idempotency_key("shared-factory-adoption").id in run_ids
 
 
 def test_transition_tracks_agent_and_terminal_fields(task_store):

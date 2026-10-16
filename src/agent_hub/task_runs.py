@@ -185,6 +185,13 @@ CREATE TABLE IF NOT EXISTS task_run_events (
     FOREIGN KEY (task_run_id) REFERENCES task_runs(id)
 );
 
+CREATE TABLE IF NOT EXISTS task_run_idempotency (
+    idempotency_key TEXT PRIMARY KEY,
+    task_run_id TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (task_run_id) REFERENCES task_runs(id)
+);
+
 CREATE TABLE IF NOT EXISTS task_progress_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_run_id TEXT NOT NULL,
@@ -421,7 +428,13 @@ class TaskRunStore:
     def __init__(self, db_path: Path | None = None) -> None:
         self._db_path = db_path or TASK_RUN_DB
 
-    def create_run(self, session_id: str, user_message: str) -> TaskRun:
+    def create_run(
+        self,
+        session_id: str,
+        user_message: str,
+        *,
+        idempotency_key: str | None = None,
+    ) -> TaskRun:
         run_id = str(uuid.uuid4())
         now = _utcnow()
         human_logger.info("Run %s — %s", run_id[:8], _truncate(user_message))
@@ -439,6 +452,13 @@ class TaskRunStore:
                 to_state=TASK_STATE_RECEIVED,
                 detail="Task received by hub orchestrator.",
             )
+            if idempotency_key is not None:
+                conn.execute(
+                    """INSERT INTO task_run_idempotency (
+                           idempotency_key, task_run_id, created_at
+                       ) VALUES (?, ?, ?)""",
+                    (idempotency_key, run_id, now),
+                )
             row = conn.execute("SELECT * FROM task_runs WHERE id=?", (run_id,)).fetchone()
         assert row is not None
         return _row_to_task_run(row)
@@ -447,6 +467,25 @@ class TaskRunStore:
         with _connect(self._db_path) as conn:
             row = conn.execute("SELECT * FROM task_runs WHERE id=?", (run_id,)).fetchone()
         return _row_to_task_run(row) if row else None
+
+    def get_run_by_idempotency_key(self, idempotency_key: str) -> TaskRun | None:
+        with _connect(self._db_path) as conn:
+            row = conn.execute(
+                """SELECT task_runs.* FROM task_runs
+                   JOIN task_run_idempotency
+                     ON task_runs.id=task_run_idempotency.task_run_id
+                   WHERE idempotency_key=?""",
+                (idempotency_key,),
+            ).fetchone()
+        return _row_to_task_run(row) if row else None
+
+    def release_idempotency_key(self, idempotency_key: str, run_id: str) -> None:
+        """Release a key after an adoption fails before reaching human review."""
+        with _connect(self._db_path) as conn:
+            conn.execute(
+                "DELETE FROM task_run_idempotency WHERE idempotency_key=? AND task_run_id=?",
+                (idempotency_key, run_id),
+            )
 
     def attach_paused_run_to_session(self, run_id: str, session_id: str) -> TaskRun:
         """Make an existing paused run the current task for another Hub session."""

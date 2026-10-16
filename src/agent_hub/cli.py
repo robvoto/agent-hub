@@ -14,6 +14,7 @@ _HELP_TEXT = (
     "/new - start a fresh conversation; paused work is preserved\n"
     "/tasks - list all active/paused tasks\n"
     "/resume <id> - select a paused task to continue\n"
+    "/factory-adopt <thread-id> <BUILD_TASK reference> - review an existing approved Factory task\n"
     "/status - show details for this conversation's current task\n"
     "/stop [id] - cancel the current task, or a specific task\n"
     "/reset - cancel the current task and start a fresh conversation\n"
@@ -138,6 +139,15 @@ def _run_chat(model: str) -> None:
         if text == "/resume" or text.startswith("/resume "):
             identifier = text[len("/resume") :].strip()
             reply = "Usage: /resume <id>" if not identifier else orch.resume_task(identifier)
+            print(f"\nHub: {reply}\n")
+            continue
+
+        if text == "/factory-adopt" or text.startswith("/factory-adopt "):
+            parts = text.split()
+            if len(parts) != 3:
+                reply = "Usage: /factory-adopt <Factory-thread-id> <BUILD_TASK reference>"
+            else:
+                reply = orch.adopt_factory_task(parts[1], parts[2])
             print(f"\nHub: {reply}\n")
             continue
 
