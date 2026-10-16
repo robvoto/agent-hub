@@ -512,6 +512,64 @@ def test_failed_factory_adoption_releases_key_for_a_safe_retry(monkeypatch, tmp_
     assert "review the handoff below" in second_reply
 
 
+def test_factory_adoption_revision_failure_can_be_retried_without_replacing_audit(
+    monkeypatch, tmp_path
+):
+    orch, reference = _factory_adoption_orchestrator(monkeypatch, tmp_path)
+    first_reply = orch.adopt_factory_task(FACTORY_THREAD, reference)
+    original = orch.pending_run()
+    assert original is not None and original.state == TASK_STATE_WAITING_DECISION
+    dispatches = []
+
+    def failed_revision(spec, task, **kwargs):
+        dispatches.append((spec.id, task, kwargs))
+        raise RuntimeError("Factory revision bridge failed")
+
+    monkeypatch.setattr(orchestrator_module, "_dispatch_factory_brain", failed_revision)
+    correction = "Remove unsupported timeout wording and keep the approved bounds."
+    failure_reply = orch._transition_decision("request_changes", correction)
+
+    failed = get_task_run_store().get_run(original.id)
+    assert failed is not None and failed.state == TASK_STATE_FAILED
+    assert failed.context["handoff_requested_correction"] == correction
+    assert failed.context["handoff_revision_status"] == "returned_to_originating_design_workflow"
+    assert "Factory revision bridge failed" in failure_reply
+    assert "review the handoff below" in first_reply
+
+    retry_reply = orch.retry_factory_task_adoption(failed.id)
+    runs = get_task_run_store().list_runs(orch.session_id)
+    retried = next(run for run in runs if run.id != failed.id)
+    assert retried.state == TASK_STATE_WAITING_DECISION
+    assert retried.context["factory_adoption"]["thread_id"] == FACTORY_THREAD
+    assert retried.context["factory_adoption"]["artifact_reference"] == reference
+    assert retried.context["factory_adoption"]["retry_of_hub_run_id"] == failed.id
+    assert "review the handoff below" in retry_reply
+    assert get_task_run_store().get_run(failed.id).state == TASK_STATE_FAILED
+    assert retried.context.get("handoff_child_run_id") is None
+    assert len(dispatches) == 1
+
+    replay = orch.retry_factory_task_adoption(failed.id)
+    assert "already waiting for review" in replay
+    assert len(get_task_run_store().list_runs(orch.session_id)) == 2
+    assert len(dispatches) == 1
+
+
+def test_factory_adoption_retry_refuses_failed_run_without_revision_markers(
+    monkeypatch, tmp_path
+):
+    orch, reference = _factory_adoption_orchestrator(monkeypatch, tmp_path)
+    orch.adopt_factory_task(FACTORY_THREAD, reference)
+    original = orch.pending_run()
+    assert original is not None
+    store = get_task_run_store()
+    failed = store.transition(original.id, TASK_STATE_FAILED, detail="unrelated failure")
+
+    reply = orch.retry_factory_task_adoption(failed.id)
+
+    assert "not a returned REQUEST CHANGES revision" in reply
+    assert len(store.list_runs(orch.session_id)) == 1
+
+
 def test_factory_adoption_refuses_bad_reference_without_creating_a_run(monkeypatch):
     orch = _orchestrator(
         monkeypatch,

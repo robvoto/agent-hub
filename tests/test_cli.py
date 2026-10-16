@@ -13,6 +13,7 @@ def test_help_text_explains_task_controls() -> None:
     assert "/tasks - list all active/paused tasks" in _HELP_TEXT
     assert "/resume <id> - select a paused task to continue" in _HELP_TEXT
     assert "/factory-adopt <thread-id> <BUILD_TASK reference>" in _HELP_TEXT
+    assert "/factory-adopt-retry <failed-Hub-run-id>" in _HELP_TEXT
     assert "/status - show details for this conversation's current task" in _HELP_TEXT
     assert "/stop [id] - cancel the current task, or a specific task" in _HELP_TEXT
     assert "/reset-all - cancel all active/paused tasks and start fresh" in _HELP_TEXT

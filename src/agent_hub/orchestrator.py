@@ -2422,7 +2422,13 @@ class HubOrchestrator:
             next_action = "Reply with the requested clarification."
         return f"Resumed {task_id} — {attached.state}. {next_action}"
 
-    def adopt_factory_task(self, thread_id: str, artifact_reference: str) -> str:
+    def adopt_factory_task(
+        self,
+        thread_id: str,
+        artifact_reference: str,
+        *,
+        _retry_of_run_id: str | None = None,
+    ) -> str:
         """Bind one exact approved Factory task to Hub's normal review gate."""
         thread_id = thread_id.strip()
         artifact_reference = artifact_reference.strip()
@@ -2439,9 +2445,16 @@ class HubOrchestrator:
         if factory_spec.id not in {spec.id for spec in self._registry}:
             return "Factory task adoption refused: Agent Factory is not in the live Hub registry."
 
-        adoption_key = hashlib.sha256(
+        base_adoption_key = hashlib.sha256(
             f"{thread_id}\0{artifact_reference}".encode("utf-8")
         ).hexdigest()
+        adoption_key = (
+            base_adoption_key
+            if _retry_of_run_id is None
+            else hashlib.sha256(
+                f"{base_adoption_key}\0retry:{_retry_of_run_id}".encode("utf-8")
+            ).hexdigest()
+        )
         store = get_task_run_store()
         with _serialise_factory_adoption(self._session_id):
             existing = store.get_run_by_idempotency_key(adoption_key)
@@ -2513,6 +2526,11 @@ class HubOrchestrator:
                         "thread_id": thread_id,
                         "artifact_reference": artifact_reference,
                         "provenance": "explicit_operator_command",
+                        **(
+                            {"retry_of_hub_run_id": _retry_of_run_id}
+                            if _retry_of_run_id is not None
+                            else {}
+                        ),
                     },
                 },
             )
@@ -2535,6 +2553,51 @@ class HubOrchestrator:
                 run.id, "Hub adopted approved Factory task %s for review.", artifact_reference
             )
             return f"Adopted as Hub task {run.id[:8]}; review the handoff below.\n\n{packet}"
+
+    def retry_factory_task_adoption(self, failed_run_id: str) -> str:
+        """Create a fresh review attempt after a returned revision failed closed."""
+        failed_run_id = failed_run_id.strip()
+        if not failed_run_id:
+            return "Usage: /factory-adopt-retry <failed-Hub-run-id>"
+        store = get_task_run_store()
+        failed = store.get_run(failed_run_id)
+        if failed is None:
+            return f"Factory task retry refused: unknown Hub task {failed_run_id}."
+        if failed.session_id != self._session_id:
+            return (
+                "Factory task retry refused: the failed Hub task belongs to another "
+                "conversation."
+            )
+        if failed.state != TASK_STATE_FAILED:
+            return (
+                f"Factory task retry refused: Hub task {failed.id[:8]} is {failed.state}, "
+                "not failed."
+            )
+        adoption = failed.context.get("factory_adoption")
+        handoff = failed.context.get("hub_transition_decision")
+        if (
+            not isinstance(adoption, dict)
+            or adoption.get("provenance") != "explicit_operator_command"
+            or not isinstance(adoption.get("thread_id"), str)
+            or not isinstance(adoption.get("artifact_reference"), str)
+            or not isinstance(handoff, dict)
+            or handoff.get("decision") != "revision_requested"
+            or failed.context.get("handoff_revision_status")
+            != "returned_to_originating_design_workflow"
+            or not isinstance(failed.context.get("handoff_requested_correction"), str)
+            or not failed.context.get("handoff_requested_correction", "").strip()
+            or handoff.get("child_run_id") is not None
+            or handoff.get("handoff_child_run_id") is not None
+        ):
+            return (
+                "Factory task retry refused: this failed Hub task is not a returned "
+                "REQUEST CHANGES revision with an unchanged approved Factory artifact."
+            )
+        return self.adopt_factory_task(
+            adoption["thread_id"],
+            adoption["artifact_reference"],
+            _retry_of_run_id=failed.id,
+        )
 
     def last_run_status(self) -> str:
         run = get_task_run_store().get_latest_completed_or_failed_run(self._session_id)
