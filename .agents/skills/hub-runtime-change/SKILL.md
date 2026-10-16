@@ -42,6 +42,7 @@ Read the owner module before editing. If one module clearly owns the behavior, s
 
 - A Factory `success` result may have `next_task: null` when no implementation task has been approved. Treat null as no follow-on; do not validate it as a `NextTaskContract`, label it malformed, or bypass the Factory approval pause. Keep a regression test for this contract.
 - Hub's interactive CLI consumes one user turn per input line. Send exactly one request line; never paste multiline instructions into the prompt. After accidental extra input or a failed call, inspect the exact run and task state before retrying or cancelling anything.
+- Do not feed the interactive CLI with a heredoc or here-string: the delimiter can arrive as another user turn. Use a controlled interactive session or encode the single request line so only that line reaches stdin; then inspect the task list for accidental extra turns.
 - For a transient or malformed request, inspect the live contract and state, correct the request, and retry once when safe. Do not repeat identical payloads or create a duplicate Factory task while the original thread/correlation is still usable.
 - A missing child-process environment variable is not evidence that a secret file must be opened. Check configuration and inheritance without printing secret values or asking the operator to paste them.
 
