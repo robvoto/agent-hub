@@ -76,7 +76,7 @@ No build until Stage 0 is reviewed. No new repo until the ownership analysis sho
 
 **Q1 — ANSWERED (2026-10-17):** Rob accepts requiring his home PC/WSL to be running for the MVP. Offline-PC/cloud-hosted availability is **not** an MVP requirement. This does **not** establish that cloud ChatGPT can invoke the PC-hosted tool; compatibility and secure routing remain to be proved, and must not be represented as complete.
 
-Q2: May agents create unsigned PDFs and Gmail drafts without prompting, while signing and sending always require signer/account-specific approval?
+**Q2 — PARTIALLY ANSWERED (2026-10-17):** Default for email: prepare for human review and obtain approval before sending. **Exception:** a human can explicitly authorize a bounded task to send without a second confirmation; permission is limited to that instruction's recipients, content, account, operation and timeframe. Do not infer an unlimited future-send privilege. **Still open:** whether preparing PDF drafts automatically is always permitted; signature placement authorization policy remains separately subject to signer consent.
 
 Q3: Is Maria's independently authorized account required in MVP, or should we prove Rob's isolated account first?
 
@@ -84,9 +84,16 @@ Q4: Where should private output PDFs live by default: a confirmed private Drive 
 
 Q5: What must happen when PC/cloud connector is unavailable: fail with a clear status, or queue for authorized retry under stated limits?
 
+## Current PDF component — independently verified prototype
+
+- Version 0.1.0 standalone Python package is stored in ChatGPT Library: `/Workflows/Shared_PDF_Tool_0.1.0_SOURCE.zip` and `/Workflows/shared_pdf_tool-0.1.0-py3-none-any.whl`, indexed by `/LIBRARY_INDEX.md`; tracked separately as AGENT-HUB-061.
+- On 17 October 2026 the current session inspected `README.md` and CLI and reran `pytest`: **5 passed**. Supports original-PDF inspection, explicit field/box fill, structural validation and all-page previews; output requires visual review. Does **not** implement stored signatures, email send, cloud access, Hub registration or a machine-callable remote endpoint.
+- Current callers: Python code running in a session containing the package and PDF, or a local agent after explicit installation and permission to execute `shared-pdf inspect ...` / `shared-pdf fill ...`. Other ChatGPT chats must first retrieve the indexed package; they cannot assume a universally installed tool.
+- TPG is a **regression fixture candidate**, never a special-case customer form or production dependency; verify accessibility and obtain permission to use any private sample. Prior six failures become mandatory acceptance cases.
+
 ## Governance / change log
 
 - 2026-10-17: Plan requested, **implementation explicitly deferred**. Independent OpenCode brief review: REQUEST CHANGES. Proposal adds execution broker, transport neutrality, account isolation, artifact boundaries and test gates.
 - 2026-10-17 operator decision: MVP may require the home PC to be running. No offline-PC deployment requirement. ChatGPT-to-PC interoperability still unproven; do not silently drop that goal.
-- Pending: project Drive standards access, operator answers to Q2–Q5, independent source-level architecture review, approval of actual implementation backlog decomposition.
+- Pending: project Drive standards access, operator clarification on PDF draft/signature approval, and answers to Q3–Q5, independent source-level architecture review, approval of actual implementation backlog decomposition.
 - This file is the **single proposed cross-agent tool planning document**. Do not create a competing plan; update this and keep AGENT-HUB-060 as its tracking entry.
