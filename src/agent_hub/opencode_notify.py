@@ -178,11 +178,21 @@ def read_outbox(
         connection.close()
 
     has_more = len(rows) > limit
-    events = [
-        event
-        for event in (_row_to_event(row) for row in rows[:limit])
-        if event is not None
-    ]
+    events: list[OutboxEvent] = []
+    for row in rows[:limit]:
+        event = _row_to_event(row)
+        if event is None:
+            # Keep an inert cursor marker for a malformed row. Dropping it here
+            # would starve valid events after a full batch of corrupt records:
+            # the cursor would never advance beyond the unparseable head.
+            event = OutboxEvent(
+                event_id=str(row["dedupe_key"]),
+                task_id="",
+                state="__MALFORMED_ROW__",
+                severity="warning",
+                created_at=_float(row["created_at"], 0.0),
+            )
+        events.append(event)
     return events, has_more
 
 
@@ -409,7 +419,11 @@ class OpenCodeNotificationBridge:
         delivered = 0
         last_examined: OutboxEvent | None = None
         for event in events:
-            if event.state in self._states and not self._ledger.has(event.event_id):
+            if (
+                event.state != "__MALFORMED_ROW__"
+                and event.state in self._states
+                and not self._ledger.has(event.event_id)
+            ):
                 title = _short(event.event_id)
                 try:
                     ok = bool(self._send(render_notification(event)))
