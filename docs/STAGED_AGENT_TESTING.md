@@ -31,7 +31,7 @@ Hub can’t run a draft until it has a Hub connector. Once connected, select it 
 
 ## Readiness evidence
 
-Use the Hub task history as evidence against the candidate's declared acceptance criteria. Record or review:
+Use the Hub task history as evidence against the candidate's declared acceptance criteria. When Telegram is how you use Hub, run the agreed cases through Telegram and include those resulting Hub records in the readiness review. Record or review:
 
 - which exact agent version and manifest fingerprint was tested;
 - representative normal, boundary, and failure cases from the agent's acceptance criteria;
