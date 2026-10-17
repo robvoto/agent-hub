@@ -74,7 +74,7 @@ No build until Stage 0 is reviewed. No new repo until the ownership analysis sho
 
 ## Open operator decisions — one question at a time
 
-**Q1 (highest impact):** Must the first release work directly from ChatGPT/cloud when you are away from home, or is local PC/WSL execution acceptable initially?
+**Q1 — ANSWERED (2026-10-17):** Rob accepts requiring his home PC/WSL to be running for the MVP. Offline-PC/cloud-hosted availability is **not** an MVP requirement. This does **not** establish that cloud ChatGPT can invoke the PC-hosted tool; compatibility and secure routing remain to be proved, and must not be represented as complete.
 
 Q2: May agents create unsigned PDFs and Gmail drafts without prompting, while signing and sending always require signer/account-specific approval?
 
@@ -87,5 +87,6 @@ Q5: What must happen when PC/cloud connector is unavailable: fail with a clear s
 ## Governance / change log
 
 - 2026-10-17: Plan requested, **implementation explicitly deferred**. Independent OpenCode brief review: REQUEST CHANGES. Proposal adds execution broker, transport neutrality, account isolation, artifact boundaries and test gates.
-- Pending: project Drive standards access, operator answers to Q1–Q5, independent source-level architecture review, approval of actual implementation backlog decomposition.
+- 2026-10-17 operator decision: MVP may require the home PC to be running. No offline-PC deployment requirement. ChatGPT-to-PC interoperability still unproven; do not silently drop that goal.
+- Pending: project Drive standards access, operator answers to Q2–Q5, independent source-level architecture review, approval of actual implementation backlog decomposition.
 - This file is the **single proposed cross-agent tool planning document**. Do not create a competing plan; update this and keep AGENT-HUB-060 as its tracking entry.
