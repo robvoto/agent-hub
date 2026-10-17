@@ -18,6 +18,8 @@ The human should not need to remember Git mechanics.
 - `approved`, `merge it`, `put it in main`, `ship it`, or equivalent approval referring to the current completed task authorizes integration to `main`.
 - If integration intent is unclear, ask one concise question before merging: `Work is ready on <branch> but is NOT in main. Merge to main now?`
 - A pull request is optional unless the repository explicitly requires one or the human explicitly asks for one. Do not create a PR merely because a branch was pushed.
+- Once the applicable independent review and validation pass and the operator has authorised integration, **finish the same delivery loop**: commit, push, merge, verify `origin/main`, then safely remove only task-owned, clean, merged branches/worktrees. Do not stop at a draft PR, repeated status report, or fresh speculative gate.
+- Never conflate source integration with permission to deploy, restart a shared runtime, grant OAuth scope or expose tools to new agents. Merge reviewed dormant code when safe; track only those genuine separate activation gates explicitly.
 
 ## Before editing
 
