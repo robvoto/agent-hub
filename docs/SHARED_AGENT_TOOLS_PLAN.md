@@ -1,0 +1,91 @@
+# Shared Agent Tools — architecture and delivery plan
+
+**Status:** DRAFT / DESIGN ONLY — not approved for implementation  
+**Updated:** 17 October 2026  
+**Planning owner:** Agent Hub (cross-agent execution); Agent Factory governs specialist capability declarations and agent release approvals  
+**Tracked in:** [Agent Hub backlog, AGENT-HUB-060](https://docs.google.com/spreadsheets/d/1v1zJjwGTqhOgb06nYChaGjRNZIVXQht5pNBUbh9r7RA/edit?gid=32071178#gid=32071178)  
+**Prior work:** AGENT-HUB-050 (implemented Human MCP gateway), AF-007 (MCP governance), AF-047/054 (manifest/registry and project context)
+
+> Decision boundary: Rob requested a reusable, model-independent tool framework **plan**, not code, a deployed service, a new repository, a signature action or an email send. This document remains a proposal until explicitly approved.
+
+## Outcome and scope
+
+Provide secure reusable tools for specialist agents and approved clients: **Google Drive** (search, read, controlled write), **Gmail** (read, draft, approved send/attachments) and **PDF** (AcroForm and scanned-page filling, preview, validation and authorized signature). Replace repeated one-off scripts and model-dependent connections.
+
+“All agents have tools” means any participating agent may **discover a declared capability and request authorization**. It does *not* mean every agent can automatically read personal files, use Maria's Google account, sign, or send.
+
+Non-goals: replacing Agent Factory's registry, replacing Hub orchestration, building another generic scheduler, duplicating Google APIs per agent, or exposing localhost directly to cloud clients.
+
+## Evidence baseline (checked 17 October 2026)
+
+- Agent Factory publishes and validates agent packages and permission/MCP declarations. Its `config/tools.json` currently lists `run_agent_task`; Factory is not the runtime dispatcher.
+- Agent Hub runs LangGraph orchestration, task state, approval/pause/resume and an allowlisted Human MCP gateway for browser, Google Docs/Sheets and read-only Gmail. The Hub does not advertise a native general Google Drive API; Chrome-based browsing is *not* equivalent.
+- Existing Hub MCP integration (AGENT-HUB-050) already addresses some approvals. **Reuse and extend only where warranted**, never rebuild it as if absent.
+- OpenCode/DeepSeek V4.1 Flash Free independently reviewed the *brief* and returned **REQUEST CHANGES**: distinguish discovery from permission, cloud access from localhost, and native implementations from transport adapters. This was not a separate full source-code audit. [Review session](http://127.0.0.1:4096/server/aHR0cDovLzEyNy4wLjAuMTo0MDk2/session/ses_eb7f1a79affeFJdwBySDQik8fh).
+- Existing Hub and Factory worktrees carry unrelated changes. Future work must be isolated from ongoing Shopping tasks.
+- The [canonical project standards folder](https://drive.google.com/drive/u/1/folders/14-mkDcSsRd78yTIT17mK03jGPjcGRRNS) was not readable through the current browser identity (access-request screen for thewriter30@gmail.com). **Resolve standards access before changing live platform conventions.** Do not invent its contents.
+
+## Proposed architecture — three separate concerns
+
+| Layer | Proposed ownership | Duties |
+| --- | --- | --- |
+| Capability contracts / governance | Agent Factory | Stable tool IDs, schema versions, risk tiers, declared scopes, manifest-level allowlists and governed release/rollbacks. Discovery is not authority. |
+| Execution broker / policy | Agent Hub runtime boundary, with no specialist import of Hub internals | Enforce caller + user + account + tool + operation authorization; approvals, credential isolation, retries, idempotency, audit, rate limits, output artifact references. One logical enforcement point regardless of adapter. |
+| Tool implementations and adapters | Dedicated domain modules behind broker; owned according to scope | One implementation for Drive, one for Gmail, one for PDF. Thin Python client, CLI, MCP and/or HTTP adapters **only if justified**, all enforcing the same policy. |
+
+**Key correction:** “native first, MCP fallback” is not a universal rule. Native Google APIs and deterministic Python processing are sensible *implementations*; MCP is one interoperability *transport*. A provider-native connection is also usable when it really exists, but must not be falsely claimed to share our broker's approvals/audit. Never create a separate implementation and security policy per transport.
+
+**Deployment is undecided.** Start with a design for one trusted local broker boundary; assess in-process Hub module vs sidecar service after reviewing separate-process clients and secrets. Remote/cloud clients (including ChatGPT) cannot simply call a PC-local `127.0.0.1` endpoint. Authenticated remote access and PC-offline behavior require an explicit separate decision. Do not publish a public endpoint by default.
+
+## Required tool contract (proposal)
+
+For each tool: stable `tool_id`, `version`, JSON input/output schema, read/write/sign/send classification, required caller and account/scopes, approval mode, idempotency behavior, time/file/token limits, typed errors, audit correlation ID, artifact reference types and provider IDs.
+
+Example conceptual call:
+`execute(tool_id, version, caller_id, user_id, account_id, request_id, operation_payload, approval_ref?) -> result | needs_approval | failed | unknown_outcome`.
+
+No agent-side raw OAuth token parameters, anonymous account switching, implicit permission expansion, hidden fallbacks or unbounded retries.
+
+## Security and correctness decisions to prove
+
+1. **Credentials and identities:** Per-user and per-Google-account consent, least-privilege OAuth and OS-backed/encrypted storage. Broker refreshes tokens under concurrency; agents never receive tokens. Keep Rob and Maria separated, with Maria's own authorization.
+2. **Sensitive actions:** Read/search and creating unsigned drafts differ from changes, sharing, sending and placing signatures. For consequential actions, bind approval to *exact* signer/account, document hash, recipients/destination, request ID and expiry. Do not accept approval from mere text inside an untrusted document. Require appropriate person's permission for signature use. Signatures inserted as PNGs are **not cryptographic digital signatures**.
+3. **Replay, retries and concurrency:** Per-operation persisted idempotency key, deduplication, version/revision preconditions and per-account rate limits. Exactly-once Gmail delivery cannot be guaranteed solely by local idempotency when provider outcome is unknown. In ambiguous cases, inspect provider state and fail closed.
+4. **Artifacts:** Preserve original PDFs. Private bounded artifact store, checksum/immutable version, expiring scoped retrieval reference, expiry/retention policy, secure temp-file cleanup, no sensitive bytes in Git, prompts, logs or backlogs. Do not treat ChatGPT Library links as a credential vault.
+5. **Policy:** Explicitly denied operations fail closed even via direct Python/CLI or MCP adapter; audit who, account, operation type, approval decision, provider resource ID and bounded outcome without storing credentials or sensitive content.
+6. **Untrusted files:** PDFs and email content are untrusted data; limit sizes/pages, detect corruption, sandbox risky processing where feasible, and visually review scanned placement. Automated geometric checks detect some errors, **not all visually incorrect form fills**.
+7. **Availability:** Define what happens if PC is asleep, network fails, OAuth expires, user is away, a tool is denied or output validation is uncertain. Never silently change provider, identity or execution route.
+
+## Phased plan and acceptance gates
+
+**0 — Architecture approval and inventory (no code):** Re-read current standards and Hub/Factory runtime, inventory existing Drive/Gmail/PDF connectors and OAuth account routing, identify which capabilities already work; decide ownership, deployment boundary, credentials/artifacts and support matrix. Produce versioned JSON contract and exact security/QA matrix; review with independent agent. Gate: approval of scope and threat model.
+
+**1 — Read-only cross-runtime proof:** Execute one bounded Drive read with a native client and a thin MCP/other adapter, observing identical permission denial, selected account, error and audit semantics. Compare *two real clients*, not two calls inside the same Hub graph. Gate: least privilege and deterministic denial demonstrated.
+
+**2 — Approval and failure semantics:** Prove request-target-bound approve/reject/resume across two clients; mock mutation first. Prove retry/double-request cannot issue duplicate sends, and unknown provider outcomes stop safely. Gate: replay, idempotency and concurrent refresh tests pass.
+
+**3 — Private PDF engine:** Reuse PyMuPDF/pypdf if confirmed suitable; distinguish interactive PDF fields from scanned/nonfillable overlays, support dates and checkboxes, render every page, detect missing/out-of-bounds overlaps, preview and require signer authorization before placing signature. Store verified original/output with artifact IDs. Test two previously troublesome real PDFs, with private samples excluded from source control. Gate: manual visual acceptance and validation report, not a claim of perfect auto-filling.
+
+**4 — Drive and Gmail workflows:** Drive search/read first, controlled update next; Gmail search/draft, then send with exact recipient/attachment approval and provider-state reconciliation. Gate: real multi-account permission tests, approval and error/rollback guidance.
+
+**5 — External access only when required:** Determine if ChatGPT/cloud agent access is genuinely possible via supported connectors or a secure gateway; test auth, expiry, offline availability and revocation. No public tunnel as default. Gate: independently reviewed threat model and live security acceptance.
+
+No build until Stage 0 is reviewed. No new repo until the ownership analysis shows independent engineering requirements. Each stage gets a narrowly scoped Hub backlog item; create an AF companion item **only for actual Factory manifest/governance changes**, not a duplicate cross-project master.
+
+## Open operator decisions — one question at a time
+
+**Q1 (highest impact):** Must the first release work directly from ChatGPT/cloud when you are away from home, or is local PC/WSL execution acceptable initially?
+
+Q2: May agents create unsigned PDFs and Gmail drafts without prompting, while signing and sending always require signer/account-specific approval?
+
+Q3: Is Maria's independently authorized account required in MVP, or should we prove Rob's isolated account first?
+
+Q4: Where should private output PDFs live by default: a confirmed private Drive folder or protected local storage?
+
+Q5: What must happen when PC/cloud connector is unavailable: fail with a clear status, or queue for authorized retry under stated limits?
+
+## Governance / change log
+
+- 2026-10-17: Plan requested, **implementation explicitly deferred**. Independent OpenCode brief review: REQUEST CHANGES. Proposal adds execution broker, transport neutrality, account isolation, artifact boundaries and test gates.
+- Pending: project Drive standards access, operator answers to Q1–Q5, independent source-level architecture review, approval of actual implementation backlog decomposition.
+- This file is the **single proposed cross-agent tool planning document**. Do not create a competing plan; update this and keep AGENT-HUB-060 as its tracking entry.
