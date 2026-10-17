@@ -87,6 +87,7 @@ def _send_message(
     text: str,
     *,
     parse_mode: str | None = "Markdown",
+    log_to_human: bool = True,
 ) -> list[int]:
     sent_ids: list[int] = []
     chunks = [text[i : i + 4096] for i in range(0, len(text), 4096)]
@@ -116,7 +117,12 @@ def _send_message(
             logger.error("sendMessage failed: %s", _safe_transport_error(exc, token))
             break
     if sent_ids:
-        human_logger.info("Telegram reply to chat %d: %s", chat_id, _truncate(text))
+        if log_to_human:
+            human_logger.info("Telegram reply to chat %d: %s", chat_id, _truncate(text))
+        else:
+            # OpenCode outbox text is untrusted. Do not echo user/model-provided
+            # task labels, reasons or evidence into the human-facing log.
+            human_logger.info("Telegram advisory delivered to chat %d", chat_id)
     return sent_ids
 
 
@@ -239,7 +245,15 @@ class TelegramGateway:
         """
         if self._primary_chat_id is None:
             return False
-        return bool(_send_message(self._token, self._primary_chat_id, text, parse_mode=None))
+        return bool(
+            _send_message(
+                self._token,
+                self._primary_chat_id,
+                text,
+                parse_mode=None,
+                log_to_human=False,
+            )
+        )
 
     def _poll_notifications(self) -> None:
         if self._notifications is None:
