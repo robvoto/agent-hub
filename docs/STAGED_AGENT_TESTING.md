@@ -20,7 +20,7 @@ export HUB_DATA_DIR="$HOME/.local/share/agent-hub/test"
 The Hub can be started in the usual interface, including Telegram:
 
 ```sh
-uv run python -m agent_hub telegram
+uv run agent-hub telegram
 ```
 
 For the Shopping draft, also set `SHOPPING_MAX_API_CALLS`, `SHOPPING_MAX_PAGE_FETCHES`, and `SHOPPING_TIMEOUT_SECONDS` in that Hub process. These must be explicit values chosen for the test; the adapter does not guess them. The staged process receives only its declared provider credential and these limits, not Hub's Telegram or model credentials.
