@@ -9,6 +9,7 @@ This is the canonical technical documentation entry point for Agent Hub. It is i
 | Prove a change works through real CLI/Telegram | [`VALIDATION.md`](VALIDATION.md) |
 | Inspect workflow diagrams | [`diagrams/INDEX.md`](diagrams/INDEX.md) |
 | Review security boundaries | [`../SECURITY.md`](../SECURITY.md) |
+| Enable OpenCode completion notifications | [`OPENCODE_NOTIFY.md`](OPENCODE_NOTIFY.md) |
 | Repository-wide agent rules | [`../AGENTS.md`](../AGENTS.md) |
 
 ## Current code map

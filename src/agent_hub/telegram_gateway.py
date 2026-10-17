@@ -87,6 +87,7 @@ def _send_message(
     text: str,
     *,
     parse_mode: str | None = "Markdown",
+    log_to_human: bool = True,
 ) -> list[int]:
     sent_ids: list[int] = []
     chunks = [text[i : i + 4096] for i in range(0, len(text), 4096)]
@@ -116,7 +117,12 @@ def _send_message(
             logger.error("sendMessage failed: %s", _safe_transport_error(exc, token))
             break
     if sent_ids:
-        human_logger.info("Telegram reply to chat %d: %s", chat_id, _truncate(text))
+        if log_to_human:
+            human_logger.info("Telegram reply to chat %d: %s", chat_id, _truncate(text))
+        else:
+            # OpenCode outbox text is untrusted. Do not echo user/model-provided
+            # task labels, reasons or evidence into the human-facing log.
+            human_logger.info("Telegram advisory delivered to chat %d", chat_id)
     return sent_ids
 
 
@@ -219,6 +225,43 @@ class TelegramGateway:
         self._recent_message_keys: deque[tuple[int, int]] = deque(maxlen=256)
         self._progress_lock = threading.Lock()
         self._live_progress_messages: dict[str, _LiveProgressMessage] = {}
+        self._notifications: Any | None = None
+
+    def set_notifications(self, notifications: Any | None) -> None:
+        """Attach an opt-in notification bridge polled by :meth:`run`.
+
+        The bridge only needs a ``poll_once() -> int`` method. It is polled
+        once per gateway loop iteration so it shares the existing process and
+        operator channel; a bridge error never stops the gateway.
+        """
+        self._notifications = notifications
+
+    def notify_operator(self, text: str) -> bool:
+        """Send a Hub-originated notification to the primary operator chat.
+
+        Uses the existing bot token and ``_send_message`` path with the
+        resolved primary chat, so only the configured/allow-listed chat can be
+        targeted. Returns ``False`` when no primary chat is configured.
+        """
+        if self._primary_chat_id is None:
+            return False
+        return bool(
+            _send_message(
+                self._token,
+                self._primary_chat_id,
+                text,
+                parse_mode=None,
+                log_to_human=False,
+            )
+        )
+
+    def _poll_notifications(self) -> None:
+        if self._notifications is None:
+            return
+        try:
+            self._notifications.poll_once()
+        except Exception as exc:  # noqa: BLE001 - a bridge fault must not stop Telegram
+            logger.warning("OpenCode notification poll failed (%s).", type(exc).__name__)
 
     def _create_chat_orchestrator(self, chat_id: int) -> HubOrchestrator:
         return HubOrchestrator(session_scope=_telegram_session_scope(chat_id))
@@ -669,6 +712,7 @@ class TelegramGateway:
                 for update in updates:
                     offset = update["update_id"] + 1
                     self._handle_update(update)
+                self._poll_notifications()
                 if not updates:
                     time.sleep(1)
         except KeyboardInterrupt:
@@ -775,6 +819,7 @@ class TelegramGateway:
 def run_telegram(token: str | None = None) -> None:
     from dotenv import load_dotenv
 
+    from .opencode_notify import build_bridge_from_env
     from .singleton_lock import acquire_singleton_lock
     from .startup_health import ensure_healthy_startup
 
@@ -788,6 +833,10 @@ def run_telegram(token: str | None = None) -> None:
 
         orch = HubOrchestrator()
         gateway = TelegramGateway(tok, orch)
+        bridge = build_bridge_from_env(gateway.notify_operator)
+        if bridge is not None:
+            gateway.set_notifications(bridge)
+            human_logger.info("OpenCode completion notifications enabled (opt-in).")
         gateway.run()
     finally:
         lock.release()
