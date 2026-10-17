@@ -8,6 +8,7 @@ This is the canonical technical documentation entry point for Agent Hub. It is i
 | Run the Hub or use commands | [`COMMANDS.md`](COMMANDS.md) |
 | Prove a change works through real CLI/Telegram | [`VALIDATION.md`](VALIDATION.md) |
 | Inspect workflow diagrams | [`diagrams/INDEX.md`](diagrams/INDEX.md) |
+| Review the proposed cross-agent Google Drive / Gmail / PDF tool architecture (design only) | [`SHARED_AGENT_TOOLS_PLAN.md`](SHARED_AGENT_TOOLS_PLAN.md) |
 | Review security boundaries | [`../SECURITY.md`](../SECURITY.md) |
 | Repository-wide agent rules | [`../AGENTS.md`](../AGENTS.md) |
 
