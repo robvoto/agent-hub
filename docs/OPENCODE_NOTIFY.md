@@ -39,8 +39,17 @@ repository and is not deployed; it runs as a bounded manual command today.
   A send failure stops the cursor so the event is retried; a backlog larger than
   one batch logs a visible warning instead of hiding older events.
 - Tolerant of partial writes (truncated ledger/cursor lines are ignored and the
-  event is re-delivered) and malformed rows (skipped, logged by short id only).
-- No secrets are logged; unexpected evidence keys are never rendered.
+  event is re-delivered). Malformed outbox records are **never notified** but
+  advance the cursor as inert markers so a batch full of corrupt records cannot
+  permanently starve valid later events; log only short record identifiers.
+- Outbox content is untrusted. The Telegram API receives the bounded advisory
+  text, but the human-facing delivery log records only the chat id, **never**
+  untrusted task/reason/evidence text or secrets.
+- A new row written with a created_at older than the saved (created_at,
+  dedupe_key) cursor cannot be discovered; the single supervisor writer must
+  use ordered timestamps and durable writes. A permanently failing Telegram
+  send stops the cursor with an explicit warning, rather than falsely
+  acknowledging delivery.
 
 ## Configuration (all optional; nothing is enabled by default)
 
