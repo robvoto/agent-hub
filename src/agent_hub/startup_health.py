@@ -25,6 +25,7 @@ from .config import (
     configured_handoff_reviewer_model,
     configured_handoff_reviewer_reasoning_effort,
     configured_handoff_reviewer_timeout_seconds,
+    configured_hub_profile,
     configured_model,
     configured_reasoning_effort,
 )
@@ -32,7 +33,7 @@ from .cost_log import canonical_model_name, load_cost_catalog, lookup_model_pric
 from .factory_bridge import build_factory_agent_spec
 from .human_mcp_gateway import HumanMCPError, get_human_mcp_gateway
 from .log_config import get_human_logger
-from .registry import AgentSpec, parse_agent_spec
+from .registry import AgentSpec, load_active_registry_report, parse_agent_spec
 from .runtime_policy import derive_manifest_command, validate_runtime_config
 
 HealthStatus = Literal["PASS", "WARNING", "FAIL"]
@@ -169,8 +170,11 @@ def run_startup_healthcheck(
     ]
     if mode == "telegram":
         checks.extend(_check_telegram_config(telegram_token=telegram_token))
-    checks.extend(_check_agent_factory_layout())
-    checks.extend(_check_agent_specs())
+    if configured_hub_profile() == "test":
+        checks.extend(_check_staged_agent_specs())
+    else:
+        checks.extend(_check_agent_factory_layout())
+        checks.extend(_check_agent_specs())
     checks.append(_check_data_dir())
     checks.extend(_check_sqlite_paths())
     checks.append(_check_model_config())
@@ -178,6 +182,27 @@ def run_startup_healthcheck(
     checks.append(_check_cost_catalog())
     checks.append(_check_human_mcp())
     return StartupHealthReport(mode=mode, checks=tuple(checks))
+
+
+def _check_staged_agent_specs() -> list[HealthCheckResult]:
+    report = load_active_registry_report()
+    checks = [
+        HealthCheckResult(
+            name=f"staged agent: {spec.id}",
+            status="PASS",
+            detail="Draft is selected for testing through Agent Hub.",
+        )
+        for spec in report.specs
+    ]
+    checks.extend(
+        HealthCheckResult(
+            name="Staged agent selection",
+            status="FAIL",
+            detail=error.message,
+        )
+        for error in report.errors
+    )
+    return checks
 
 
 def _check_openai_api_key() -> HealthCheckResult:

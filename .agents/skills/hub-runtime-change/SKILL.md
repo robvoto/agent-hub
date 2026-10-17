@@ -25,6 +25,8 @@ Read the owner module before editing. If one module clearly owns the behavior, s
 - If the design introduces or relies on a heuristic/approximate inference, apply the global `heuristic-review` skill before coding. Assistive heuristics are allowed only when an independent LLM/authoritative validation layer controls the final outcome; authoritative heuristics require explicit human approval.
 
 - Keep changes small and scoped.
+- Explain internal contract fields in operator language. Do not present names such as `runtime.mode=manual` as though the user chose or should understand them. Say what Hub can or cannot do, own the implementation work, and mention the field only as brief diagnostic detail when useful. For example: “This staged agent is not set up for Hub to run yet. I need to add its Hub adapter; you do not need to configure that internal field.”
+- For a substantial runtime, Telegram, dispatch, or staging boundary change, use a distinct read-only reviewer as required by `code-change/SKILL.md`; do not count the implementation agent's own inspection as independent review.
 - Do not implement specialist-internal logic inside Hub — a contract test double speaks only the runtime shape (status/result_kind/etc.), never real specialist reasoning.
 - Do not add fallback/default behavior that changes outcomes unless explicitly approved.
 - Do not mask invalid agent output with guessed status mappings or silent recovery.

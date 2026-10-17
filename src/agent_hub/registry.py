@@ -10,11 +10,18 @@ import dataclasses
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .config import AGENT_REGISTRY_DIR
+from .config import (
+    AGENT_REGISTRY_DIR,
+    AGENT_STAGING_DIR,
+    configured_hub_profile,
+    configured_staged_agent_ids,
+)
+from .runtime_policy import validate_runtime_config
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +155,67 @@ def load_registry_report(registry_dir: Path | None = None) -> RegistryLoadResult
             errors.append(RegistryLoadError(source=str(spec_file), message=str(exc)))
 
     logger.info("Agent registry: %d enabled agent(s) loaded, %d invalid.", len(specs), len(errors))
+    return RegistryLoadResult(specs=specs, errors=errors)
+
+
+def load_active_registry_report() -> RegistryLoadResult:
+    """Load the process-selected registry without ever auto-loading drafts.
+
+    The default live profile is unchanged. Test mode is an explicit allowlist
+    over Factory's staging directory and intentionally contains no enabled
+    agents, so test runs cannot quietly route to the live registry.
+    """
+    if configured_hub_profile() == "live":
+        return load_registry_report(AGENT_REGISTRY_DIR)
+
+    ids = configured_staged_agent_ids()
+    if not ids:
+        return RegistryLoadResult(
+            specs=[],
+            errors=[RegistryLoadError(
+                source="HUB_STAGED_AGENT_IDS",
+                message="HUB_PROFILE=test requires a comma-separated staged-agent allowlist.",
+            )],
+        )
+
+    specs: list[AgentSpec] = []
+    errors: list[RegistryLoadError] = []
+    for agent_id in ids:
+        if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", agent_id):
+            errors.append(RegistryLoadError(
+                source=f"{AGENT_STAGING_DIR}/{agent_id}/agent.json",
+                message="Staged agent ID contains unsupported characters.",
+            ))
+            continue
+        spec_file = AGENT_STAGING_DIR / agent_id / "agent.json"
+        if not spec_file.is_file():
+            errors.append(RegistryLoadError(
+                source=str(spec_file), message="Selected staged agent manifest was not found."
+            ))
+            continue
+        try:
+            data = json.loads(spec_file.read_text(encoding="utf-8"))
+            spec = parse_agent_spec(data)
+            if spec.id != agent_id:
+                raise ValueError(
+                    f"Manifest id {spec.id!r} does not match selected id {agent_id!r}."
+                )
+            try:
+                validate_runtime_config(spec.id, spec.runtime)
+            except ValueError as exc:
+                raise ValueError(
+                    "Hub can’t run this draft yet; it needs a Hub connector "
+                    "before it can be tested here."
+                ) from exc
+            runtime = {**spec.runtime, "working_directory": str(spec_file.parent)}
+            specs.append(dataclasses.replace(
+                spec,
+                runtime=runtime,
+                extensions={**spec.extensions, "hub_profile": "test", "hub_source": "staged"},
+            ))
+        except Exception as exc:
+            errors.append(RegistryLoadError(source=str(spec_file), message=str(exc)))
+
     return RegistryLoadResult(specs=specs, errors=errors)
 
 
