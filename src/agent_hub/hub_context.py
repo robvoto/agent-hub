@@ -20,8 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from .config import AGENT_REGISTRY_DIR, PROJECT_ROOT, configured_model
-from .registry import load_registry_report, spec_fingerprint
+from .config import AGENT_REGISTRY_DIR, PROJECT_ROOT, configured_hub_profile, configured_model
+from .registry import load_active_registry_report, load_registry_report, spec_fingerprint
 
 ContextSourceKind = Literal["documentation", "manifest", "runtime_metadata"]
 
@@ -142,7 +142,11 @@ class HubContextService:
     # -- manifests -----------------------------------------------------------
 
     def list_manifests(self) -> list[ContextSource]:
-        report = load_registry_report(self._registry_dir)
+        report = (
+            load_active_registry_report()
+            if configured_hub_profile() == "test"
+            else load_registry_report(self._registry_dir)
+        )
         freshness = _now_iso()
         return [
             ContextSource(
@@ -170,10 +174,20 @@ class HubContextService:
     # -- runtime metadata ------------------------------------------------------
 
     def runtime_metadata(self) -> ContextSource:
-        report = load_registry_report(self._registry_dir)
+        report = (
+            load_active_registry_report()
+            if configured_hub_profile() == "test"
+            else load_registry_report(self._registry_dir)
+        )
+        registry_source = (
+            f"staging allowlist={','.join(spec.id for spec in report.specs)}"
+            if configured_hub_profile() == "test"
+            else str(self._registry_dir)
+        )
         error_lines = "; ".join(f"{e.source}: {e.message}" for e in report.errors) or "none"
         content = (
-            f"configured_model={configured_model()}; registry_dir={self._registry_dir}; "
+            f"configured_model={configured_model()}; profile={configured_hub_profile()}; "
+            f"registry_source={registry_source}; "
             f"loaded_agents={len(report.specs)}; invalid_manifests={len(report.errors)} "
             f"({error_lines})"
         )

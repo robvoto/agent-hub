@@ -315,6 +315,7 @@ def test_new_session_returns_startup_summary_with_defaults(monkeypatch):
 
     assert summary == (
         "New Agent Hub session\n\n"
+        "Profile: LIVE\n"
         "Learning: OFF\n"
         "Project: none\n"
         "Agents available: 0\n"
@@ -364,6 +365,7 @@ def test_hub_status_reports_state_without_rotating_session(monkeypatch, tmp_path
     assert orchestrator.session_id == original_session_id
     assert status == (
         "Agent Hub status\n\n"
+        "Profile: LIVE\n"
         "Learning: ON\n"
         f"Project: {tmp_path.name}\n"
         "Agents available: 1\n"

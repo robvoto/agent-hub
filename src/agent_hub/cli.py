@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import sys
 
-from .config import configured_model
 from .log_config import configure_logging
 
 _HELP_TEXT = (
@@ -58,6 +57,9 @@ def _handle_cli_shutdown_interrupt() -> None:
 
 
 def _run_chat(model: str) -> None:
+    # Load configuration only after `main()` has loaded .env, because DATA_DIR
+    # and the active profile are selected at config-module import time.
+    from .config import configured_hub_profile
     from .orchestrator import HubOrchestrator
     from .startup_health import ensure_healthy_startup
 
@@ -66,12 +68,21 @@ def _run_chat(model: str) -> None:
     orch.set_learning_notifier(lambda message: print(f"\n{message}\n"))
     registry = orch.registry
 
+    profile = configured_hub_profile()
     if registry:
-        print(f"Agent Hub ready — {len(registry)} agent(s) registered.")
+        prefix = "Agent Hub TEST MODE" if profile == "test" else "Agent Hub"
+        print(f"{prefix} ready — {len(registry)} agent(s) registered.")
         for spec in registry:
-            print(f"  • {spec.name} ({spec.id}): {spec.purpose}")
+            marker = "[STAGED TEST] " if spec.extensions.get("hub_source") == "staged" else ""
+            print(f"  • {marker}{spec.name} ({spec.id}): {spec.purpose}")
     else:
-        print("Agent Hub ready — no agents registered yet.")
+        if profile == "test":
+            print(
+                "Agent Hub TEST MODE ready — no callable staged agents loaded; "
+                "check /agents-status."
+            )
+        else:
+            print("Agent Hub ready — no agents registered yet.")
 
     print(_HELP_TEXT)
 
@@ -117,7 +128,12 @@ def _run_chat(model: str) -> None:
                 print("No agents registered yet.")
             else:
                 for spec in orch.registry:
-                    print(f"  {spec.name} ({spec.id}): {spec.purpose}")
+                    marker = (
+                        "[STAGED TEST] "
+                        if spec.extensions.get("hub_source") == "staged"
+                        else ""
+                    )
+                    print(f"  {marker}{spec.name} ({spec.id}): {spec.purpose}")
             continue
 
         if text == "/agents-refresh":
@@ -326,6 +342,8 @@ def main(argv: list[str] | None = None) -> None:
     command = args.command or "chat"
 
     if command == "chat":
+        from .config import configured_model
+
         model = getattr(args, "model", None) or configured_model()
         _run_chat(model)
     elif command == "telegram":

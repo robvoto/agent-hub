@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import os
+import re
 import shlex
 from typing import Any, Mapping
 
 SUPPORTED_RUNTIME_MODES = {"subprocess", "factory_brain"}
+_RESERVED_STAGED_ENV_NAMES = {"HUB_BOT_TOKEN", "OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN"}
 
 
 def validate_runtime_config(agent_id: str, runtime: Mapping[str, Any]) -> None:
@@ -31,6 +34,21 @@ def validate_runtime_config(agent_id: str, runtime: Mapping[str, Any]) -> None:
             raise ValueError(
                 f"Agent '{agent_id}' has invalid default_execution_mode {execution_mode!r}. "
                 "Expected 'instruction_only' or 'execute'."
+            )
+        allowed_environment = runtime.get("environment_allowlist", [])
+        if not isinstance(allowed_environment, list) or any(
+            not isinstance(name, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]*", name)
+            for name in allowed_environment
+        ):
+            raise ValueError(f"Agent '{agent_id}' has an invalid environment allowlist.")
+        if any(
+            name in _RESERVED_STAGED_ENV_NAMES
+            or name.startswith(("HUB_", "OPENAI_"))
+            for name in allowed_environment
+        ):
+            raise ValueError(
+                f"Agent '{agent_id}' requests a Hub-only credential "
+                "that staged agents cannot receive."
             )
         return
 
@@ -68,3 +86,13 @@ def _require_fields(agent_id: str, runtime: Mapping[str, Any], *fields: str) -> 
     if missing:
         joined = ", ".join(missing)
         raise ValueError(f"Agent '{agent_id}' is missing required runtime fields: {joined}.")
+
+
+def staged_subprocess_environment(
+    runtime: Mapping[str, Any], environ: Mapping[str, str] | None = None
+) -> dict[str, str]:
+    """Build a minimal child environment for staged subprocesses."""
+    source = os.environ if environ is None else environ
+    names = {"PATH", "LANG", "LC_ALL", "SYSTEMROOT", "PATHEXT"}
+    names.update(runtime.get("environment_allowlist", []))
+    return {name: source[name] for name in names if name in source}

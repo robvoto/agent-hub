@@ -104,6 +104,32 @@ def _configure_valid_startup(monkeypatch, tmp_path: Path) -> dict[str, Path]:
     }
 
 
+def test_test_profile_health_does_not_inspect_enabled_agents_or_factory(monkeypatch, tmp_path):
+    import agent_hub.startup_health as startup_health
+
+    _configure_valid_startup(monkeypatch, tmp_path)
+    monkeypatch.setenv("HUB_PROFILE", "test")
+    monkeypatch.setattr(
+        startup_health,
+        "load_active_registry_report",
+        lambda: type("Report", (), {"specs": [], "errors": []})(),
+    )
+    monkeypatch.setattr(
+        startup_health,
+        "_check_agent_factory_layout",
+        lambda: pytest.fail("test profile inspected live Factory layout"),
+    )
+    monkeypatch.setattr(
+        startup_health,
+        "_check_agent_specs",
+        lambda: pytest.fail("test profile inspected enabled agents"),
+    )
+
+    report = startup_health.run_startup_healthcheck("chat")
+
+    assert not any("agent-factory" in check.name for check in report.checks)
+
+
 def _failure_detail(report, name: str) -> str:
     for check in report.checks:
         if check.name == name:
