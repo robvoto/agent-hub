@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "shared-agent-tool-contract-v0.schema.json",
+  "$id": "shared-tool-contract-v0.schema.json",
   "title": "Shared Agent Tool Contract — DRAFT, NOT APPROVED",
   "description": "Proposal only. No auth derives from a model-authored request. Broker must bind authenticated principal, account scopes, approvals and tool risk from trusted runtime state.",
   "oneOf": [

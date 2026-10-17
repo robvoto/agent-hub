@@ -116,5 +116,5 @@ Q5: What must happen when PC/cloud connector is unavailable: fail with a clear s
 
 - 2026-10-17: Plan requested, **implementation explicitly deferred**. Independent OpenCode brief review: REQUEST CHANGES. Proposal adds execution broker, transport neutrality, account isolation, artifact boundaries and test gates.
 - 2026-10-17 operator decision: MVP may require the home PC to be running. No offline-PC deployment requirement. ChatGPT-to-PC interoperability still unproven; do not silently drop that goal.
-- Pending: project Drive standards access, operator clarification on PDF draft/signature approval, and answers to Q3–Q5, independent source-level architecture review, approval of actual implementation backlog decomposition.
+- Independent full-source review PASS (2026-10-17) for merge as a design-only proposal; not approval to implement or activate. Pending: project Drive standards access, operator clarification on PDF draft/signature approval, and answers to Q3–Q5, operator approval of actual implementation backlog decomposition.
 - This file is the **single proposed cross-agent tool planning document**. Do not create a competing plan; update this and keep AGENT-HUB-060 as its tracking entry.
