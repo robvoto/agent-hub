@@ -33,16 +33,20 @@ Non-goals: replacing Agent Factory's registry, replacing Hub orchestration, buil
 | Execution broker / policy | Agent Hub runtime boundary, with no specialist import of Hub internals | Enforce caller + user + account + tool + operation authorization; approvals, credential isolation, retries, idempotency, audit, rate limits, output artifact references. One logical enforcement point regardless of adapter. |
 | Tool implementations and adapters | Dedicated domain modules behind broker; owned according to scope | One implementation for Drive, one for Gmail, one for PDF. Thin Python client, CLI, MCP and/or HTTP adapters **only if justified**, all enforcing the same policy. |
 
-**Key correction:** “native first, MCP fallback” is not a universal rule. Native Google APIs and deterministic Python processing are sensible *implementations*; MCP is one interoperability *transport*. A provider-native connection is also usable when it really exists, but must not be falsely claimed to share our broker's approvals/audit. Never create a separate implementation and security policy per transport.
+**Owner direction and current upstream guidance (verified 2026-10-17): native implementation first; MCP is OPTIONAL, not the agent platform.** Build one tested set of Python domain capabilities using the provider's native Google APIs/SDKs and deterministic PDF libraries. Hub/Factory/LangChain agents running inside the trusted local runtime should expose those as ordinary callable/typed tools and preserve Hub's existing approval and audit controls. Do **not** require each agent, specialist or Python call to connect through MCP. LangChain's `create_agent` explicitly accepts ordinary Python callables; MCP adapters are a supported optional interoperability transport, not a reason to copy provider logic. The MCP 2026-07-28 spec warns about token-audience/confused-deputy risks; no MCP token passthrough, unauthenticated localhost proxy or blanket cross-account tool exposure. See [LangChain tools](https://reference.langchain.com/python/langchain/agents/factory/create_agent), [LangChain MCP adapters](https://reference.langchain.com/python/langchain/mcp/tools) and [MCP authorization security](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2026-07-28/basic/authorization/security-considerations.mdx).
 
-**Deployment is undecided.** Start with a design for one trusted local broker boundary; assess in-process Hub module vs sidecar service after reviewing separate-process clients and secrets. Remote/cloud clients (including ChatGPT) cannot simply call a PC-local `127.0.0.1` endpoint. Authenticated remote access and PC-offline behavior require an explicit separate decision. Do not publish a public endpoint by default.
+**No mandatory standalone broker service.** First extend the existing Hub authorization boundary (AGENT-HUB-050) with a small versioned Python capability package and shared permission checks. A separate broker process/sidecar is only justified if a genuinely distinct authenticated client must cross a process/runtime boundary and tests show a real benefit; record its threat model and lifecycle cost before creating it. Factory should declare and validate permissions, not implement provider APIs or duplicate Hub execution. MCP/CLI/HTTP adapters, if later added, remain thin callers of the same native implementations and policy; deny rules apply equally.
+
+**Deployment is undecided.** PC-on for MVP is approved, but remote/cloud ChatGPT cannot simply call local `127.0.0.1`. Start local read-only capability proof, then verify an authenticated external route only when required. No public tunnel by default.
 
 ## Required tool contract (proposal)
 
 For each tool: stable `tool_id`, `version`, JSON input/output schema, read/write/sign/send classification, required caller and account/scopes, approval mode, idempotency behavior, time/file/token limits, typed errors, audit correlation ID, artifact reference types and provider IDs.
 
-Example conceptual call:
-`execute(tool_id, version, caller_id, user_id, account_id, request_id, operation_payload, approval_ref?) -> result | needs_approval | failed | unknown_outcome`.
+Example conceptual call (internal native Python interface or authenticated remote adapter):
+`execute(capability_id, version, request_id, validated_inputs, account_ref?, approval_ref?) -> result | needs_approval | denied | failed | unknown_outcome`.
+
+The **authenticated caller principal and actual authorized account come from the trusted runtime**, never from model-provided fields; account and approval references are mere lookup handles verified against server-side authorization. Use the existing draft `docs/schemas/shared-tool-contract-v0.schema.json` rather than inventing a second envelope.
 
 No agent-side raw OAuth token parameters, anonymous account switching, implicit permission expansion, hidden fallbacks or unbounded retries.
 
