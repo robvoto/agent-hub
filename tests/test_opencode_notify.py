@@ -521,8 +521,6 @@ def test_notify_operator_never_logs_untrusted_advisory_text(monkeypatch, caplog)
         lambda token, method, **kwargs: {"result": {"message_id": 123}},
     )
     gateway = TelegramGateway("token-123", _orch())
-    import logging
-
     with caplog.at_level(logging.INFO):
         assert gateway.notify_operator("untrusted SECRET_CANARY reason") is True
     assert "SECRET_CANARY" not in caplog.text
