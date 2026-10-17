@@ -256,6 +256,27 @@ def test_malformed_payload_is_skipped(tmp_path) -> None:
     assert len(send.texts) == 1
 
 
+def test_malformed_full_batch_does_not_starve_later_valid_notifications(tmp_path) -> None:
+    outbox = _make_outbox(
+        tmp_path,
+        [
+            _row("bad-1", "FAILED", created=1.0, payload_raw="{invalid"),
+            _row("bad-2", "FAILED", created=2.0, payload_raw="[1,2]"),
+            _row("bad-3", "FAILED", created=3.0, payload_raw="{invalid"),
+            _row("good", "FAILED", created=4.0),
+        ],
+    )
+    send = _Recorder()
+    bridge = _bridge(tmp_path, outbox, send, max_events=2)
+    assert bridge.poll_once() == 0
+    assert bridge.poll_once() == 1
+    assert len(send.texts) == 1
+    assert "task-1" in send.texts[0]
+    # Persisted cursor and ledger survive a restart without leaking bad events.
+    assert _bridge(tmp_path, outbox, send, max_events=2).poll_once() == 0
+    assert len(send.texts) == 1
+
+
 def test_non_object_payload_is_skipped(tmp_path) -> None:
     outbox = _make_outbox(
         tmp_path,
@@ -469,14 +490,42 @@ def test_notify_operator_uses_plain_text_and_primary_chat(monkeypatch) -> None:
     monkeypatch.setattr(
         telegram_gateway,
         "_send_message",
-        lambda token, chat_id, text, *, parse_mode="Markdown": sent.append(
-            {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
+        lambda token, chat_id, text, *, parse_mode="Markdown", log_to_human=True: sent.append(
+            {
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": parse_mode,
+                "log_to_human": log_to_human,
+            }
         )
         or [1],
     )
     gateway = TelegramGateway("token-123", _orch())
     assert gateway.notify_operator("hello operator") is True
-    assert sent == [{"chat_id": 42, "text": "hello operator", "parse_mode": None}]
+    assert sent == [
+        {
+            "chat_id": 42,
+            "text": "hello operator",
+            "parse_mode": None,
+            "log_to_human": False,
+        }
+    ]
+
+
+def test_notify_operator_never_logs_untrusted_advisory_text(monkeypatch, caplog) -> None:
+    monkeypatch.setenv("HUB_ALLOWED_CHAT_IDS", "42")
+    monkeypatch.delenv("HUB_TELEGRAM_PRIMARY_CHAT_ID", raising=False)
+    monkeypatch.setattr(
+        telegram_gateway,
+        "_api",
+        lambda token, method, **kwargs: {"result": {"message_id": 123}},
+    )
+    gateway = TelegramGateway("token-123", _orch())
+    import logging
+
+    with caplog.at_level(logging.INFO):
+        assert gateway.notify_operator("untrusted SECRET_CANARY reason") is True
+    assert "SECRET_CANARY" not in caplog.text
 
 
 def test_notify_operator_without_primary_chat_returns_false(monkeypatch) -> None:
