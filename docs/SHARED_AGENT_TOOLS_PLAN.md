@@ -48,6 +48,10 @@ No agent-side raw OAuth token parameters, anonymous account switching, implicit 
 
 ## Stage 0 implementation gate — concrete security and cross-runtime evidence (2026-10-17)
 
+**Candidate machine-readable contract (not approved):** [`docs/schemas/shared-tool-contract-v0.schema.json`](schemas/shared-tool-contract-v0.schema.json) now defines `tool.capability`, `tool.request`, and `tool.result` envelopes. It has **no caller-identity fields**, because the broker must inject identity from authenticated transport; account and approval references are never themselves authorization. The schema does not replace per-capability validation, provider OAuth/consent policy or integration tests, and must be independently reviewed before use.
+
+
+
 This is a **design-review gate**, not approval to deploy. It follows the coordinator's [six-finding technical review on PR #10](https://github.com/robvoto/agent-hub/pull/10). The earlier independent OpenCode REQUEST CHANGES was a review of the *brief*, not a verified source-level review of this full PR.
 
 1. **Identity proof:** An agent-supplied `caller_id`, `user_id`, `account_id`, or `approval_ref` is untrusted request data. For each supported transport, provide a table of the authenticator and principal (e.g. user-owned local process identity or authenticated client connection), the mapped human/account authorization, revocation, expiry, and failure status. Reject spoofed caller/account/approval IDs and show the test. No anonymous localhost socket may grant access merely because it is on the same PC.
