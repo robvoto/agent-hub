@@ -15,6 +15,7 @@ from typing import Any, Callable
 
 import httpx
 
+from . import human_mcp_shell_approvals as shell_approvals
 from .log_config import get_human_logger
 from .orchestrator import HubOrchestrator, cancel_all_active_tasks
 from .progress_events import ProgressUpdate
@@ -303,6 +304,9 @@ class TelegramGateway:
             "/reset-all - cancel all active/paused tasks and start fresh\n"
             "/approve - approve the current task when requested\n"
             "/reject [reason] - reject the current task when requested\n"
+            "/shell-approvals - list Human MCP shell commands awaiting owner approval\n"
+            "/shell-approve <request-id> - approve one exact Human MCP shell command\n"
+            "/shell-deny <request-id> [reason] - deny one Human MCP shell command\n"
             "/project [<path>|clear] - set/show/clear the target project\n"
             "/hub-status - show Hub status\n"
             "/last - show the most recently finished task\n"
@@ -474,6 +478,38 @@ class TelegramGateway:
         if text == "/stop" or text.startswith("/stop "):
             identifier = text[len("/stop") :].strip() or None
             reply = orch.stop_current_task(identifier=identifier)
+            _send_message(self._token, chat_id, reply, parse_mode=None)
+            return
+
+        if text == "/shell-approvals":
+            _send_message(
+                self._token,
+                chat_id,
+                shell_approvals.render_pending_shell_requests(chat_id),
+                parse_mode=None,
+            )
+            return
+
+        if text == "/shell-approve" or text.startswith("/shell-approve "):
+            request_id = text[len("/shell-approve") :].strip()
+            reply = (
+                "Usage: /shell-approve <request-id>"
+                if not request_id
+                else shell_approvals.decide_shell_request(chat_id, request_id, "approve")
+            )
+            _send_message(self._token, chat_id, reply, parse_mode=None)
+            return
+
+        if text == "/shell-deny" or text.startswith("/shell-deny "):
+            remainder = text[len("/shell-deny") :].strip()
+            request_id, _, reason = remainder.partition(" ")
+            reply = (
+                "Usage: /shell-deny <request-id> [reason]"
+                if not request_id
+                else shell_approvals.decide_shell_request(
+                    chat_id, request_id, "deny", reason.strip()
+                )
+            )
             _send_message(self._token, chat_id, reply, parse_mode=None)
             return
 
