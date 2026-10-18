@@ -104,21 +104,20 @@ def allowed_decision_chat_ids() -> set[int]:
 
 
 def _load_channel() -> Any:
-    """Build the module's own signing/reading channel on this machine.
+    """The signing channel the MCP server itself reads decisions from.
 
-    Import is deferred so the gateway can start and report a clear disabled
-    reason when the approval module is not installed, and so the key file is
-    only touched when a decision is actually attempted.
+    This deliberately reuses ``ApprovalRuntime.channel`` rather than building a
+    second channel from the base directory: the runtime nests its channel at
+    ``<base>/channel``, so constructing one at ``<base>`` would write decisions
+    into a directory the server never reads and they would be silently lost.
+    Reusing the runtime's instance also guarantees one key, one clock and one
+    directory across both sides.
+
+    The import stays deferred so the gateway can start and report a clear
+    disabled reason when the approval module is not installed, and so the key
+    file is only touched when a decision is actually attempted.
     """
-    import human_mcp_approvals as approvals
-
-    # No fallback identity: callers gate on ``bridge_disabled_reason()`` first, and an
-    # empty owner id would be rejected by the server rather than silently accepted.
-    base_dir = os.getenv(_APPROVAL_DIR_ENV, "").strip()
-    owner_id = os.getenv(_OWNER_ENV, "").strip()
-    # The channel creates or reuses the local key on first use; key_protection is
-    # left to the module's own policy rather than overridden here.
-    return approvals.RemoteDecisionChannel(base_dir=Path(base_dir), owner_principal_id=owner_id)
+    return _load_runtime().channel
 
 
 def _load_runtime() -> Any:

@@ -105,6 +105,24 @@ class TestRenderPending:
         assert "/shell-approve <request-id>" in reply
 
 
+class TestChannelIdentity:
+    def test_channel_is_the_runtimes_own(self, monkeypatch, tmp_path):
+        """A separately built channel would write where the server never reads.
+
+        ``ApprovalRuntime`` nests its channel at ``<base>/channel``; building a
+        second one at ``<base>`` silently loses every decision.
+        """
+        monkeypatch.setenv("HUMAN_MCP_APPROVAL_DIR", str(tmp_path))
+
+        class FakeRuntime:
+            channel = object()
+
+        runtime = FakeRuntime()
+        monkeypatch.setattr(bridge, "_load_runtime", lambda: runtime)
+
+        assert bridge._load_channel() is runtime.channel
+
+
 class TestAllowedDecisionChats:
     def test_empty_by_default(self, monkeypatch):
         monkeypatch.delenv("HUB_APPROVAL_COMMAND_ALLOWED_CHAT_IDS", raising=False)
