@@ -11,8 +11,8 @@ Use this skill to discover and call the repo-configured Human MCP connection wit
 
 - MCP config: `.mcp.json`
 - Primary server: `human-mcp-secure` at `http://127.0.0.1:8001/mcp`
-- Fallback server: `human-mcp-ngrok-fallback` at the deliberate ngrok endpoint in `.mcp.json`
-- Use secure first. Use the ngrok fallback only after a genuine secure failure, and state the secure failure before switching.
+- No public ngrok fallback is configured. Never attempt an old tunnel endpoint.
+- The 127.0.0.1 address is local to the process environment: from WSL it refers to WSL, not necessarily the Windows-hosted MCP service. Verify that a server is listening before attempting HTTP JSON-RPC.
 - Runtime connector names may differ from these configuration names. Inspect the current client tool catalogue before calling a tool; do not guess a connector name.
 - Read the URLs from `.mcp.json`; do not duplicate, silently replace, or use an old server name elsewhere.
 
@@ -60,7 +60,7 @@ When the current environment exposes only local project command execution:
 6. Call `tools/list` and confirm the required Sheets tool is advertised.
 7. Call `tools/call` with the exact tool name and arguments.
 
-If secure initialization, discovery, or a required call genuinely fails, report that exact failure, then repeat this bounded workflow against `human-mcp-ngrok-fallback`. Never silently switch and never use a local or stale backlog copy.
+If secure initialization, discovery, or a required call fails, diagnose whether the agent runs in Windows or WSL, and report the exact failure. Do not try a public tunnel, guess an alternate endpoint, or use a local/stale backlog copy. If this client has no connected Sheets tool and no reachable authorised endpoint, stop backlog work; ChatGPT may read the live backlog with its own connected Human MCP tools and supply verified task scope separately.
 
 Required call arguments:
 
@@ -91,5 +91,5 @@ The `row` and `col` values are 1-based. For updates, derive both from the freshl
 - Never use a local Markdown, CSV, Excel file, or copied spreadsheet as a substitute for the live backlog.
 - Never claim a write succeeded without re-reading the live sheet.
 - Never create backlog IDs from memory alone.
-- If secure and, where appropriate, the declared fallback both fail, stop and report the exact blocker.
+- If no authorised connected tool or reachable secure endpoint can access the required live Sheet, stop and report the exact blocker.
 - Do not fall back to web scraping or a read-only Drive connector for backlog writes.
