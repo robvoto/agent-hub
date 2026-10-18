@@ -30,7 +30,7 @@ The human should not need to remember Git mechanics.
 
 ## Before integration
 
-1. Confirm the exact task commit SHA and that validation passed.
+1. Confirm the exact task commit SHA and that validation passed. For a background check, read its terminal status and require exit 0 before any commit/push; starting a job or seeing it running is not a pass.
 2. Fetch `origin` again and compare the task branch with current `origin/main`.
 3. If `origin/main` advanced since the task branch was cut, do not blindly push, force-push, or pretend it is a fast-forward.
 4. Build the integration result from the **current** `origin/main` plus the task branch, using the repository's documented merge strategy. If none is documented, prefer a normal non-force merge that preserves both histories.
