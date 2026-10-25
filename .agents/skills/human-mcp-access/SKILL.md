@@ -11,8 +11,8 @@ Use this skill to discover and call the repo-configured Human MCP connection wit
 
 - MCP config: `.mcp.json`
 - Primary server: `human-mcp-secure` at `http://127.0.0.1:8001/mcp`
-- Fallback server: `human-mcp-ngrok-fallback` at the deliberate ngrok endpoint in `.mcp.json`
-- Use secure first. Use the ngrok fallback only after a genuine secure failure, and state the secure failure before switching.
+- No public ngrok fallback is configured. Never attempt an old tunnel endpoint.
+- The 127.0.0.1 address is local to the process environment: from WSL it refers to WSL, not necessarily the Windows-hosted MCP service. Verify that a server is listening before attempting HTTP JSON-RPC.
 - Runtime connector names may differ from these configuration names. Inspect the current client tool catalogue before calling a tool; do not guess a connector name.
 - Read the URLs from `.mcp.json`; do not duplicate, silently replace, or use an old server name elsewhere.
 
@@ -25,6 +25,14 @@ Use this skill to discover and call the repo-configured Human MCP connection wit
 - Canonical backlog access identity: `agent-backlog-access@robvoto-agent-platform.iam.gserviceaccount.com`
 - This identity should have access to all relevant project backlog spreadsheets, not only Agent Hub.
 - Do not infer that other configured service accounts are prohibited; use a project-specific account only when current configuration and access evidence require it.
+
+## OpenCode in WSL (verified 2026-10-11)
+
+- OpenCode uses its user configuration at `~/.config/opencode/opencode.jsonc`, with the local MCP server `human-mcp-windows`. This is separate from Agent Hub runtime `config/human_mcp.json` and Codex settings.
+- The OpenCode MCP server launches Windows `powershell.exe` with `C:\Users\thewr\AppData\Local\OpenCode\start-human-mcp.ps1`. That script sets `UV_PROJECT_ENVIRONMENT` to a dedicated persistent Windows environment outside the repository, then launches the Windows `uv` stdio MCP server.
+- `opencode mcp list` reported `human-mcp-windows connected` on 2026-10-11. A live Sheets read from this newly registered OpenCode tool is a separate acceptance check, not yet proven by connection status alone.
+- Never assume OpenCode exposes the Agent Hub runtime tools automatically. Do not switch to the old `127.0.0.1` HTTP or ngrok transport to work around an OpenCode tool-discovery failure.
+- Avoid writing secrets or embedding them in prompts. Any Sheets write requires explicit operator authorisation and a fresh reread to verify it.
 
 ## Preferred MCP tools
 
@@ -60,7 +68,7 @@ When the current environment exposes only local project command execution:
 6. Call `tools/list` and confirm the required Sheets tool is advertised.
 7. Call `tools/call` with the exact tool name and arguments.
 
-If secure initialization, discovery, or a required call genuinely fails, report that exact failure, then repeat this bounded workflow against `human-mcp-ngrok-fallback`. Never silently switch and never use a local or stale backlog copy.
+If secure initialization, discovery, or a required call fails, diagnose whether the agent runs in Windows or WSL, and report the exact failure. Do not try a public tunnel, guess an alternate endpoint, or use a local/stale backlog copy. If this client has no connected Sheets tool and no reachable authorised endpoint, stop backlog work; ChatGPT may read the live backlog with its own connected Human MCP tools and supply verified task scope separately.
 
 Required call arguments:
 
@@ -91,5 +99,5 @@ The `row` and `col` values are 1-based. For updates, derive both from the freshl
 - Never use a local Markdown, CSV, Excel file, or copied spreadsheet as a substitute for the live backlog.
 - Never claim a write succeeded without re-reading the live sheet.
 - Never create backlog IDs from memory alone.
-- If secure and, where appropriate, the declared fallback both fail, stop and report the exact blocker.
+- If no authorised connected tool or reachable secure endpoint can access the required live Sheet, stop and report the exact blocker.
 - Do not fall back to web scraping or a read-only Drive connector for backlog writes.
