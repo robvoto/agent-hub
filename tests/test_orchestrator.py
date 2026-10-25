@@ -25,6 +25,7 @@ from agent_hub.knowledge_store import SqliteStore
 from agent_hub.orchestrator import (
     _SYSTEM_PROMPT,
     HubOrchestrator,
+    _build_support_tools,
     _build_system_prompt,
     _dispatch_subprocess,
     _format_output,
@@ -315,6 +316,7 @@ def test_new_session_returns_startup_summary_with_defaults(monkeypatch):
 
     assert summary == (
         "New Agent Hub session\n\n"
+        "Profile: LIVE\n"
         "Learning: OFF\n"
         "Project: none\n"
         "Agents available: 0\n"
@@ -364,6 +366,7 @@ def test_hub_status_reports_state_without_rotating_session(monkeypatch, tmp_path
     assert orchestrator.session_id == original_session_id
     assert status == (
         "Agent Hub status\n\n"
+        "Profile: LIVE\n"
         "Learning: ON\n"
         f"Project: {tmp_path.name}\n"
         "Agents available: 1\n"
@@ -3606,3 +3609,56 @@ def test_cancelled_follow_up_suppresses_late_specialist_reply(monkeypatch, tmp_p
     updated = get_task_run_store().get_run(run.id)
     assert updated.state == TASK_STATE_CANCELLED
     assert updated.final_response is None
+
+
+def test_rough_shopping_request_stays_on_hub_direct_path_without_specialist(monkeypatch):
+    from agent_hub.orchestrator import _classify_routing_request
+
+    class _Config:
+        allowed_tools = frozenset({"browser_snapshot", "browser_open_tab"})
+
+    monkeypatch.setattr("agent_hub.orchestrator.load_human_mcp_config", lambda: _Config())
+
+    decision = _classify_routing_request(
+        "find 7ft leash under 30 delivered here",
+        [],
+        model="test",
+    )
+
+    assert decision.route == "direct"
+    assert decision.task_kind is None
+
+
+def test_human_mcp_tools_bind_to_the_canonical_hub_session(monkeypatch):
+    import agent_hub.orchestrator as orchestrator_module
+
+    captured = {}
+    monkeypatch.setattr(orchestrator_module, "make_shared_docs_tool", lambda registry: "docs")
+    monkeypatch.setattr(
+        orchestrator_module,
+        "get_human_mcp_gateway",
+        lambda: "gateway",
+    )
+    monkeypatch.setattr(
+        orchestrator_module,
+        "make_human_mcp_tools",
+        lambda gateway, *, session_id: captured.update(
+            gateway=gateway, session_id=session_id
+        )
+        or ["browser-tools"],
+    )
+    monkeypatch.setattr(
+        orchestrator_module,
+        "_make_parallel_specialist_fanout_tool",
+        lambda registry, *, session_id: "fanout",
+    )
+
+    assert _build_support_tools(None, [], session_id="canonical-hub-session") == [
+        "docs",
+        "browser-tools",
+        "fanout",
+    ]
+    assert captured == {
+        "gateway": "gateway",
+        "session_id": "canonical-hub-session",
+    }

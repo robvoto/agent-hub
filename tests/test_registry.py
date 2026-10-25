@@ -1,6 +1,58 @@
 """Tests for the agent registry loader."""
 
-from agent_hub.registry import load_registry, load_registry_report, spec_fingerprint
+from agent_hub import registry
+from agent_hub.registry import (
+    load_active_registry_report,
+    load_registry,
+    load_registry_report,
+    spec_fingerprint,
+)
+from agent_hub.runtime_policy import staged_subprocess_environment, validate_runtime_config
+
+
+def test_staged_subprocess_environment_only_includes_allowed_values():
+    result = staged_subprocess_environment(
+        {"environment_allowlist": ["SERPAPI_KEY", "SHOPPING_MAX_API_CALLS"]},
+        {
+            "PATH": "/usr/bin",
+            "SERPAPI_KEY": "test-key",
+            "SHOPPING_MAX_API_CALLS": "12",
+            "HUB_BOT_TOKEN": "telegram-secret",
+            "OPENAI_API_KEY": "openai-secret",
+        },
+    )
+
+    assert result == {
+        "PATH": "/usr/bin",
+        "SERPAPI_KEY": "test-key",
+        "SHOPPING_MAX_API_CALLS": "12",
+    }
+
+
+def test_staged_manifest_cannot_request_hub_credentials():
+    import pytest
+
+    runtime = {
+        "mode": "subprocess",
+        "entrypoint": "python run_agent.py",
+        "working_directory": ".",
+        "input_arg": "--input-json",
+        "output_arg": "--output-json",
+        "default_execution_mode": "execute",
+        "environment_allowlist": ["SERPAPI_KEY", "HUB_BOT_TOKEN", "OPENAI_API_KEY"],
+    }
+
+    with pytest.raises(ValueError, match="Hub-only credential"):
+        validate_runtime_config("unsafe-draft", runtime)
+
+
+def test_test_data_folder_cannot_overlap_live_data():
+    import pytest
+
+    from agent_hub.config import _LIVE_DATA_DIR, ConfigurationError, validate_test_data_dir
+
+    with pytest.raises(ConfigurationError, match="separate from the live Hub data folder"):
+        validate_test_data_dir(_LIVE_DATA_DIR / "test")
 
 
 def test_load_registry_empty_dir(tmp_path):
@@ -113,6 +165,84 @@ def test_load_registry_report_surfaces_invalid_manifest(tmp_path):
 
 def test_load_registry_report_missing_dir_returns_no_errors(tmp_path):
     result = load_registry_report(tmp_path / "nonexistent")
+    assert result.specs == []
+    assert result.errors == []
+
+
+def _write_test_agent(path, *, agent_id="test-agent", runtime_mode="subprocess"):
+    import json
+
+    path.mkdir(parents=True)
+    (path / "agent.json").write_text(json.dumps({
+        "id": agent_id,
+        "name": "Test Agent",
+        "purpose": "Test profile fixture",
+        "version": "0.1.0",
+        "runtime": {
+            "mode": runtime_mode,
+            "entrypoint": "python run_agent.py",
+            "working_directory": str(path),
+            "input_arg": "--input-json",
+            "output_arg": "--output-json",
+            "default_execution_mode": "instruction_only",
+        },
+    }), encoding="utf-8")
+
+
+def test_active_registry_test_profile_loads_only_allowlisted_staging_agents(tmp_path, monkeypatch):
+    staging = tmp_path / "staging" / "agents"
+    _write_test_agent(staging / "test-agent")
+    _write_test_agent(staging / "other-agent", agent_id="other-agent")
+    monkeypatch.setattr(registry, "AGENT_STAGING_DIR", staging)
+    monkeypatch.setenv("HUB_PROFILE", "test")
+    monkeypatch.setenv("HUB_STAGED_AGENT_IDS", "test-agent")
+
+    result = load_active_registry_report()
+
+    assert [spec.id for spec in result.specs] == ["test-agent"]
+    assert result.specs[0].extensions["hub_profile"] == "test"
+    assert result.specs[0].extensions["hub_source"] == "staged"
+    assert result.specs[0].runtime["working_directory"] == str(staging / "test-agent")
+    assert result.errors == []
+
+
+def test_active_registry_test_profile_rejects_manual_agent(tmp_path, monkeypatch):
+    staging = tmp_path / "staging" / "agents"
+    _write_test_agent(staging / "test-agent", runtime_mode="manual")
+    monkeypatch.setattr(registry, "AGENT_STAGING_DIR", staging)
+    monkeypatch.setenv("HUB_PROFILE", "test")
+    monkeypatch.setenv("HUB_STAGED_AGENT_IDS", "test-agent")
+
+    result = load_active_registry_report()
+
+    assert result.specs == []
+    assert len(result.errors) == 1
+    assert "needs a Hub connector" in result.errors[0].message
+    assert "runtime.mode" not in result.errors[0].message
+
+
+def test_active_registry_test_profile_requires_allowlist(monkeypatch):
+    monkeypatch.setenv("HUB_PROFILE", "test")
+    monkeypatch.delenv("HUB_STAGED_AGENT_IDS", raising=False)
+
+    result = load_active_registry_report()
+
+    assert result.specs == []
+    assert result.errors[0].source == "HUB_STAGED_AGENT_IDS"
+
+
+def test_active_registry_live_profile_does_not_load_staging(tmp_path, monkeypatch):
+    enabled = tmp_path / "enabled"
+    enabled.mkdir()
+    staging = tmp_path / "staging" / "agents"
+    _write_test_agent(staging / "test-agent")
+    monkeypatch.setattr(registry, "AGENT_REGISTRY_DIR", enabled)
+    monkeypatch.setattr(registry, "AGENT_STAGING_DIR", staging)
+    monkeypatch.setenv("HUB_PROFILE", "live")
+    monkeypatch.setenv("HUB_STAGED_AGENT_IDS", "test-agent")
+
+    result = load_active_registry_report()
+
     assert result.specs == []
     assert result.errors == []
 

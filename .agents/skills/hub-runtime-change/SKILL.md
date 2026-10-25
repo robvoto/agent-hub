@@ -25,6 +25,8 @@ Read the owner module before editing. If one module clearly owns the behavior, s
 - If the design introduces or relies on a heuristic/approximate inference, apply the global `heuristic-review` skill before coding. Assistive heuristics are allowed only when an independent LLM/authoritative validation layer controls the final outcome; authoritative heuristics require explicit human approval.
 
 - Keep changes small and scoped.
+- Explain internal contract fields in operator language. Do not present names such as `runtime.mode=manual` as though the user chose or should understand them. Say what Hub can or cannot do, own the implementation work, and mention the field only as brief diagnostic detail when useful. For example: “This staged agent is not set up for Hub to run yet. I need to add its Hub adapter; you do not need to configure that internal field.”
+- For a substantial runtime, Telegram, dispatch, or staging boundary change, use a distinct read-only reviewer as required by `code-change/SKILL.md`; do not count the implementation agent's own inspection as independent review.
 - Do not implement specialist-internal logic inside Hub — a contract test double speaks only the runtime shape (status/result_kind/etc.), never real specialist reasoning.
 - Do not add fallback/default behavior that changes outcomes unless explicitly approved.
 - Do not mask invalid agent output with guessed status mappings or silent recovery.
@@ -37,6 +39,14 @@ Read the owner module before editing. If one module clearly owns the behavior, s
 - `human_logger` output (`_consume_graph_stream_event` in `orchestrator.py`) must not repeat the same fact via multiple LangGraph `stream_mode`s — e.g. don't reintroduce "task started"/"task finished" lines alongside "entered node"/"produced message", they say the same thing twice per node.
 - Node-level explanations of what a LangGraph node does (`_NODE_EXPLANATIONS`/`_node_intro`) are shown once per task run, not on every loop iteration — if you add a new node type, add its explanation to `_NODE_EXPLANATIONS`, but don't make it repeat on reroutes.
 - `config/llm_costs.json` fails closed by design: a model entry with `"status": "unknown"` means nobody has verified its per-1M pricing yet, not that cost tracking is broken. Fix by adding real rates (cross-check the source), don't add fallback/guessed pricing.
+
+## Factory handoff debugging
+
+- A Factory `success` result may have `next_task: null` when no implementation task has been approved. Treat null as no follow-on; do not validate it as a `NextTaskContract`, label it malformed, or bypass the Factory approval pause. Keep a regression test for this contract.
+- Hub's interactive CLI consumes one user turn per input line. Send exactly one request line; never paste multiline instructions into the prompt. After accidental extra input or a failed call, inspect the exact run and task state before retrying or cancelling anything.
+- Do not feed the interactive CLI with a heredoc or here-string: the delimiter can arrive as another user turn. Use a controlled interactive session or encode the single request line so only that line reaches stdin; then inspect the task list for accidental extra turns.
+- For a transient or malformed request, inspect the live contract and state, correct the request, and retry once when safe. Do not repeat identical payloads or create a duplicate Factory task while the original thread/correlation is still usable.
+- A missing child-process environment variable is not evidence that a secret file must be opened. Check configuration and inheritance without printing secret values or asking the operator to paste them.
 
 ## Checklist
 

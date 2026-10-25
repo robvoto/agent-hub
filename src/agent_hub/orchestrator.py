@@ -30,7 +30,12 @@ from langgraph.types import Command
 from pydantic import BaseModel, ValidationError
 
 from .checkpointer import get_checkpointer
-from .config import AGENT_FACTORY_ROOT, chat_model_kwargs, configured_model
+from .config import (
+    AGENT_FACTORY_ROOT,
+    chat_model_kwargs,
+    configured_hub_profile,
+    configured_model,
+)
 from .cost_log import extract_usage_metadata, record_llm_run
 from .factory_bridge import (
     build_factory_agent_spec,
@@ -65,7 +70,11 @@ from .hub_memory import (
     format_learnings_for_prompt,
 )
 from .hub_skills import HubSkillStore, SkillProposalResult
-from .human_mcp_gateway import get_human_mcp_gateway, load_human_mcp_config
+from .human_mcp_gateway import (
+    discard_human_mcp_browser_context,
+    get_human_mcp_gateway,
+    load_human_mcp_config,
+)
 from .human_mcp_tools import make_human_mcp_tools
 from .knowledge_store import get_knowledge_store
 from .learning_mode import get_learning_mode_registry
@@ -91,10 +100,11 @@ from .project_resources import (
 from .registry import (
     AgentSpec,
     RegistryLoadError,
-    load_registry_report,
+    load_active_registry_report,
     spec_fingerprint,
 )
 from .run_status import format_current_run_status, format_last_run_status
+from .runtime_policy import staged_subprocess_environment
 from .session_state import load_or_create_session_id, persist_session_id
 from .shared_docs import make_shared_docs_tool
 from .specialist_fanout import FanoutError, run_specialist_fanout
@@ -1363,6 +1373,11 @@ def _dispatch_subprocess(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            **(
+                {"env": staged_subprocess_environment(runtime)}
+                if configured_hub_profile() == "test"
+                else {}
+            ),
             **subprocess_popen_kwargs(),
         )
         progress_tailer = SpecialistProgressTailer(
@@ -2016,7 +2031,7 @@ def _build_support_tools(
     session_id: str,
 ) -> list[Any]:
     tools = [make_shared_docs_tool(registry)]
-    tools.extend(make_human_mcp_tools(get_human_mcp_gateway()))
+    tools.extend(make_human_mcp_tools(get_human_mcp_gateway(), session_id=session_id))
     tools.append(_make_parallel_specialist_fanout_tool(registry, session_id=session_id))
     return tools
 
@@ -2214,8 +2229,10 @@ class HubOrchestrator:
 
     def _rotate_session(self, *, carry_active_work: bool) -> None:
         previous_session_id = self._session_id
+        discard_human_mcp_browser_context(previous_session_id)
         self._session_id = str(uuid.uuid4())
         persist_session_id(self._session_id, scope=self._session_scope)
+        self._graph = self._build_graph()
         if carry_active_work:
             human_logger.info(
                 "Started a new hub conversation. Future turns use a fresh LangGraph thread "
@@ -2297,6 +2314,7 @@ class HubOrchestrator:
             [
                 heading,
                 "",
+                f"Profile: {configured_hub_profile().upper()}",
                 f"Learning: {'ON' if learning_enabled else 'OFF'}",
                 f"Project: {project_label}",
                 f"Agents available: {len(self._registry)}",
@@ -3460,7 +3478,8 @@ class HubOrchestrator:
         """
         added, changed, removed = self._reconcile_registry()
         lines = [
-            f"Registry refreshed at {self._registry_last_refreshed} — "
+            f"{configured_hub_profile().upper()} registry refreshed at "
+            f"{self._registry_last_refreshed} — "
             f"{len(self._registry)} agent(s) active.",
             f"Added: {', '.join(added) or 'none'}",
             f"Changed: {', '.join(changed) or 'none'}",
@@ -3485,7 +3504,8 @@ class HubOrchestrator:
         ]
         if self._registry:
             lines.extend(
-                f"  - {spec.id} (v{spec.version}, fingerprint {spec_fingerprint(spec)[:8]})"
+                f"  - {'[STAGED TEST] ' if spec.extensions.get('hub_source') == 'staged' else ''}"
+                f"{spec.id} (v{spec.version}, fingerprint {spec_fingerprint(spec)[:8]})"
                 for spec in self._registry
             )
         else:
@@ -4660,7 +4680,9 @@ def cancel_all_active_tasks(reason: str) -> list[str]:
 
 
 def _load_specialists() -> list[AgentSpec]:
-    registry = load_registry_report().specs
+    registry = load_active_registry_report().specs
+    if configured_hub_profile() == "test":
+        return registry
     factory_spec = build_factory_agent_spec()
     if factory_spec is not None and not any(spec.id == factory_spec.id for spec in registry):
         registry.append(factory_spec)
@@ -4675,7 +4697,7 @@ def _load_registry_errors() -> list[RegistryLoadError]:
     `AGENT_REGISTRY_DIR` on disk — used only for `/agents-refresh` health
     reporting, never for building the callable tool set.
     """
-    return load_registry_report().errors
+    return load_active_registry_report().errors
 
 
 def _record_orchestrator_llm_run(
