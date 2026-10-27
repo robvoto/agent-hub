@@ -4,6 +4,7 @@ This is the canonical technical documentation entry point for Agent Hub. It is i
 
 | Need | Read |
 |---|---|
+| Plan a specialised adaptive tutor and learner progress tracking (proposal only) | [`ADAPTIVE_TEACHING_AGENT_PLAN.md`](ADAPTIVE_TEACHING_AGENT_PLAN.md) |
 | Understand ownership, runtime flow, persistence or memory | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
 | Run the Hub or use commands | [`COMMANDS.md`](COMMANDS.md) |
 | Prove a change works through real CLI/Telegram | [`VALIDATION.md`](VALIDATION.md) |
