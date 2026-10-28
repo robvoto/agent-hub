@@ -169,6 +169,10 @@ parent workflow as well as directly; stopping either path persists cancellation 
 late completion. Phase 2 uses deterministic/test fixture entry paths while Factory Brain runtime
 emission of `next_task` remains later work.
 
+## Reconciliation of the 5 October Library cross-specialist design
+
+The former ChatGPT Library `Cross_Specialist_Execution_Plan.md` described the approved design baseline as of 5 October 2026. This current repository section and `docs/diagrams/08-CROSS-SPECIALIST-EXECUTION-PLAN.md` are the authoritative maintained architecture, not that dated Library snapshot. In particular, Hub owns sequential handoff decision and specialist choice; producers advertise a capability through the validated `next_task` contract rather than naming the next specialist, and the originating project context stays pinned. The newer Phase 2 implementation validates structured design evidence and requires a separate Hub-owned decision/approval before dispatch. The runtime Factory Brain still does not automatically emit those structured follow-on tasks in production; do not misread the older design approval as proof that end-to-end Factory-to-implementation automation is already live. Keep the old plan as historical evidence only until its removal from the Library is verified.
+
 ## Project context
 
 `/project <path>` resolves a canonical project context containing the root, stable project identity, contract version and fingerprint. A request may explicitly name one already-known project alias; otherwise a valid current `/project` selection is used. Unknown or ambiguous project references stop safely. Fresh dispatches revalidate the resolved context. Paused runs replay the project context pinned at original dispatch, even if the operator changes `/project` before resuming.
