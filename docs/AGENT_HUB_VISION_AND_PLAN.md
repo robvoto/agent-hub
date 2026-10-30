@@ -37,9 +37,9 @@ Agents and AI workers must collaborate directly without Rob acting as a copy-pas
    - *Supported Route:* SQS Queue or direct local JSON subprocess execution via the controlled task runner.
    - *Limitation:* Web chat sessions (ChatGPT, Claude.ai, Gemini Web) **do not have server-to-server APIs** to talk directly to each other; all automated collaboration routes via CLI, SDK, or official Bedrock/OpenAI APIs.
 2. **Telegram Bot-to-Bot Communication (Investigation & Corrections):**
-   - *Official API Support:* Telegram now supports bot-to-bot communication under specific conditions (such as Telegram Business bots, Bot API 7.0+ business connections, or specific administrator rights per [Telegram Bot-to-Bot Docs](https://core.telegram.org/api/bots/bot-to-bot)).
-   - *Standard Bots Constraint:* In standard non-business group/private chats, Telegram still filters standard bot messages to prevent infinite echo loops.
-   - *Architecture Route:* Where supported (Business connections or webhooks), direct bot-to-bot messaging can be evaluated. In standard chats, Hub's internal SQS/HTTP task dispatch provides a 100% reliable backbone without relying on Telegram's filtering rules.
+   - *Official API Support:* Telegram supports bot-to-bot communication under specific conditions (such as Telegram Business bots, Bot API 7.0+ business connections, or specific administrator rights per [Telegram Bot-to-Bot Docs](https://core.telegram.org/api/bots/bot-to-bot)).
+   - *Standard Bots Constraint:* In standard non-business group/private chats, Telegram filters standard bot messages to prevent infinite echo loops.
+   - *Architecture Route:* Where supported (Business connections or webhooks), direct bot-to-bot messaging can be evaluated. In standard chats, Hub's internal SQS/HTTP task dispatch provides a reliable asynchronous transport without relying on Telegram's filtering rules.
 3. **Safety & Loop Protection Guardrails:**
    - **Recursion Ceilings:** Hard limit of max 3 follow-up question loops between workers on any single task.
    - **Cost & Token Ceilings:** Every cross-agent collaboration inherits the parent task's `$0.10` spend cap and max-token budget.
@@ -132,3 +132,20 @@ Work does not always finish in a single message turn. Hub orchestrates real work
 
 ### Phase 5: Least-Privilege IAM Hardening
 - **Goal:** Replace broad `AdministratorAccess` on `agent-platform-runner` with a scoped, least-privilege IAM policy.
+
+---
+
+## 7. Canonical Backlog Status & Sync
+
+All roadmap items are synchronized with the single source of truth in Google Drive:
+- **Canonical Spreadsheet:** `00_Master_Roadmap_and_Decisions` (`1mj1YvYyhwvOZWakS1G-2dk-E0LLG7aOFHc64CgTlrmw`)
+- **Direct Sheet Link:** [00_Master_Roadmap_and_Decisions](https://docs.google.com/spreadsheets/d/1mj1YvYyhwvOZWakS1G-2dk-E0LLG7aOFHc64CgTlrmw/edit)
+
+### Synchronized Entries (Sheet1):
+| ID | Title | Domain | Status | Priority | Notes |
+|---|---|---|---|---|---|
+| **HUB-003** | Telegram Topic Threads & Multi-Turn Amnesia Resolution | `aws-agent-platform` | `DONE` | `P0` | Resolved session state partitioning by `chat_id:message_thread_id` across all specialists + durable `hub_conversation` memory in DynamoDB. Negative group IDs supported. |
+| **HUB-004** | Cross-Agent & AI Worker Autonomous Collaboration Bridge | `aws-agent-platform` | `BACKLOG` | `P1` | Enables direct machine-to-machine task exchange between AWS Agent Platform, Codex, and Claude/Gemini workers without manual chat copy-pasting. Governed by US$0.10 task cap and human approvals. |
+| **COMM-001** | Email (Gmail) & WhatsApp Assistance with Approval Gate | `shared-tools` | `BACKLOG` | `P1` | Assist finding, understanding, and drafting responses to Gmail (Google Workspace) and WhatsApp with mandatory human approval before sending. Priority over Telegram message management. |
+| **TRADE-001** | Daily Trading Decision Specialist & Human-MCP Staged Execution | `trading-agent` | `DONE` | `P1` | Daily 8:30 AM Sydney decision scan, blue-chip mean reversion, multi-model critic, topic isolation, and staged trade tickets without fake pricing. |
+| **CAREER-001** | Career & Professional Development Specialist Agent | `career-agent` | `DONE` | `P1` | Isolated CareerAgentFunction microservice + Virgin 30-60-90 onboarding + STAR story simulator + CV tailoring + LinkedIn audit tools. |
