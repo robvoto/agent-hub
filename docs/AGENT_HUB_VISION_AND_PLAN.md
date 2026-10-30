@@ -32,6 +32,21 @@ Agents and AI workers must collaborate directly without Rob acting as a copy-pas
          and follow-up questions
 ```
 
+### Future capability: expert-panel planning and independent challenge
+
+**Product requirement confirmed by Rob, 30 October 2026. Status: planned; post-MVP; not implemented or accepted.**
+
+When Rob plans a substantial decision, Hub should be able to select several capable specialist agents and leading reasoning models, obtain independent assessments, and coordinate follow-up discussion between them. Rob should not have to copy messages between AI chats.
+
+- Select expertise and model capability for the task; do not hardcode named providers into orchestration roles. Stronger models may be used when their value justifies their cost.
+- Obtain independent first opinions before sharing critiques, then let participants challenge assumptions, request evidence, answer objections, and revise their proposals.
+- Hub returns one understandable recommendation, with supporting evidence, material disagreements, uncertainties, and the decision Rob needs to make. Agreement or majority vote is not proof of correctness.
+- Preserve the discussion, contributions and resulting decisions with the conversation/task so work can resume later.
+- Use authorised machine interfaces and the chosen AgentCore architecture; bounded discussion, cost controls, permission checks, and consequential-action approvals still apply. This records the desired behaviour, not a commitment that managed Harness already provides every collaboration pattern.
+- Acceptance example: Rob asks Hub to review an AWS architecture; Hub obtains independent technical and cost/reliability reviews, coordinates a challenge round, and explains the revised recommendation without manual copy-pasting.
+
+This is a product capability above the transport bridge in HUB-004. It must not expand the current MVP or force a rebuild of the existing AWS platform.
+
 ### Supported & Bounded Inter-Agent Transports:
 1. **AWS Lambdas ⟷ Local CLI Workers (Codex / OpenCode / Antigravity):**
    - *Supported Route:* SQS Queue or direct local JSON subprocess execution via the controlled task runner.
